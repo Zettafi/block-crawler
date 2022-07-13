@@ -20,4 +20,4 @@ def reset_db(endpoint_url):
 
 
 if __name__ == "__main__":
-    reset_db() 
+    reset_db()

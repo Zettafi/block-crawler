@@ -29,4 +29,4 @@ class HexIntTestCase(unittest.TestCase):
         self.assertNotEqual(HexInt("0x1").__hash__(), HexInt("0x0").__hash__())
 
     def test_assert_hash_works_in_dict(self):
-        self.assertEquals("1", {HexInt("0x0"): "1"}[HexInt("0x0")])
+        self.assertEqual("1", {HexInt("0x0"): "1"}[HexInt("0x0")])

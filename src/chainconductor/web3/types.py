@@ -1,15 +1,11 @@
 from typing import List, Union, NewType
 
-MethodParams = NewType(
-    "MethodParams", List[Union["CallMethodParams", int, str, bool, float, bytes]]
-)
-
 
 class HexInt:
     def __init__(self, hex_str: str) -> None:
         assert isinstance(hex_str, str)
-        self.__hex_str = hex_str
-        self.__int_value = None
+        self.__hex_str: str = hex_str
+        self.__int_value: Union[int, None] = None
 
     def __eq__(self, o: object) -> bool:
         return isinstance(o, self.__class__) and o.hex_value == self.__hex_str

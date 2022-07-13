@@ -3,7 +3,6 @@ import asyncio
 from chainconductor.web3.rpc import RPCClient
 
 BAYC_CONTRACT_ADDR = "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D"
-ETH_TUTORIAL_CONTRACT = "0x2510C039cc3b061D79e564b38836dA87e31b342f"  # https://ethereum.org/en/developers/tutorials/reverse-engineering-a-contract/
 
 codes = {
     "00": ("STOP", 0),
@@ -266,42 +265,40 @@ codes = {
 
 
 contract_methods = {
-    "ERC-20":
-        {
-            "23b872dd": ("transferFrom(address,address,uint256)", True, False),
-            "313ce567": ("decimals()", False, True),
-            "095ea7b3": ("approve(address,uint256)", True, False),
-            "95d89b41": ("symbol()", False, True),
-            "18160ddd": ("totalSupply()", True, True),
-            "a9059cbb": ("transfer(address,uint256)", True, False),
-            "dd62ed3e": ("allowance(address,address)", False, True),
-            "06fdde03": ("name()", False, True),
-        },
-    "ERC-721":
-        {
-            "4f6ccce7": ("tokenByIndex(uint256)", False, True),
-            "e985e9c5": ("isApprovedForAll(address,address)", True, True),
-            "23b872dd": ("transferFrom(address,address,uint256)", True, False),
-            "150b7a02": ("onERC721Received(address,address,uint256,bytes)", False, False),
-            "095ea7b3": ("approve(address,uint256)", True, False),
-            "42842e0e": ("safeTransferFrom(address,address,uint256)", True, False),
-            "081812fc": ("getApproved(uint256)", True, True),
-            "a22cb465": ("setApprovalForAll(address,bool)", True, False),
-            "95d89b41": ("symbol()", False, True),
-            "6352211e": ("ownerOf(uint256)", True, True),
-            "06fdde03": ("name()", False, True),
-            "c87b56dd": ("tokenURI(uint256)", False, True),
-            "18160ddd": ("totalSupply()", False, True),
-            "2f745c59": ("tokenOfOwnerByIndex(address,uint256)", False, True),
-            "b88d4fde": ("safeTransferFrom(address,address,uint256,bytes)", True, False),
-            "01ffc9a7": ("supportsInterface(bytes4)", True, True),
-            "70a08231": ("balanceOf(address)", True, True),
-        },
-    "ERC-165":
-        {
-            "01ffc9a7": ("supportsInterface(bytes4)", True, True),
-        },
+    "ERC-20": {
+        "23b872dd": ("transferFrom(address,address,uint256)", True, False),
+        "313ce567": ("decimals()", False, True),
+        "095ea7b3": ("approve(address,uint256)", True, False),
+        "95d89b41": ("symbol()", False, True),
+        "18160ddd": ("totalSupply()", True, True),
+        "a9059cbb": ("transfer(address,uint256)", True, False),
+        "dd62ed3e": ("allowance(address,address)", False, True),
+        "06fdde03": ("name()", False, True),
+    },
+    "ERC-721": {
+        "4f6ccce7": ("tokenByIndex(uint256)", False, True),
+        "e985e9c5": ("isApprovedForAll(address,address)", True, True),
+        "23b872dd": ("transferFrom(address,address,uint256)", True, False),
+        "150b7a02": ("onERC721Received(address,address,uint256,bytes)", False, False),
+        "095ea7b3": ("approve(address,uint256)", True, False),
+        "42842e0e": ("safeTransferFrom(address,address,uint256)", True, False),
+        "081812fc": ("getApproved(uint256)", True, True),
+        "a22cb465": ("setApprovalForAll(address,bool)", True, False),
+        "95d89b41": ("symbol()", False, True),
+        "6352211e": ("ownerOf(uint256)", True, True),
+        "06fdde03": ("name()", False, True),
+        "c87b56dd": ("tokenURI(uint256)", False, True),
+        "18160ddd": ("totalSupply()", False, True),
+        "2f745c59": ("tokenOfOwnerByIndex(address,uint256)", False, True),
+        "b88d4fde": ("safeTransferFrom(address,address,uint256,bytes)", True, False),
+        "01ffc9a7": ("supportsInterface(bytes4)", True, True),
+        "70a08231": ("balanceOf(address)", True, True),
+    },
+    "ERC-165": {
+        "01ffc9a7": ("supportsInterface(bytes4)", True, True),
+    },
 }
+
 
 async def main(archive_node_uri):
     client = RPCClient(archive_node_uri)
@@ -311,7 +308,10 @@ async def main(archive_node_uri):
     block = (await client.get_blocks({block_id}, True))[0]
     evm_code = None
     for transaction in block.transactions:
-        if transaction.transaction_index == receipt.transaction_index and transaction.hash == tx_hash:
+        if (
+            transaction.transaction_index == receipt.transaction_index
+            and transaction.hash == tx_hash
+        ):
             evm_code = transaction.input
             break
     # evm_code: str = await client.get_code(ETH_TUTORIAL_CONTRACT)
@@ -320,7 +320,7 @@ async def main(archive_node_uri):
     chunks = list()
     for i in range(0, len(code), 2):
         try:
-            chunk = code[i:i + 2]
+            chunk = code[i : i + 2]
         except ValueError:
             raise ValueError(f"illegal hex character {code[i:i + 2]} in contract code")
         chunks.append(chunk)
@@ -352,6 +352,15 @@ async def main(archive_node_uri):
         for method_result in method_results:
             print(method_result)
 
+    name = await client.call(
+        None, "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D", "0x06fdde03", [], [], "string"
+    )
+    print("Name:", name)
+
 
 if __name__ == "__main__":
-    asyncio.run(main("wss://dawn-old-feather.quiknode.pro/6cd19e9c836664d7ed84d98dff8ea26c96b3a596/"))
+    asyncio.run(
+        main(
+            "wss://dawn-old-feather.quiknode.pro/6cd19e9c836664d7ed84d98dff8ea26c96b3a596/"
+        )
+    )

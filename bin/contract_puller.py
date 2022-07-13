@@ -15,34 +15,66 @@ except ModuleNotFoundError:
     pass
 
 
-async def _stats_writer(stats_service: StatsService, start_time: datetime, run_forever=False):
+async def _stats_writer(
+    stats_service: StatsService, start_time: datetime, run_forever=False
+):
     while True:
         await asyncio.sleep(1)
         end = datetime.utcnow()
         total_time = end - start_time
         get_blocks_timings = stats_service.get_timings("rpc_get_blocks")
-        get_transaction_timings = stats_service.get_timings("rpc_get_transaction_receipts")
+        get_transaction_timings = stats_service.get_timings(
+            "rpc_get_transaction_receipts"
+        )
         get_dynamodb_timings = stats_service.get_timings("dynamodb_batch_write")
         print(
-            "\r{:02d}:{:05.2f}".format(total_time.seconds // 60, total_time.seconds + total_time.microseconds / 1_000_000), ":",
-            "B", "{:,}".format(stats_service.get_count(StatsService.BLOCKS)),
-            "[", len(get_blocks_timings),
-            "|", "{:0.2f}".format(sum(get_blocks_timings) / 1_000_000_000),
-            "|", "{:0.2f}".format(sum(get_blocks_timings) / 1_000_000_000 / len(get_blocks_timings) if len(get_blocks_timings) > 0 else 0),
+            "\r{:02d}:{:05.2f}".format(
+                total_time.seconds // 60,
+                total_time.seconds + total_time.microseconds / 1_000_000,
+            ),
+            ":",
+            "B",
+            "{:,}".format(stats_service.get_count(StatsService.BLOCKS)),
+            "[",
+            len(get_blocks_timings),
+            "|",
+            "{:0.2f}".format(sum(get_blocks_timings) / 1_000_000_000),
+            "|",
+            "{:0.2f}".format(
+                sum(get_blocks_timings) / 1_000_000_000 / len(get_blocks_timings)
+                if len(get_blocks_timings) > 0
+                else 0
+            ),
             "]",
-
-            "R", "{:,}".format(stats_service.get_count(StatsService.TRANSACTION_RECEIPTS)),
-            "[", len(get_transaction_timings),
-            "|", "{:0.2f}".format(sum(get_transaction_timings) / 1_000_000_000),
-            "|", "{:0.2f}".format(sum(get_transaction_timings) / len(get_transaction_timings) / 1_000_000_000 if len(get_transaction_timings) > 0 else 0),
+            "R",
+            "{:,}".format(stats_service.get_count(StatsService.TRANSACTION_RECEIPTS)),
+            "[",
+            len(get_transaction_timings),
+            "|",
+            "{:0.2f}".format(sum(get_transaction_timings) / 1_000_000_000),
+            "|",
+            "{:0.2f}".format(
+                sum(get_transaction_timings)
+                / len(get_transaction_timings)
+                / 1_000_000_000
+                if len(get_transaction_timings) > 0
+                else 0
+            ),
             "]",
-
-            "C", "{:,}".format(stats_service.get_count(StatsService.CONTRACTS)),
-            "[", len(get_dynamodb_timings),
-            "|", "{:0.2f}".format(sum(get_dynamodb_timings) / 1_000_000_000),
-            "|", "{:0.2f}".format(sum(get_dynamodb_timings) / len(get_dynamodb_timings) / 1_000_000_000 if len(get_dynamodb_timings) > 0 else 0),
+            "C",
+            "{:,}".format(stats_service.get_count(StatsService.CONTRACTS)),
+            "[",
+            len(get_dynamodb_timings),
+            "|",
+            "{:0.2f}".format(sum(get_dynamodb_timings) / 1_000_000_000),
+            "|",
+            "{:0.2f}".format(
+                sum(get_dynamodb_timings) / len(get_dynamodb_timings) / 1_000_000_000
+                if len(get_dynamodb_timings) > 0
+                else 0
+            ),
             "]",
-            end=""
+            end="",
         )
         if not run_forever:
             break
@@ -98,16 +130,16 @@ async def _stats_writer(stats_service: StatsService, start_time: datetime, run_f
     help="Number of parallel contract processors to run",
 )
 def process_contracts(
-        starting_block: int,
-        ending_block: int,
-        archive_node_uri: str,
-        dynamodb_uri: str,
-        rpc_batch_size: int,
-        dynamodb_batch_size: int,
-        max_batch_wait_time: int,
-        block_processors: int,
-        transaction_processors: int,
-        contract_processors: int,
+    starting_block: int,
+    ending_block: int,
+    archive_node_uri: str,
+    dynamodb_uri: str,
+    rpc_batch_size: int,
+    dynamodb_batch_size: int,
+    max_batch_wait_time: int,
+    block_processors: int,
+    transaction_processors: int,
+    contract_processors: int,
 ):
     """
     Pull all contracts from the STARTING_BLOCK to the ENDING_BLOCK from an archive node and put them in the database
