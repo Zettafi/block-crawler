@@ -1,6 +1,6 @@
 import asyncio
 
-from chainconductor.web3.rpc import RPCClient
+from chainconductor.web3.rpc import RPCClient, EthCall
 
 BAYC_CONTRACT_ADDR = "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D"
 
@@ -352,10 +352,39 @@ async def main(archive_node_uri):
         for method_result in method_results:
             print(method_result)
 
-    name = await client.call(
-        None, "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D", "0x06fdde03", [], [], "string"
+    responses = await client.calls(
+        [
+            EthCall(
+                "Symbol:",
+                None,
+                "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
+                "0x95d89b41",
+                [],
+                [],
+                "string",
+            ),
+            EthCall(
+                "Name:",
+                None,
+                "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
+                "0x06fdde03",
+                [],
+                [],
+                "string",
+            ),
+            EthCall(
+                "Total Supply:",
+                None,
+                "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
+                "0x18160ddd",
+                [],
+                [],
+                "uint256",
+            ),
+        ]
     )
-    print("Name:", name)
+    for key, result in responses.items():
+        print(key, result[0])
 
 
 if __name__ == "__main__":

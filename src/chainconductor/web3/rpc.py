@@ -1,9 +1,64 @@
-from typing import Union, Dict, List, Set
+from typing import Union, Dict, List, Set, Tuple
 import ujson as json
 import aiohttp
 from eth_abi import encode_abi, decode_abi
 from eth_utils import decode_hex
+
 from .types import Block, Transaction, HexInt, Log, TransactionReceipt
+
+
+class EthCall:
+    def __init__(
+        self,
+        identifier: str,
+        from_: str,
+        to: str,
+        method_hash: str,
+        parameter_types: List[str],
+        parameters: list,
+        response_type=None,
+        block: Union[str, int] = "latest",
+    ):
+        self.__identifier = identifier
+        self.__from = from_
+        self.__to = to
+        self.__method_hash = method_hash
+        self.__parameter_types = parameter_types.copy()
+        self.__parameters = parameters.copy()
+        self.__response_type = response_type
+        self.__block = block
+
+    @property
+    def identifier(self):
+        return self.__identifier
+
+    @property
+    def from_(self):
+        return self.__from
+
+    @property
+    def to(self):
+        return self.__to
+
+    @property
+    def method_hash(self):
+        return self.__method_hash
+
+    @property
+    def parameters(self):
+        return self.__parameters.copy()
+
+    @property
+    def parameter_types(self):
+        return self.__parameter_types.copy()
+
+    @property
+    def response_type(self):
+        return self.__response_type
+
+    @property
+    def block(self):
+        return self.__block
 
 
 class RPCError(Exception):
@@ -215,38 +270,43 @@ class RPCClient:
             )
         return receipts
 
-    async def call(
-        self,
-        from_: str,
-        to_: str,
-        method_hash: str,
-        parameter_types: List[str],
-        params: list,
-        response_type=None,
-        block: Union[str, int] = "latest",
-    ):
+    async def calls(self, requests: List[EthCall]) -> Dict[str, Tuple]:
+        rpc_requests = list()
+        rpc_request_id_lookup: Dict[int, EthCall] = dict()
+        for request in requests:
+            if len(request.parameters) == 0:
+                encoded_params = ""
+            else:
+                encoded_param_bytes = encode_abi(
+                    request.parameter_types, request.parameters
+                )
+                encoded_params = encoded_param_bytes.hex()
 
-        if len(params) == 0:
-            encoded_params = ""
-        else:
-            encoded_param_bytes = encode_abi(
-                parameter_types, params
+            call_data = f"{request.method_hash}{encoded_params}"
+            rpc_request = self.__get_rpc_request(
+                "eth_call",
+                (
+                    {"from": request.from_, "to": request.to, "data": call_data},
+                    request.block,
+                ),
             )
-            encoded_params = encoded_param_bytes.hex()
+            rpc_request_id_lookup[rpc_request["id"]] = request
+            rpc_requests.append(rpc_request)
 
-        call_data = f"{method_hash}{encoded_params}"
-        rpc_request = self.__get_rpc_request(
-            "eth_call",
-            ({"from": from_, "to": to_, "data": call_data}, block),
-        )
-        rpc_response = await self.__call_rpc(rpc_request)
-        encoded_response: str = rpc_response.result
-        if response_type is None:
-            response = None
-        else:
-            encoded_response_bytes = decode_hex(encoded_response)
-            response = decode_abi([response_type], encoded_response_bytes)
-        return response
+        rpc_responses = await self.__call_rpc(rpc_requests)
+        responses: Dict[str, Tuple] = dict()
+        for rpc_response in rpc_responses:
+            encoded_response: str = rpc_response.result
+            response_request = rpc_request_id_lookup[rpc_response.request_id]
+            if response_request.response_type is None:
+                response = None
+            else:
+                encoded_response_bytes = decode_hex(encoded_response)
+                response = decode_abi(
+                    [response_request.response_type], encoded_response_bytes
+                )
+            responses[response_request.identifier] = response
+        return responses
 
     async def get_code(
         self, address: str, default_block: Union[HexInt, str] = "latest"
