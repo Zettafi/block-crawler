@@ -4,11 +4,6 @@ from typing import Dict, List
 
 
 class StatsService:
-    BLOCKS = "blocks"
-    TRANSACTIONS = "transactions"
-    TRANSACTION_RECEIPTS = "transaction receipts"
-    CONTRACTS = "contracts"
-
     def __init__(self) -> None:
         self.__counters: Dict[str, int] = dict()
         self.__timers: Dict[str, List[int]] = dict()

@@ -1,10 +1,155 @@
-import asyncio
+from enum import Enum
+from typing import Any, List, Type, Dict
 
-from chainconductor.web3.rpc import RPCClient, EthCall
+from binascii import unhexlify
 
-BAYC_CONTRACT_ADDR = "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D"
 
-codes = {
+class Function:
+    def __init__(
+        self,
+        function_hash: str,
+        description: str,
+        param_types: List[str],
+        return_types: List[str],
+        is_view: bool,
+    ):
+        self.__function_hash = function_hash
+        self.__description = description
+        self.__param_types = param_types
+        self.__return_types = return_types
+        self.__is_view = is_view
+
+    @property
+    def function_hash(self) -> str:
+        return self.__function_hash
+
+    @property
+    def description(self) -> str:
+        return self.__description
+
+    @property
+    def param_types(self) -> List[str]:
+        return self.__param_types
+
+    @property
+    def return_types(self) -> List[str]:
+        return self.__return_types
+
+    @property
+    def is_view(self):
+        return self.__is_view
+
+
+class ERC165Functions:
+    SUPPORTS_INTERFACE = Function(
+        "0x01ffc9a7",
+        "supportsInterface(bytes4)->(bool)",
+        ["bytes4"],
+        ["bool"],
+        True,
+    )
+
+
+class ERC721Functions:
+    BALANCE_OF_ADDRESS = Function(
+        "0x70a08231",
+        "balanceOf(address)->(uint256)",
+        ["address"],
+        ["bool"],
+        True,
+    )
+    OWNER_OF_TOKEN = Function(
+        "0x6352211e",
+        "ownerOf(uint256)->(address)",
+        ["uint256"],
+        ["address"],
+        True,
+    )
+    GET_APPROVED_TOKEN = Function(
+        "0x081812fc",
+        "getApproved(uint256)->(address)",
+        ["uint256"],
+        ["address"],
+        True,
+    )
+    IS_APPROVED_FOR_ALL = Function(
+        "0xe985e9c5",
+        "isApprovedForAll(address,address)",
+        ["address", "address"],
+        ["bool"],
+        True,
+    )
+
+
+class ERC721TokenReceiverFunctions:
+    ON_ERC721_RECEIVED = Function(
+        "0x01ffc9a7",
+        "onERC721Received(address,address,uint256,bytes)->(bytes4)",
+        ["address", "address", "uint256", "bytes"],
+        ["bytes4"],
+        True,
+    )
+
+
+class ERC721MetadataFunctions:
+    NAME = Function(
+        "0x06fdde03",
+        "name()->(string)",
+        [],
+        ["string"],
+        True,
+    )
+    SYMBOL = Function(
+        "0x95d89b41",
+        "symbol()->(string)",
+        [],
+        ["string"],
+        True,
+    )
+    TOKEN_URI = Function(
+        "0xc87b56dd",
+        "tokenURI(uint256)->(string)",
+        ["uint256"],
+        ["string"],
+        True,
+    )
+
+
+class ERC721EnumerableFunctions:
+    TOTAL_SUPPLY = Function(
+        "0x18160ddd",
+        "totalSupply()->(uint256)",
+        [],
+        ["uint256"],
+        True,
+    )
+    TOKEN_BY_INDEX = Function(
+        "0x4f6ccce7",
+        "tokenByIndex(uint256)->uint(256)",
+        ["uint256"],
+        ["uint256"],
+        True,
+    )
+    TOKEN_OF_OWNER_BY_INDEX = Function(
+        "0x2f745c59",
+        "tokenOfOwnerByIndex(address,uint256)->(uint256)",
+        ["address", "uint256"],
+        ["uint256"],
+        True,
+    )
+
+
+class ERC1155MedataURIFunctions:
+    URI = Function(
+        "0x0e89341c",
+        "uri(uint256)->(string)",
+        ["uint256"],
+        ["string"],
+        True,
+    )
+
+
+OPCODE_MAP: Dict[str, int] = {
     "00": ("STOP", 0),
     "01": ("ADD", 0),
     "02": ("MUL", 0),
@@ -264,59 +409,8 @@ codes = {
 }
 
 
-contract_methods = {
-    "ERC-20": {
-        "23b872dd": ("transferFrom(address,address,uint256)", True, False),
-        "313ce567": ("decimals()", False, True),
-        "095ea7b3": ("approve(address,uint256)", True, False),
-        "95d89b41": ("symbol()", False, True),
-        "18160ddd": ("totalSupply()", True, True),
-        "a9059cbb": ("transfer(address,uint256)", True, False),
-        "dd62ed3e": ("allowance(address,address)", False, True),
-        "06fdde03": ("name()", False, True),
-    },
-    "ERC-721": {
-        "4f6ccce7": ("tokenByIndex(uint256)", False, True),
-        "e985e9c5": ("isApprovedForAll(address,address)", True, True),
-        "23b872dd": ("transferFrom(address,address,uint256)", True, False),
-        "150b7a02": ("onERC721Received(address,address,uint256,bytes)", False, False),
-        "095ea7b3": ("approve(address,uint256)", True, False),
-        "42842e0e": ("safeTransferFrom(address,address,uint256)", True, False),
-        "081812fc": ("getApproved(uint256)", True, True),
-        "a22cb465": ("setApprovalForAll(address,bool)", True, False),
-        "95d89b41": ("symbol()", False, True),
-        "6352211e": ("ownerOf(uint256)", True, True),
-        "06fdde03": ("name()", False, True),
-        "c87b56dd": ("tokenURI(uint256)", False, True),
-        "18160ddd": ("totalSupply()", False, True),
-        "2f745c59": ("tokenOfOwnerByIndex(address,uint256)", False, True),
-        "b88d4fde": ("safeTransferFrom(address,address,uint256,bytes)", True, False),
-        "01ffc9a7": ("supportsInterface(bytes4)", True, True),
-        "70a08231": ("balanceOf(address)", True, True),
-    },
-    "ERC-165": {
-        "01ffc9a7": ("supportsInterface(bytes4)", True, True),
-    },
-}
-
-
-async def main(archive_node_uri):
-    client = RPCClient(archive_node_uri)
-    tx_hash = "0x22199329b0aa1aa68902a78e3b32ca327c872fab166c7a2838273de6ad383eba"
-    receipt = (await client.get_transaction_receipts([tx_hash]))[0]
-    block_id = receipt.block_number.int_value
-    block = (await client.get_blocks({block_id}, True))[0]
-    evm_code = None
-    for transaction in block.transactions:
-        if (
-            transaction.transaction_index == receipt.transaction_index
-            and transaction.hash == tx_hash
-        ):
-            evm_code = transaction.input
-            break
-    # evm_code: str = await client.get_code(ETH_TUTORIAL_CONTRACT)
-    # evm_code = "0x60606040526000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff168063d46300fd146047578063ee919d5014606d575b600080fd5b3415605157600080fd5b6057608d565b6040518082815260200191505060405180910390f35b3415607757600080fd5b608b60048080359060200190919050506097565b005b6000805490505b90565b806000819055505b505600a165627a7a72305820f8109b567099d4f11dfc2edb5ded9d1fba0ff7b7236df05d77c809486ed326b50029"
-    code = evm_code[2:]
+def contract_data_to_opcodes(contract_data: str):
+    code = contract_data[2:]
     chunks = list()
     for i in range(0, len(code), 2):
         try:
@@ -328,68 +422,21 @@ async def main(archive_node_uri):
     opcodes = list()
     while len(chunks) > 0:
         opcode_code = chunks.pop(0)
-        opcode, instr_chunks = codes[opcode_code]
+        opcode, instr_chunks = OPCODE_MAP[opcode_code]
         if instr_chunks > 0:
-            opcode += " "
+            opcode += " 0x"
             for _ in range(instr_chunks):
-                opcode += chunks.pop(0)
+                try:
+                    opcode += chunks.pop(0)
+                except IndexError:
+                    # It looks like all the utilities just use what they can create
+                    # After verifying a number of contracts bytecode that didn't complete,
+                    # they seem to work fine.
+                    return opcodes
         opcodes.append(opcode)
-
-    for contract, methods in contract_methods.items():
-        method_results = list()
-        implements = True
-        for hash, (method, required, view_func) in methods.items():
-            opcode = "PUSH4 {}".format(hash)
-            if opcode in opcodes:
-                result = "Y"
-            elif required:
-                result = "X"
-                implements = False
-            else:
-                result = "N"
-            method_results.append("{} {}".format(result, method))
-        print(contract, ":", implements)
-        for method_result in method_results:
-            print(method_result)
-
-    responses = await client.calls(
-        [
-            EthCall(
-                "Symbol:",
-                None,
-                "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
-                "0x95d89b41",
-                [],
-                [],
-                "string",
-            ),
-            EthCall(
-                "Name:",
-                None,
-                "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
-                "0x06fdde03",
-                [],
-                [],
-                "string",
-            ),
-            EthCall(
-                "Total Supply:",
-                None,
-                "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
-                "0x18160ddd",
-                [],
-                [],
-                "uint256",
-            ),
-        ]
-    )
-    for key, result in responses.items():
-        print(key, result[0])
+    return opcodes
 
 
-if __name__ == "__main__":
-    asyncio.run(
-        main(
-            "wss://dawn-old-feather.quiknode.pro/6cd19e9c836664d7ed84d98dff8ea26c96b3a596/"
-        )
-    )
+def contract_implements_function(contract_data: str, function_hash):
+    # opcodes = contract_data_to_opcodes(contract_data)
+    return f"63{function_hash[2:]}" in contract_data

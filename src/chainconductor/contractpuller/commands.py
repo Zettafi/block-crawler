@@ -1,13 +1,3 @@
-"""
-Contracts
-    blockchain - Ethereum Mainnet
-    address -
-    creation_block
-    creation_tx
-    date_created
-    contract_specification
-    abi
-"""
 import asyncio
 from asyncio import Queue
 from typing import List
@@ -19,20 +9,16 @@ from .events import EventBus
 from .processors import (
     BlockProcessor,
     TransactionProcessor,
-    ContractProcessor,
-    TRANSACTION_PROCESSOR_STOPPED_EVENT,
-    BLOCK_PROCESSOR_STOPPED_EVENT,
+    ContractPersistenceProcessor,
     Processor,
+    ContractProcessor,
 )
 from .stats import StatsService
 from ..data.models import Contracts
 from ..web3.rpc import RPCClient
 
-# from .processors import collect_all_contracts
-
 try:  # If dotenv in installed, use it load env vars
     from dotenv import load_dotenv
-
     load_dotenv()
 except ModuleNotFoundError:
     pass
@@ -45,7 +31,9 @@ class RunManager:
         block_processors: List[BlockProcessor],
         transaction_processors: List[TransactionProcessor],
         contract_processors: List[ContractProcessor],
+        persistence_processors: List[ContractPersistenceProcessor],
     ) -> None:
+        self.__contract_processors = contract_processors
         self.__event_bus: EventBus = event_bus
         self.__block_processors: List[BlockProcessor] = block_processors
         self.__block_processors_remaining: int = len(block_processors)
@@ -54,17 +42,25 @@ class RunManager:
         ] = transaction_processors
         self.__transaction_processors_remaining: int = len(transaction_processors)
         self.__contract_processors: List[ContractProcessor] = contract_processors
-        self.__contract_processors_remaining: int = len(contract_processors)
+        self.__persistence_processors: List[
+            ContractPersistenceProcessor
+        ] = persistence_processors
+        self.__contract_processors_remaining: int = len(persistence_processors)
 
     async def initialize(self):
         await self.__event_bus.register(
             BLOCK_ADDING_ENDED_EVENT, self.block_id_processor_stopped
         )
         await self.__event_bus.register(
-            BLOCK_PROCESSOR_STOPPED_EVENT, self.block_processor_stopped
+            BlockProcessor.PROCESSOR_STOPPED_EVENT, self.block_processor_stopped
         )
         await self.__event_bus.register(
-            TRANSACTION_PROCESSOR_STOPPED_EVENT, self.transaction_processor_stopped
+            TransactionProcessor.PROCESSOR_STOPPED_EVENT,
+            self.transaction_processor_stopped,
+        )
+
+        await self.__event_bus.register(
+            ContractProcessor.PROCESSOR_STOPPED_EVENT, self.contract_processor_stopped
         )
 
     async def block_id_processor_stopped(self):
@@ -83,6 +79,12 @@ class RunManager:
             for contract_processor in self.__contract_processors:
                 await contract_processor.stop()
 
+    async def contract_processor_stopped(self):
+        self.__transaction_processors_remaining -= 1
+        if self.__transaction_processors_remaining < 1:
+            for persistence_processor in self.__persistence_processors:
+                await persistence_processor.stop()
+
 
 BLOCK_ADDING_ENDED_EVENT = "block adding ended"
 
@@ -99,6 +101,7 @@ async def process_contracts_async(
     block_processor_instances: int,
     transaction_processor_instances: int,
     contract_processor_instances: int,
+    contract_persistence_processor_instances: int,
 ):
     rpc_client = RPCClient(archive_node_uri)
     event_bus = EventBus()
@@ -110,6 +113,7 @@ async def process_contracts_async(
         block_id_queue: Queue = Queue()
         transaction_queue: Queue = Queue()
         contract_queue: Queue = Queue()
+        persistence_queue = Queue()
         block_processors: List[BlockProcessor] = list()
         for _ in range(block_processor_instances):
             processor = BlockProcessor(
@@ -139,24 +143,45 @@ async def process_contracts_async(
         contract_processors: List[ContractProcessor] = list()
         for _ in range(contract_processor_instances):
             processor = ContractProcessor(
-                dynamodb,
+                rpc_client,
                 stats_service,
                 event_bus,
+                rpc_batch_size,
                 contract_queue,
-                dynamodb_batch_size,
+                persistence_queue,
                 max_batch_wait_time,
             )
             contract_processors.append(processor)
 
+        persistence_processors: List[ContractPersistenceProcessor] = list()
+        for _ in range(contract_persistence_processor_instances):
+            processor = ContractPersistenceProcessor(
+                dynamodb,
+                stats_service,
+                event_bus,
+                persistence_queue,
+                dynamodb_batch_size,
+                max_batch_wait_time,
+            )
+            persistence_processors.append(processor)
+
         run_manager = RunManager(
-            event_bus, block_processors, transaction_processors, contract_processors
+            event_bus,
+            block_processors,
+            transaction_processors,
+            contract_processors,
+            persistence_processors,
         )
         await run_manager.initialize()
 
+        # noinspection PyTypeChecker
         processors: List[Processor] = [
             processor.start()
             for processor in (
-                block_processors + transaction_processors + contract_processors
+                block_processors
+                + transaction_processors
+                + contract_processors
+                + persistence_processors
             )
         ]
 

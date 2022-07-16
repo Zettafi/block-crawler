@@ -1,31 +1,28 @@
-from typing import Union, Dict, List, Set, Tuple
+from typing import Union, Dict, List, Set, Tuple, Optional
 import ujson as json
 import aiohttp
 from eth_abi import encode_abi, decode_abi
 from eth_utils import decode_hex
 
 from .types import Block, Transaction, HexInt, Log, TransactionReceipt
+from .util import Function
 
 
 class EthCall:
     def __init__(
         self,
         identifier: str,
-        from_: str,
+        from_: Optional[str],
         to: str,
-        method_hash: str,
-        parameter_types: List[str],
-        parameters: list,
-        response_type=None,
-        block: Union[str, int] = "latest",
+        function: Function,
+        parameters: Optional[list] = None,
+        block: Optional[Union[str, int]] = "latest",
     ):
         self.__identifier = identifier
         self.__from = from_
         self.__to = to
-        self.__method_hash = method_hash
-        self.__parameter_types = parameter_types.copy()
-        self.__parameters = parameters.copy()
-        self.__response_type = response_type
+        self.__function = function
+        self.__parameters = list() if parameters is None else parameters.copy()
         self.__block = block
 
     @property
@@ -41,29 +38,47 @@ class EthCall:
         return self.__to
 
     @property
-    def method_hash(self):
-        return self.__method_hash
+    def function(self):
+        return self.__function
 
     @property
     def parameters(self):
         return self.__parameters.copy()
 
     @property
-    def parameter_types(self):
-        return self.__parameter_types.copy()
-
-    @property
-    def response_type(self):
-        return self.__response_type
-
-    @property
     def block(self):
         return self.__block
 
 
+class CallError(Exception):
+    pass
+
+
 class RPCError(Exception):
-    def __init__(self, error_code, error_message) -> None:
-        super().__init__(f"{error_code}: {error_message}")
+    def __init__(self, rpc_version, request_id, error_code, error_message) -> None:
+        super().__init__(
+            f"RPC {rpc_version} - Req {request_id} - {error_code}: {error_message}"
+        )
+        self.__rpc_version = rpc_version
+        self.__request_id = request_id
+        self.__error_code = error_code
+        self.__error_message = error_message
+
+    @property
+    def rpc_version(self):
+        return self.__rpc_version
+
+    @property
+    def request_id(self):
+        return self.__request_id
+
+    @property
+    def error_code(self):
+        return self.__error_code
+
+    @property
+    def error_message(self):
+        return self.__error_message
 
 
 class RPCResponse:
@@ -89,6 +104,10 @@ class RPCClient:
     def __init__(self, provider_url) -> None:
         self.__nonce = 0
         self.__provider_url = provider_url
+        self.__aiohttp_tcp_connector = aiohttp.TCPConnector()
+
+    def __del__(self):
+        self.__aiohttp_tcp_connector.close()
 
     async def __call(self, method, *params) -> RPCResponse:
         request = self.__get_rpc_request(method, params)
@@ -96,8 +115,10 @@ class RPCClient:
 
     async def __call_rpc(
         self, rpc_request: Union[Dict, List[Dict]]
-    ) -> Union[RPCResponse, List[RPCResponse]]:
-        async with aiohttp.ClientSession() as session:
+    ) -> Union[RPCResponse, List[Union[RPCResponse, RPCError]]]:
+        async with aiohttp.ClientSession(
+            connector=self.__aiohttp_tcp_connector, connector_owner=False
+        ) as session:
             async with session.post(self.__provider_url, json=rpc_request) as response:
                 response_json = await response.json()
                 rpc_response = self.__get_rpc_response(response_json)
@@ -105,7 +126,9 @@ class RPCClient:
 
     async def __ws_call(self, method, *params):
         request = self.__get_rpc_request(method, params)
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(
+            connector=self.__aiohttp_tcp_connector, connector_owner=False
+        ) as session:
             async with session.ws_connect(self.__provider_url) as ws:
                 await ws.send_json(request)
                 async for msg in ws:
@@ -132,22 +155,35 @@ class RPCClient:
         return data
 
     def __get_rpc_response(self, response_json: Dict):
-        if "error" in response_json:
-            raise RPCError(
-                response_json["error"]["code"],
-                response_json["error"]["message"],
-            )
-
         if isinstance(response_json, list):
-            rpc_response = [
-                RPCResponse(
+            rpc_response = list()
+            for response_json_item in response_json:
+                if "error" in response_json_item:
+                    rpc_response.append(
+                        RPCError(
+                            response_json_item["jsonrpc"],
+                            response_json_item["id"],
+                            response_json_item["error"]["code"],
+                            response_json_item["error"]["message"],
+                        )
+                    )
+                else:
+                    rpc_response.append(
+                        RPCResponse(
+                            response_json_item["jsonrpc"],
+                            response_json_item["id"],
+                            response_json_item["result"],
+                        )
+                    )
+
+        else:
+            if "error" in response_json:
+                raise RPCError(
                     response_json["jsonrpc"],
                     response_json["id"],
-                    response_json["result"],
+                    response_json["error"]["code"],
+                    response_json["error"]["message"],
                 )
-                for response_json in response_json
-            ]
-        else:
             rpc_response = RPCResponse(
                 response_json["jsonrpc"],
                 response_json["id"],
@@ -270,7 +306,7 @@ class RPCClient:
             )
         return receipts
 
-    async def calls(self, requests: List[EthCall]) -> Dict[str, Tuple]:
+    async def calls(self, requests: List[EthCall]) -> Dict[str, Union[Tuple, RPCError]]:
         rpc_requests = list()
         rpc_request_id_lookup: Dict[int, EthCall] = dict()
         for request in requests:
@@ -278,11 +314,11 @@ class RPCClient:
                 encoded_params = ""
             else:
                 encoded_param_bytes = encode_abi(
-                    request.parameter_types, request.parameters
+                    request.function.param_types, request.parameters
                 )
                 encoded_params = encoded_param_bytes.hex()
 
-            call_data = f"{request.method_hash}{encoded_params}"
+            call_data = f"{request.function.function_hash}{encoded_params}"
             rpc_request = self.__get_rpc_request(
                 "eth_call",
                 (
@@ -294,17 +330,30 @@ class RPCClient:
             rpc_requests.append(rpc_request)
 
         rpc_responses = await self.__call_rpc(rpc_requests)
-        responses: Dict[str, Tuple] = dict()
+        responses: Dict[str, Union[Tuple, RPCError]] = dict()
         for rpc_response in rpc_responses:
-            encoded_response: str = rpc_response.result
             response_request = rpc_request_id_lookup[rpc_response.request_id]
-            if response_request.response_type is None:
-                response = None
+            if isinstance(rpc_response, RPCError):
+                response = rpc_response
             else:
-                encoded_response_bytes = decode_hex(encoded_response)
-                response = decode_abi(
-                    [response_request.response_type], encoded_response_bytes
-                )
+                encoded_response: str = rpc_response.result
+                response_request = rpc_request_id_lookup[rpc_response.request_id]
+                if len(response_request.function.return_types) == 0:
+                    response = None
+                else:
+                    try:
+                        encoded_response_bytes = decode_hex(encoded_response)
+                        response = decode_abi(
+                            response_request.function.return_types,
+                            encoded_response_bytes,
+                        )
+                    except Exception as e:
+                        response = RPCError(
+                            rpc_response.rpc_version,
+                            rpc_response.request_id,
+                            "Response Decode Error",
+                            str(e),
+                        )
             responses[response_request.identifier] = response
         return responses
 

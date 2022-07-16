@@ -1,4 +1,34 @@
-from typing import List, Union, NewType
+from typing import List, Union, Dict
+from enum import Enum
+
+from binascii import unhexlify
+
+
+class ERC165InterfaceID(Enum):
+    ERC721 = "0x80ac58cd"
+    ERC721_TOKEN_RECEIVER = "0x150b7a02"
+    ERC721_METADATA = "0x5b5e139f"
+    ERC721_ENUMERABLE = "0x780e9d63"
+    ERC998_ERC721_TOP_DOWN = "0xcde244d9"
+    ERC998_ERC721_TOP_DOWN_ENUMERABLE = "0xa344afe4"
+    ERC998_ERC721_BOTTOM_UP = "0xa1b23002"
+    ERC998_ERC721_BOTTOM_UP_ENUMERABLE = "0x8318b539"
+    ERC998_ERC20_TOP_DOWN = "0x7294ffed"
+    ERC998_ERC20_TOP_DOWN_ENUMERABLE = "0xc5fd96cd"
+    ERC998_ERC20_BOTTOM_UP = "0xffafa991"
+    ERC1155 = "0xd9b67a26"
+    ERC1155_TOKEN_RECEIVER = "0x4e2312e0"
+    ERC1155_METADATA_URI = "0x0e89341c"
+
+    @property
+    def bytes(self) -> bytes:
+        return unhexlify(self.value[2:])
+
+    @classmethod
+    def from_value(cls, value: str):
+        for item in cls:
+            if item.value == value:
+                return item
 
 
 class HexInt:
@@ -381,14 +411,98 @@ class TransactionReceipt(Type):
         return self.__status
 
 
-class SmartContract(Type):
-    def __init__(self):
+class Metadata:
+    pass
+
+
+class ERC1155Metadata(Metadata):
+    def __init__(
+        self, name: str, description: str, image: str, properties: Dict[str, object]
+    ) -> None:
         pass
 
 
-class ERC20(SmartContract):
-    pass
+class Token:
+    def __init__(
+        self,
+        *,
+        token_id: int,
+        owner: str,
+        metadata_uri: str,
+        raw_metadata: str,
+        metadata: Metadata,
+    ) -> None:
+        self.__token_id: int = token_id
+        self.__owner = owner
+        self.__metadata_uri = metadata_uri
+        self.__raw_metadata: str = raw_metadata
+        self.__metadata: Metadata = metadata
+
+    @property
+    def token_id(self) -> int:
+        return self.__token_id
+
+    @property
+    def owner(self) -> str:
+        return self.__owner
+
+    @property
+    def metadata_uri(self) -> str:
+        return self.__metadata_uri
+
+    @property
+    def raw_metadata(self) -> str:
+        return self.__raw_metadata
+
+    @property
+    def metadata(self) -> Metadata:
+        return self.__metadata
 
 
-class ERC171(ERC20):
-    pass
+class Contract:
+    def __init__(
+        self,
+        *,
+        address: str,
+        creator: str,
+        interfaces: List[ERC165InterfaceID],
+        name: str,
+        symbol: str,
+        total_supply: int,
+        tokens: List[Token],
+    ) -> None:
+        self.__address: str = address
+        self.__creator: str = creator
+        self.__interfaces: List[ERC165InterfaceID] = interfaces
+        self.__name: str = name
+        self.__symbol: str = symbol
+        self.__total_supply: int = total_supply
+        self.__tokens: List[Token] = tokens
+
+    @property
+    def address(self) -> str:
+        return self.__address
+
+    @property
+    def creator(self) -> str:
+        return self.__creator
+
+    @property
+    def interfaces(self) -> List[ERC165InterfaceID]:
+        return self.__interfaces
+
+    @property
+    def name(self) -> str:
+        return self.__name
+
+    @property
+    def symbol(self) -> str:
+        return self.__symbol
+
+    @property
+    def total_supply(self) -> int:
+        return self.__total_supply
+
+    @property
+    def tokens(self):
+        return self.__tokens
