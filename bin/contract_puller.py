@@ -224,8 +224,8 @@ def process_contracts(
     """
     start = datetime.utcnow()
     stats_service = StatsService()
-
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     stats_writer = loop.create_task(_stats_writer(stats_service, start, True))
     try:
         loop.run_until_complete(
