@@ -1,7 +1,4 @@
-from enum import Enum
-from typing import Any, List, Type, Dict
-
-from binascii import unhexlify
+from typing import List, Dict
 
 
 class Function:

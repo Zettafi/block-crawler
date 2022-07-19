@@ -1,7 +1,6 @@
-from typing import List, Union, Dict
-from enum import Enum
-
 from binascii import unhexlify
+from enum import Enum
+from typing import List, Union, Dict
 
 
 class ERC165InterfaceID(Enum):

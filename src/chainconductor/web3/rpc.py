@@ -1,6 +1,7 @@
 from typing import Union, Dict, List, Set, Tuple, Optional
-import ujson as json
+
 import aiohttp
+import ujson as json
 from eth_abi import encode_abi, decode_abi
 from eth_utils import decode_hex
 
