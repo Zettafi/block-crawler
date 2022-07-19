@@ -7,7 +7,13 @@ from .events import EventBus
 from .stats import StatsService
 from ..data.models import Contracts
 from ..web3.rpc import RPCClient, RPCError, EthCall
-from ..web3.types import TransactionReceipt, Transaction, Block, Contract, ERC165InterfaceID
+from ..web3.types import (
+    TransactionReceipt,
+    Transaction,
+    Block,
+    Contract,
+    ERC165InterfaceID,
+)
 from ..web3.util import (
     ERC165Functions,
     contract_implements_function,
@@ -16,7 +22,20 @@ from ..web3.util import (
 )
 
 
-class ContractTransportObject:
+class TransportObject:
+    pass
+
+
+class BlockIDTransportObject(TransportObject):
+    def __init__(self, block_id: int) -> None:
+        self.__block_id: int = block_id
+
+    @property
+    def block_id(self) -> int:
+        return self.__block_id
+
+
+class ContractTransportObject(TransportObject):
     def __init__(
         self,
         *,
@@ -48,7 +67,19 @@ class ContractTransportObject:
 
 
 class Processor:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        inbound_queue: Queue,
+        max_batch_size: int,
+        max_batch_wait: float,
+        event_bus: EventBus,
+        stopped_event: str,
+) -> None:
+        self._inbound_queue: Queue = inbound_queue
+        self._max_batch_size: int = max_batch_size
+        self._max_batch_wait: timedelta = timedelta(seconds=max_batch_wait)
+        self.__event_bus: EventBus = event_bus
+        self.__stopped_event = stopped_event
         self.__running: bool = False
         self.__stopping = False
 
@@ -121,7 +152,13 @@ class BlockProcessor(Processor):
         transaction_queue: Queue,
         max_batch_wait: int,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            inbound_queue=block_id_queue,
+            max_batch_size=rpc_batch_size,
+            max_batch_wait=max_batch_wait,
+            event_bus=event_bus,
+            stopped_event=self.PROCESSOR_STOPPED_EVENT,
+        )
         self.__rpc_client: RPCClient = rpc_client
         self.__stats_service: StatsService = stats_service
         self.__event_bus = event_bus
@@ -132,9 +169,10 @@ class BlockProcessor(Processor):
 
     async def _process(self):
         while await self.is_running():
-            block_ids = await self._get_batch_items_from_queue(
+            transport_objects = await self._get_batch_items_from_queue(
                 self.__block_id_queue, self.__rpc_batch_size, self.__max_batch_wait
             )
+            block_ids = [transport_object.block_id for transport_object in transport_objects]
             if len(block_ids) == 0:
                 # Don't process empty batches
                 continue
@@ -174,7 +212,13 @@ class TransactionProcessor(Processor):
         contract_queue: Queue,
         max_batch_wait: int,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            inbound_queue=transaction_queue,
+            max_batch_size=rpc_batch_size,
+            max_batch_wait=max_batch_wait,
+            event_bus=event_bus,
+            stopped_event=self.PROCESSOR_STOPPED_EVENT,
+        )
         self.__rpc_client: RPCClient = rpc_client
         self.__stats_service: StatsService = stats_service
         self.__event_bus = event_bus
@@ -206,7 +250,6 @@ class TransactionProcessor(Processor):
                     transaction_hashes
                 )
             for receipt in receipts:
-                # TODO - FIX block ID could have multiple transactions in the block
                 in_transport_object = transactions_hash_map[receipt.transaction_hash]
                 out_transport_object = ContractTransportObject(
                     block=in_transport_object.block,
@@ -220,7 +263,7 @@ class TransactionProcessor(Processor):
 
 
 class ContractProcessor(Processor):
-    RPPC_TIMER_CALL_SUPPORTS_INTERFACES = "rpc_timer_call_supports_interfaces"
+    RPC_TIMER_CALL_SUPPORTS_INTERFACES = "rpc_timer_call_supports_interfaces"
     RPC_TIMER_CALL_CONTRACT_METADATA = "rpc_timer_call_contract_metadata"
     PROCESSED_STAT = "contracts_processed"
     PROCESSOR_STOPPED_EVENT = "contract_processor_stopped"
@@ -236,7 +279,13 @@ class ContractProcessor(Processor):
         persistence_queue: Queue,
         max_batch_wait: int,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            inbound_queue=contract_queue,
+            max_batch_size=rpc_batch_size,
+            max_batch_wait=max_batch_wait,
+            event_bus=event_bus,
+            stopped_event=self.PROCESSOR_STOPPED_EVENT,
+        )
         self.__rpc_client: RPCClient = rpc_client
         self.__stats_service: StatsService = stats_service
         self.__event_bus = event_bus
@@ -296,7 +345,7 @@ class ContractProcessor(Processor):
     async def __get_supported_interfaces(
         self, contract_address
     ) -> List[ERC165InterfaceID]:
-        with self.__stats_service.timer(self.RPPC_TIMER_CALL_SUPPORTS_INTERFACES):
+        with self.__stats_service.timer(self.RPC_TIMER_CALL_SUPPORTS_INTERFACES):
             supports_interface_responses = await self.__rpc_client.calls(
                 [
                     EthCall(
@@ -410,7 +459,13 @@ class ContractPersistenceProcessor(Processor):
         dynamodb_batch_size: int,
         max_batch_wait: int,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            inbound_queue=contract_queue,
+            max_batch_size=dynamodb_batch_size,
+            max_batch_wait=max_batch_wait,
+            event_bus=event_bus,
+            stopped_event=self.PROCESSOR_STOPPED_EVENT,
+        )
         self.__dynamodb = dynamodb
         self.__stats_service: StatsService = stats_service
         self.__event_bus = event_bus

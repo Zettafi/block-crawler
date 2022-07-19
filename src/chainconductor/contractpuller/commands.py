@@ -12,6 +12,7 @@ from .processors import (
     ContractPersistenceProcessor,
     Processor,
     ContractProcessor,
+    BlockIDTransportObject,
 )
 from .stats import StatsService
 from ..data.models import Contracts
@@ -80,8 +81,8 @@ class RunManager:
                 await contract_processor.stop()
 
     async def contract_processor_stopped(self):
-        self.__transaction_processors_remaining -= 1
-        if self.__transaction_processors_remaining < 1:
+        self.__contract_processors_remaining -= 1
+        if self.__contract_processors_remaining < 1:
             for persistence_processor in self.__persistence_processors:
                 await persistence_processor.stop()
 
@@ -187,7 +188,7 @@ async def process_contracts_async(
 
         async def __queue_block_ids():
             for block_id in range(starting_block, ending_block + 1):
-                await block_id_queue.put(block_id)
+                await block_id_queue.put(BlockIDTransportObject(block_id))
             await asyncio.sleep(0.1)
             await event_bus.trigger(
                 BLOCK_ADDING_ENDED_EVENT

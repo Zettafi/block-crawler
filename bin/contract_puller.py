@@ -23,12 +23,12 @@ except ModuleNotFoundError:
 async def _stats_writer(
     stats_service: StatsService, start_time: datetime, run_forever=False
 ):
-    print("Time : Blocks [RPC # | Time | Avg]", end="")
-    print("Tx [RPC | Time | Avg]", end="")
-    print("Rcpt [RPC | Time | Avg]", end="")
+    print("Time : Blocks [RPC # | Time | Avg]", end=" ")
+    print("Tx [RPC | Time | Avg]", end=" ")
+    print("Rcpt [RPC | Time | Avg]", end=" ")
     print(
         "Cont [Int RPC | Time | Avg] - [Meta RPC | Time | Avg] - [OpCode | Time | Avg]",
-        end="",
+        end=" ",
     )
     print("DB [RPC | Time | Avg]")
     while True:
@@ -42,7 +42,7 @@ async def _stats_writer(
             TransactionProcessor.RPC_TIMER_GET_TRANSACTION_RECEIPTS
         )
         get_contract_call_interfaces_timings = stats_service.get_timings(
-            ContractProcessor.RPPC_TIMER_CALL_SUPPORTS_INTERFACES
+            ContractProcessor.RPC_TIMER_CALL_SUPPORTS_INTERFACES
         )
         get_contract_call_contract_metadata_timings = stats_service.get_timings(
             ContractProcessor.RPC_TIMER_CALL_CONTRACT_METADATA
@@ -227,24 +227,29 @@ def process_contracts(
 
     loop = asyncio.get_event_loop()
     stats_writer = loop.create_task(_stats_writer(stats_service, start, True))
-    loop.run_until_complete(
-        process_contracts_async(
-            stats_service=stats_service,
-            archive_node_uri=archive_node_uri,
-            dynamodb_uri=dynamodb_uri,
-            starting_block=starting_block,
-            ending_block=ending_block,
-            rpc_batch_size=rpc_batch_size,
-            dynamodb_batch_size=dynamodb_batch_size,
-            max_batch_wait_time=max_batch_wait_time,
-            block_processor_instances=block_processors,
-            transaction_processor_instances=transaction_processors,
-            contract_processor_instances=contract_processors,
-            contract_persistence_processor_instances=contract_persistence_processors,
+    try:
+        loop.run_until_complete(
+            process_contracts_async(
+                stats_service=stats_service,
+                archive_node_uri=archive_node_uri,
+                dynamodb_uri=dynamodb_uri,
+                starting_block=starting_block,
+                ending_block=ending_block,
+                rpc_batch_size=rpc_batch_size,
+                dynamodb_batch_size=dynamodb_batch_size,
+                max_batch_wait_time=max_batch_wait_time,
+                block_processor_instances=block_processors,
+                transaction_processor_instances=transaction_processors,
+                contract_processor_instances=contract_processors,
+                contract_persistence_processor_instances=contract_persistence_processors,
+            )
         )
-    )
-    stats_writer.get_loop().run_until_complete(asyncio.sleep(1))
+    except KeyboardInterrupt:
+        pass
+
+    loop.run_until_complete(asyncio.sleep(1))
     stats_writer.cancel()
+    loop.stop()
 
 
 if __name__ == "__main__":
