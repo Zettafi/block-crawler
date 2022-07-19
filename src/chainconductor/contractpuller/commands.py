@@ -20,6 +20,7 @@ from ..web3.rpc import RPCClient
 
 try:  # If dotenv in installed, use it load env vars
     from dotenv import load_dotenv
+
     load_dotenv()
 except ModuleNotFoundError:
     pass
