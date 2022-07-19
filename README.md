@@ -8,12 +8,10 @@ python -m pip install -e .[dev]
 
 ### Tests
 ```bash
-python -m unittest
+python -m unittest discover
 ```
 
 ### Linting
 ```bash
-black
+black .
 ```
-
-### Type Checking
