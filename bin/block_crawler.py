@@ -220,7 +220,8 @@ def process_contracts(
     contract_persistence_processors: int,
 ):
     """
-    Pull all contracts from the STARTING_BLOCK to the ENDING_BLOCK from an archive node and put them in the database
+    Crawl the blocks from the STARTING_BLOCK to the ENDING_BLOCK from an archive node, parse the data we want to collect
+    and put that data in the database
     """
     start = datetime.utcnow()
     stats_service = StatsService()
