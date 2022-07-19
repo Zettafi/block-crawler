@@ -1,5 +1,7 @@
 import asyncio
 from datetime import datetime
+from math import floor
+from statistics import median, mean
 
 import click
 
@@ -21,16 +23,11 @@ except ModuleNotFoundError:
 
 
 async def _stats_writer(
-    stats_service: StatsService, start_time: datetime, run_forever=False
+    stats_service: StatsService, start_time: datetime, run_forever=True, show_header=True
 ):
-    print("Time : Blocks [RPC # | Time | Avg]", end=" ")
-    print("Tx [RPC | Time | Avg]", end=" ")
-    print("Rcpt [RPC | Time | Avg]", end=" ")
-    print(
-        "Cont [Int RPC | Time | Avg] - [Meta RPC | Time | Avg] - [OpCode | Time | Avg]",
-        end=" ",
-    )
-    print("DB [RPC | Time | Avg]")
+    if show_header:
+        print("Total Time  | Blocks      | Transactions | Contracts   | Contract Writes")
+
     while True:
         await asyncio.sleep(1)
         end = datetime.utcnow()
@@ -47,104 +44,22 @@ async def _stats_writer(
         get_contract_call_contract_metadata_timings = stats_service.get_timings(
             ContractProcessor.RPC_TIMER_CALL_CONTRACT_METADATA
         )
-        get_contract_opcode_discovery_timings = stats_service.get_timings(
-            ContractProcessor.CODE_TIMER_OPCODE_DISCOVERY
-        )
         get_dynamodb_timings = stats_service.get_timings(
             ContractPersistenceProcessor.DYNAMODB_TIMER_WRITE_CONTRACT
         )
+        seconds = total_time.seconds % 60 + total_time.microseconds / 1_000_000
+        minutes = total_time.seconds // 60
+        hours = minutes // 60
         print(
-            "\r{:02d}:{:05.2f}".format(
-                total_time.seconds // 60,
-                total_time.seconds + total_time.microseconds / 1_000_000,
-            ),
-            ":",
-            "B",
-            "{:,}".format(stats_service.get_count(BlockProcessor.PROCESSED_STAT)),
-            "[",
-            len(get_blocks_timings),
+            "\r{:02d}:{:02d}:{:05.2f}".format(hours, minutes, seconds),
             "|",
-            "{:0.2f}".format(sum(get_blocks_timings) / 1_000_000_000),
+            "{:<11,}".format(stats_service.get_count(BlockProcessor.PROCESSED_STAT)),
             "|",
-            "{:0.2f}".format(
-                sum(get_blocks_timings) / 1_000_000_000 / len(get_blocks_timings)
-                if len(get_blocks_timings) > 0
-                else 0
-            ),
-            "]",
-            "R",
-            "{:,}".format(stats_service.get_count(TransactionProcessor.PROCESSED_STAT)),
-            "[",
-            len(get_transaction_timings),
+            "{:<12,}".format(stats_service.get_count(TransactionProcessor.PROCESSED_STAT)),
             "|",
-            "{:0.2f}".format(sum(get_transaction_timings) / 1_000_000_000),
+            "{:<11,}".format(stats_service.get_count(ContractProcessor.PROCESSED_STAT)),
             "|",
-            "{:0.2f}".format(
-                sum(get_transaction_timings)
-                / len(get_transaction_timings)
-                / 1_000_000_000
-                if len(get_transaction_timings) > 0
-                else 0
-            ),
-            "]",
-            "CI",
-            "{:,}".format(stats_service.get_count(ContractProcessor.PROCESSED_STAT)),
-            "[",
-            len(get_contract_call_interfaces_timings),
-            "|",
-            "{:0.2f}".format(sum(get_contract_call_interfaces_timings) / 1_000_000_000),
-            "|",
-            "{:0.2f}".format(
-                sum(get_contract_call_interfaces_timings)
-                / len(get_contract_call_interfaces_timings)
-                / 1_000_000_000
-                if len(get_contract_call_interfaces_timings) > 0
-                else 0
-            ),
-            "-",
-            len(get_contract_call_contract_metadata_timings),
-            "|",
-            "{:0.2f}".format(
-                sum(get_contract_call_contract_metadata_timings) / 1_000_000_000
-            ),
-            "|",
-            "{:0.2f}".format(
-                sum(get_contract_call_contract_metadata_timings)
-                / len(get_contract_call_contract_metadata_timings)
-                / 1_000_000_000
-                if len(get_contract_call_contract_metadata_timings) > 0
-                else 0
-            ),
-            "-",
-            len(get_contract_opcode_discovery_timings),
-            "|",
-            "{:0.2f}".format(
-                sum(get_contract_opcode_discovery_timings) / 1_000_000_000
-            ),
-            "|",
-            "{:0.2f}".format(
-                sum(get_contract_opcode_discovery_timings)
-                / len(get_contract_opcode_discovery_timings)
-                / 1_000_000_000
-                if len(get_contract_opcode_discovery_timings) > 0
-                else 0
-            ),
-            "]",
-            "P",
-            "{:,}".format(
-                stats_service.get_count(ContractPersistenceProcessor.PROCESSED_STAT)
-            ),
-            "[",
-            len(get_dynamodb_timings),
-            "|",
-            "{:0.2f}".format(sum(get_dynamodb_timings) / 1_000_000_000),
-            "|",
-            "{:0.2f}".format(
-                sum(get_dynamodb_timings) / len(get_dynamodb_timings) / 1_000_000_000
-                if len(get_dynamodb_timings) > 0
-                else 0
-            ),
-            "]",
+            "{:<13,}".format(stats_service.get_count(ContractPersistenceProcessor.PROCESSED_STAT)),
             end="",
         )
         if not run_forever:
@@ -227,7 +142,7 @@ def process_contracts(
     stats_service = StatsService()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    stats_writer = loop.create_task(_stats_writer(stats_service, start, True))
+    stats_writer = loop.create_task(_stats_writer(stats_service, start, True, True))
     try:
         loop.run_until_complete(
             process_contracts_async(
@@ -245,12 +160,70 @@ def process_contracts(
                 contract_persistence_processor_instances=contract_persistence_processors,
             )
         )
+        asyncio.gather(stats_writer)
     except KeyboardInterrupt:
         pass
 
-    loop.run_until_complete(asyncio.sleep(1))
-    stats_writer.cancel()
+    loop.run_until_complete(_stats_writer(stats_service, start, False, False))
     loop.stop()
+    print()
+
+    def _get_time_from_secs(nanoseconds):
+        seconds = nanoseconds / 1_000_000_000
+        minutes = floor(seconds / 60)
+        return "{:02d}:{:05.2f}".format(minutes, seconds % 60)
+
+    click.echo("Blocks:")
+    blocks_processed = stats_service.get_count(BlockProcessor.PROCESSED_STAT)
+    click.echo("  Total Processed: {:,}".format(blocks_processed))
+    block_batches = stats_service.get_timings(BlockProcessor.RPC_TIMER_GET_BLOCKS)
+    block_batches_count = len(block_batches)
+    click.echo("  Get Block RPC Calls: {:,}".format(block_batches_count))
+    block_batches_average_size = blocks_processed / block_batches_count if block_batches_count else 0.0
+    click.echo("  Get Block RPC Avg Batch Size: {:0.2f}".format(block_batches_average_size))
+    click.echo("  Get Block RPC Total Processing Time: {}".format(_get_time_from_secs(sum(block_batches))))
+    click.echo("  Get Block RPC Median Processing Time: {}".format(_get_time_from_secs(median(block_batches))))
+    click.echo("  Get Block RPC Mean Processing Time: {}".format(_get_time_from_secs(mean(block_batches))))
+    click.echo()
+    click.echo("Transactions Receipts:")
+    transactions_processed = stats_service.get_count(TransactionProcessor.PROCESSED_STAT)
+    click.echo("  Total Processed: {:,}".format(transactions_processed))
+    transaction_batches = stats_service.get_timings(TransactionProcessor.RPC_TIMER_GET_TRANSACTION_RECEIPTS)
+    transaction_batches_count = len(transaction_batches)
+    transaction_batches_average_size = transactions_processed / transaction_batches_count if transaction_batches_count > 0 else 0.0
+    click.echo("  Get Transaction Receipt RPC Calls: {:,}".format(len(transaction_batches)))
+    click.echo("  Get Transaction Receipt RPC Avg Batch Size: {:0.2f}".format(transaction_batches_average_size))
+    click.echo("  Get Transaction Receipt RPC Total Processing Time: {}".format(_get_time_from_secs(sum(transaction_batches))))
+    click.echo("  Get Transaction Receipt RPC Median Processing Time: {}".format(_get_time_from_secs(median(transaction_batches))))
+    click.echo("  Get Transaction Receipt RPC Mean Processing Time: {}".format(_get_time_from_secs(mean(transaction_batches))))
+    click.echo()
+    click.echo("Smart Contracts:")
+    contracts_processed = stats_service.get_count(ContractProcessor.PROCESSED_STAT)
+    click.echo("  Total Processed: {:,}".format(contracts_processed))
+    click.echo("  Supports Interfaces:")
+    supports_interface_batches = stats_service.get_timings(ContractProcessor.RPC_TIMER_CALL_SUPPORTS_INTERFACES)
+    click.echo("    Get Call Supports Interface RPC Calls: {:,}".format(len(supports_interface_batches)))
+    click.echo("    Get Call Supports Interface RPC Total Processing Time: {}".format(_get_time_from_secs(sum(supports_interface_batches))))
+    click.echo("    Get Call Supports Interface RPC Median Processing Time: {}".format(_get_time_from_secs(median(supports_interface_batches))))
+    click.echo("    Get Call Supports Interface RPC Mean Processing Time: {}".format(_get_time_from_secs(mean(supports_interface_batches))))
+    click.echo("  Contract Metadata:")
+    get_metadata_batches = stats_service.get_timings(ContractProcessor.RPC_TIMER_CALL_CONTRACT_METADATA)
+    click.echo("    Get Call Get Metadata RPC Calls: {:,}".format(len(get_metadata_batches)))
+    click.echo("    Get Call Get Metadata RPC Total Processing Time: {}".format(_get_time_from_secs(sum(get_metadata_batches))))
+    click.echo("    Get Call Get Metadata RPC Median Processing Time: {}".format(_get_time_from_secs(median(get_metadata_batches))))
+    click.echo("    Get Call Get Metadata RPC Mean Processing Time: {}".format(_get_time_from_secs(mean(get_metadata_batches))))
+    click.echo()
+    click.echo("Stored Contracts:")
+    contracts_stored = stats_service.get_count(ContractPersistenceProcessor.PROCESSED_STAT)
+    click.echo("  Total Contracts Stored: {:,}".format(contracts_stored))
+    dynamodb_write_batches = stats_service.get_timings(ContractPersistenceProcessor.DYNAMODB_TIMER_WRITE_CONTRACT)
+    dynamodb_write_batches_count = len(dynamodb_write_batches)
+    click.echo("  Get DynamoDB Batch Put Calls: {:,}".format(len(dynamodb_write_batches)))
+    dynamodb_write_batches_average_size = contracts_stored / dynamodb_write_batches_count if dynamodb_write_batches_count else 0.0
+    click.echo("  Get DynamoDB Batch Put Avg Batch Size: {:0.2f}".format(dynamodb_write_batches_average_size))
+    click.echo("  Get DynamoDB Batch Put Total Processing Time: {}".format(_get_time_from_secs(sum(dynamodb_write_batches))))
+    click.echo("  Get DynamoDB Batch Put Median Processing Time: {}".format(_get_time_from_secs(median(dynamodb_write_batches))))
+    click.echo("  Get DynamoDB Batch Put Mean Processing Time: {}".format(_get_time_from_secs(mean(dynamodb_write_batches))))
 
 
 if __name__ == "__main__":
