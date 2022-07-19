@@ -74,7 +74,7 @@ class Processor:
         max_batch_wait: float,
         event_bus: EventBus,
         stopped_event: str,
-) -> None:
+    ) -> None:
         self._inbound_queue: Queue = inbound_queue
         self._max_batch_size: int = max_batch_size
         self._max_batch_wait: timedelta = timedelta(seconds=max_batch_wait)
@@ -85,7 +85,7 @@ class Processor:
 
     async def start(self):
         self.__running = True
-        await self._process()
+        await self.__process()
 
     async def abort(self):
         self.__running = False
@@ -99,13 +99,21 @@ class Processor:
     async def is_stopping(self):
         return self.__stopping
 
-    async def _process(self):
-        raise NotImplementedError
-
     async def __full_stop(self):
         self.__running = False
 
-    async def _get_batch_items_from_queue(
+    async def __process(self):
+        while await self.is_running():
+            transport_objects = await self.__get_batch_items_from_queue(
+                self._inbound_queue, self._max_batch_size, self._max_batch_wait
+            )
+            if len(transport_objects) == 0:
+                # Don't process empty batches
+                continue
+            await self._process_batch(transport_objects)
+        await self.__event_bus.trigger(self.__stopped_event)
+
+    async def __get_batch_items_from_queue(
         self, queue: Queue, batch_size: int, max_batch_wait: timedelta
     ):
         last_batch_time = datetime.now()
@@ -129,6 +137,9 @@ class Processor:
             if len(items) >= batch_size or now - last_batch_time > max_batch_wait:
                 break
         return items
+
+    async def _process_batch(self, transport_objects: List[TransportObject]):
+        raise NotImplementedError
 
 
 class BlockProcessor(Processor):
@@ -161,40 +172,30 @@ class BlockProcessor(Processor):
         )
         self.__rpc_client: RPCClient = rpc_client
         self.__stats_service: StatsService = stats_service
-        self.__event_bus = event_bus
-        self.__rpc_batch_size: int = rpc_batch_size
-        self.__block_id_queue: Queue = block_id_queue
         self.__transaction_queue: Queue = transaction_queue
-        self.__max_batch_wait: timedelta = timedelta(seconds=max_batch_wait)
 
-    async def _process(self):
-        while await self.is_running():
-            transport_objects = await self._get_batch_items_from_queue(
-                self.__block_id_queue, self.__rpc_batch_size, self.__max_batch_wait
-            )
-            block_ids = [transport_object.block_id for transport_object in transport_objects]
-            if len(block_ids) == 0:
-                # Don't process empty batches
-                continue
-            with self.__stats_service.timer(self.RPC_TIMER_GET_BLOCKS):
-                try:
-                    blocks = await self.__rpc_client.get_blocks(
-                        set(block_ids), full_transactions=True
+    async def _process_batch(self, transport_objects: List[BlockIDTransportObject]):
+        block_ids = [
+            transport_object.block_id for transport_object in transport_objects
+        ]
+        with self.__stats_service.timer(self.RPC_TIMER_GET_BLOCKS):
+            try:
+                blocks = await self.__rpc_client.get_blocks(
+                    set(block_ids), full_transactions=True
+                )
+            except RPCError as e:
+                raise  # TODO: handle this
+            except Exception as e:
+                raise  # TODO: handle this
+
+        for block in blocks:
+            for transaction in block.transactions:
+                if transaction.to_ is None:
+                    transport = ContractTransportObject(
+                        block=block, transaction=transaction
                     )
-                except RPCError as e:
-                    raise  # TODO: handle this
-                except Exception as e:
-                    raise  # TODO: handle this
-
-            for block in blocks:
-                for transaction in block.transactions:
-                    if transaction.to_ is None:
-                        transport = ContractTransportObject(
-                            block=block, transaction=transaction
-                        )
-                        await self.__transaction_queue.put(transport)
-                self.__stats_service.increment(self.PROCESSED_STAT)
-        await self.__event_bus.trigger(self.PROCESSOR_STOPPED_EVENT)
+                    await self.__transaction_queue.put(transport)
+            self.__stats_service.increment(self.PROCESSED_STAT)
 
 
 class TransactionProcessor(Processor):
@@ -221,45 +222,29 @@ class TransactionProcessor(Processor):
         )
         self.__rpc_client: RPCClient = rpc_client
         self.__stats_service: StatsService = stats_service
-        self.__event_bus = event_bus
-        self.__rpc_batch_size: int = rpc_batch_size
-        self.__transaction_queue: Queue = transaction_queue
         self.__contract_queue: Queue = contract_queue
-        self.__max_batch_wait: timedelta = timedelta(seconds=max_batch_wait)
 
-    async def _process(self):
-        while await self.is_running():
-            transport_objects: List[
-                ContractTransportObject
-            ] = await self._get_batch_items_from_queue(
-                self.__transaction_queue, self.__rpc_batch_size, self.__max_batch_wait
+    async def _process_batch(self, transport_objects: List[ContractTransportObject]):
+        transaction_hashes = list()
+        transactions_hash_map = dict()
+        for in_transport_object in transport_objects:
+            transactions_hash_map[
+                in_transport_object.transaction.hash
+            ] = in_transport_object
+            transaction_hashes.append(in_transport_object.transaction.hash)
+        with self.__stats_service.timer(self.RPC_TIMER_GET_TRANSACTION_RECEIPTS):
+            receipts = await self.__rpc_client.get_transaction_receipts(
+                transaction_hashes
             )
-            if len(transport_objects) == 0:
-                # Don't process empty batches
-                continue
-
-            transaction_hashes = list()
-            transactions_hash_map = dict()
-            for in_transport_object in transport_objects:
-                transactions_hash_map[
-                    in_transport_object.transaction.hash
-                ] = in_transport_object
-                transaction_hashes.append(in_transport_object.transaction.hash)
-            with self.__stats_service.timer(self.RPC_TIMER_GET_TRANSACTION_RECEIPTS):
-                receipts = await self.__rpc_client.get_transaction_receipts(
-                    transaction_hashes
-                )
-            for receipt in receipts:
-                in_transport_object = transactions_hash_map[receipt.transaction_hash]
-                out_transport_object = ContractTransportObject(
-                    block=in_transport_object.block,
-                    transaction=in_transport_object.transaction,
-                    transaction_receipt=receipt,
-                )
-                await self.__contract_queue.put(out_transport_object)
-                self.__stats_service.increment(self.PROCESSED_STAT)
-
-        await self.__event_bus.trigger(self.PROCESSOR_STOPPED_EVENT)
+        for receipt in receipts:
+            in_transport_object = transactions_hash_map[receipt.transaction_hash]
+            out_transport_object = ContractTransportObject(
+                block=in_transport_object.block,
+                transaction=in_transport_object.transaction,
+                transaction_receipt=receipt,
+            )
+            await self.__contract_queue.put(out_transport_object)
+            self.__stats_service.increment(self.PROCESSED_STAT)
 
 
 class ContractProcessor(Processor):
@@ -288,59 +273,43 @@ class ContractProcessor(Processor):
         )
         self.__rpc_client: RPCClient = rpc_client
         self.__stats_service: StatsService = stats_service
-        self.__event_bus = event_bus
-        self.__rpc_batch_size: int = rpc_batch_size
-        self.__contract_queue: Queue = contract_queue
         self.__persistence_queue: Queue = persistence_queue
-        self.__max_batch_wait: timedelta = timedelta(seconds=max_batch_wait)
 
-    async def _process(self):
-        while await self.is_running():
-            transport_objects: List[
-                ContractTransportObject
-            ] = await self._get_batch_items_from_queue(
-                self.__contract_queue, self.__rpc_batch_size, self.__max_batch_wait
+    async def _process_batch(self, transport_objects: List[ContractTransportObject]):
+        for in_transport_object in transport_objects:
+            contract_implements_supports_interface = contract_implements_function(
+                in_transport_object.transaction.input,
+                ERC165Functions.SUPPORTS_INTERFACE.function_hash[:],
             )
-            if len(transport_objects) == 0:
-                # Don't process empty batches
-                continue
-            for in_transport_object in transport_objects:
-                contract_implements_supports_interface = contract_implements_function(
-                    in_transport_object.transaction.input,
-                    ERC165Functions.SUPPORTS_INTERFACE.function_hash[:],
+
+            if contract_implements_supports_interface:
+                contract_id = in_transport_object.transaction_receipt.contract_address
+                supported_interfaces = await self.__get_supported_interfaces(
+                    contract_id
                 )
+                if ERC165InterfaceID.ERC721 in supported_interfaces:
 
-                if contract_implements_supports_interface:
-                    contract_id = (
-                        in_transport_object.transaction_receipt.contract_address
+                    name, symbol, total_supply = await self.__get_contract_metadata(
+                        contract_id, supported_interfaces
                     )
-                    supported_interfaces = await self.__get_supported_interfaces(
-                        contract_id
+                    contract = Contract(
+                        address=in_transport_object.transaction_receipt.contract_address,
+                        creator=in_transport_object.transaction.from_,
+                        interfaces=supported_interfaces,
+                        name=name,
+                        symbol=symbol,
+                        total_supply=total_supply,
+                        tokens=[],
                     )
-                    if ERC165InterfaceID.ERC721 in supported_interfaces:
 
-                        name, symbol, total_supply = await self.__get_contract_metadata(
-                            contract_id, supported_interfaces
-                        )
-                        contract = Contract(
-                            address=in_transport_object.transaction_receipt.contract_address,
-                            creator=in_transport_object.transaction.from_,
-                            interfaces=supported_interfaces,
-                            name=name,
-                            symbol=symbol,
-                            total_supply=total_supply,
-                            tokens=[],
-                        )
-
-                        out_transport_object = ContractTransportObject(
-                            block=in_transport_object.block,
-                            transaction=in_transport_object.transaction,
-                            transaction_receipt=in_transport_object.transaction_receipt,
-                            contract=contract,
-                        )
-                        await self.__persistence_queue.put(out_transport_object)
-                self.__stats_service.increment(self.PROCESSED_STAT)
-        await self.__event_bus.trigger(self.PROCESSOR_STOPPED_EVENT)
+                    out_transport_object = ContractTransportObject(
+                        block=in_transport_object.block,
+                        transaction=in_transport_object.transaction,
+                        transaction_receipt=in_transport_object.transaction_receipt,
+                        contract=contract,
+                    )
+                    await self.__persistence_queue.put(out_transport_object)
+            self.__stats_service.increment(self.PROCESSED_STAT)
 
     async def __get_supported_interfaces(
         self, contract_address
@@ -468,41 +437,27 @@ class ContractPersistenceProcessor(Processor):
         )
         self.__dynamodb = dynamodb
         self.__stats_service: StatsService = stats_service
-        self.__event_bus = event_bus
-        self.__contract_queue: Queue = contract_queue
-        self.__dynamodb_batch_size: int = dynamodb_batch_size
-        self.__max_batch_wait: timedelta = timedelta(seconds=max_batch_wait)
 
-    async def _process(self):
+    async def _process_batch(self, transport_objects: List[ContractTransportObject]):
         contracts = await self.__dynamodb.Table(Contracts.table_name)
-        while await self.is_running():
-            transport_objects = await self._get_batch_items_from_queue(
-                self.__contract_queue, self.__dynamodb_batch_size, self.__max_batch_wait
-            )
-            if len(transport_objects) == 0:
-                # Don't process empty batches
-                continue
-
-            with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_CONTRACT):
-                async with contracts.batch_writer() as batch:
-                    for transport_object in transport_objects:
-                        await batch.put_item(
-                            Item={
-                                "blockchain": "Ethereum Mainnet",
-                                "address": transport_object.contract.address,
-                                "block_number": transport_object.transaction.block_number.int_value,
-                                "transaction_index": transport_object.transaction.transaction_index.int_value,
-                                "transaction_hash": transport_object.transaction.hash,
-                                "creator": transport_object.contract.creator,
-                                "timestamp": transport_object.block.timestamp.int_value,
-                                "name": transport_object.contract.name,
-                                "symbol": transport_object.contract.symbol,
-                                "total_supply": transport_object.contract.total_supply,
-                                "interfaces": [
-                                    i.value
-                                    for i in transport_object.contract.interfaces
-                                ],
-                            }
-                        )
-                        self.__stats_service.increment(self.PROCESSED_STAT)
-        await self.__event_bus.trigger(self.PROCESSOR_STOPPED_EVENT)
+        with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_CONTRACT):
+            async with contracts.batch_writer() as batch:
+                for transport_object in transport_objects:
+                    await batch.put_item(
+                        Item={
+                            "blockchain": "Ethereum Mainnet",
+                            "address": transport_object.contract.address,
+                            "block_number": transport_object.transaction.block_number.int_value,
+                            "transaction_index": transport_object.transaction.transaction_index.int_value,
+                            "transaction_hash": transport_object.transaction.hash,
+                            "creator": transport_object.contract.creator,
+                            "timestamp": transport_object.block.timestamp.int_value,
+                            "name": transport_object.contract.name,
+                            "symbol": transport_object.contract.symbol,
+                            "total_supply": transport_object.contract.total_supply,
+                            "interfaces": [
+                                i.value for i in transport_object.contract.interfaces
+                            ],
+                        }
+                    )
+                    self.__stats_service.increment(self.PROCESSED_STAT)
