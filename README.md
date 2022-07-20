@@ -15,7 +15,7 @@ The dependencies, along with a great deal of other information in the `pyproject
 but only because finding namespace packages does not appear to work properly in the `pyproject.toml` o or `setup.cfg`.
 
 ```bash
-python -m pip install -e .[dev]
+python -m pip install -e ".[dev]"
 ```
 
 ### Start up the DynamoDB server
