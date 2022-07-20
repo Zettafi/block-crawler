@@ -1,5 +1,36 @@
 # Chain Conductor Block Crawler
 
+## Commands
+
+At its heart, this is app is a set of command line tools related to crawling the blockchain. All commands
+are Click-based, so they provide full help for parameters and options. Just add the option `--help` to any command
+to bring up the help text.
+
+### Block Crawler
+
+The block crawler crawls block on the blockchain and writes the data to the Chain Conductor database.
+
+```bash
+python bin/block_crawler.py --help
+```
+
+### Reset DB
+
+This command resets a developer's local instance of DynamoDB
+
+```bash
+python bin/reset_db.py --help
+```
+
+### Function Digest
+
+This is a helper command to take the ABI specification of function and return the hex encoded Keccak hash bytes
+used to identify the function in "Call" RPC methods on an EVM 
+
+```bash
+python bin/function_digest.py --help
+```
+
 ## Developer Setup
 
 ### Setup ENV vars
