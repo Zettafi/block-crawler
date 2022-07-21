@@ -1,0 +1,29 @@
+stages:
+    - before merge
+
+autotest:
+    stage: before merge
+    image: python:3.8.13-slim-buster
+    rules:
+        - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+        - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+          when: never
+        - if: $CI_COMMIT_BRANCH
+    before_script:
+        - python --version
+        - pip3 --version
+        - pip3 install -e .[dev]
+    script:
+        - coverage run -m xmlrunner --output-file unittest-report-xunit.xml discover test
+        - coverage report
+        - coverage xml
+    coverage: "/TOTAL\\s+\\d+\\s+\\d+\\s+(\\d+.?\\d*)\\%/"
+    artifacts:
+        when: always
+        paths:
+            - unittest-report-xunit.xml
+        reports:
+            junit: unittest-report-xunit.xml
+            coverage_report:
+                coverage_format: cobertura
+                path: coverage.xml
