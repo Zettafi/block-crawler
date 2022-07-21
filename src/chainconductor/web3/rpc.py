@@ -2,7 +2,7 @@ from typing import Union, Dict, List, Set, Tuple, Optional
 
 import aiohttp
 import ujson as json
-from eth_abi import encode_abi, decode_abi
+from eth_abi import decode, encode
 from eth_utils import decode_hex
 
 from .types import Block, Transaction, HexInt, Log, TransactionReceipt
@@ -314,7 +314,7 @@ class RPCClient:
             if len(request.parameters) == 0:
                 encoded_params = ""
             else:
-                encoded_param_bytes = encode_abi(
+                encoded_param_bytes = encode(
                     request.function.param_types, request.parameters
                 )
                 encoded_params = encoded_param_bytes.hex()
@@ -344,7 +344,7 @@ class RPCClient:
                 else:
                     try:
                         encoded_response_bytes = decode_hex(encoded_response)
-                        response = decode_abi(
+                        response = decode(
                             response_request.function.return_types,
                             encoded_response_bytes,
                         )

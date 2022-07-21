@@ -1,6 +1,6 @@
 from binascii import unhexlify
 from enum import Enum
-from typing import List, Union, Dict
+from typing import List, Union, Dict, Optional
 
 
 class ERC165InterfaceID(Enum):
@@ -72,7 +72,7 @@ class Transaction(Type):
         gas_price: str,
         input: str,
         nonce: str,
-        to_: str,
+        to_: Optional[str],
         transaction_index: str,
         value: str,
         v: str,

@@ -2,7 +2,7 @@ import asyncio
 
 import click
 
-from chainconductor.contractpuller.commands import reset_db_async
+from chainconductor.blockcrawler.commands import reset_db_async
 
 try:  # If dotenv in installed, use it load env vars
     from dotenv import load_dotenv

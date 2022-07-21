@@ -5,14 +5,15 @@ from statistics import median, mean
 
 import click
 
-from chainconductor.contractpuller.commands import process_contracts_async
-from chainconductor.contractpuller.processors import (
+from chainconductor.blockcrawler.commands import process_contracts_async
+from chainconductor.blockcrawler.processors import (
     BlockProcessor,
     TransactionProcessor,
     ContractPersistenceProcessor,
     ContractProcessor,
+    TokenProcessor,
 )
-from chainconductor.contractpuller.stats import StatsService
+from chainconductor.blockcrawler.stats import StatsService
 
 try:  # If dotenv in installed, use it load env vars
     from dotenv import load_dotenv
@@ -23,10 +24,15 @@ except ModuleNotFoundError:
 
 
 async def _stats_writer(
-    stats_service: StatsService, start_time: datetime, run_forever=True, show_header=True
+    stats_service: StatsService,
+    start_time: datetime,
+    run_forever=True,
+    show_header=True,
 ):
     if show_header:
-        print("Total Time  | Blocks      | Transactions | Contracts   | Contract Writes")
+        print(
+            "Total Time  | Blocks      | Transactions | Contracts   | Contract Writes | Token Transfer Writes"
+        )
 
     while True:
         await asyncio.sleep(1)
@@ -55,11 +61,17 @@ async def _stats_writer(
             "|",
             "{:<11,}".format(stats_service.get_count(BlockProcessor.PROCESSED_STAT)),
             "|",
-            "{:<12,}".format(stats_service.get_count(TransactionProcessor.PROCESSED_STAT)),
+            "{:<12,}".format(
+                stats_service.get_count(TransactionProcessor.PROCESSED_STAT)
+            ),
             "|",
             "{:<11,}".format(stats_service.get_count(ContractProcessor.PROCESSED_STAT)),
             "|",
-            "{:<13,}".format(stats_service.get_count(ContractPersistenceProcessor.PROCESSED_STAT)),
+            "{:<15,}".format(
+                stats_service.get_count(ContractPersistenceProcessor.PROCESSED_STAT)
+            ),
+            "|",
+            "{:<21,}".format(stats_service.get_count(TokenProcessor.PROCESSED_STAT)),
             end="",
         )
         if not run_forever:
@@ -119,7 +131,13 @@ async def _stats_writer(
     "--contract-persistence-processors",
     default=10,
     show_default=True,
-    help="Number of parallel contract processors to run",
+    help="Number of parallel contract persistence processors to run",
+)
+@click.option(
+    "--token-processors",
+    default=10,
+    show_default=True,
+    help="Number of parallel token processors to run",
 )
 def process_contracts(
     starting_block: int,
@@ -133,6 +151,7 @@ def process_contracts(
     transaction_processors: int,
     contract_processors: int,
     contract_persistence_processors: int,
+    token_processors: int,
 ):
     """
     Crawl the blocks from the STARTING_BLOCK to the ENDING_BLOCK from an archive node, parse the data we want to collect
@@ -158,6 +177,7 @@ def process_contracts(
                 transaction_processor_instances=transaction_processors,
                 contract_processor_instances=contract_processors,
                 contract_persistence_processor_instances=contract_persistence_processors,
+                token_processor_instances=token_processors,
             )
         )
         asyncio.gather(stats_writer)
@@ -179,51 +199,215 @@ def process_contracts(
     block_batches = stats_service.get_timings(BlockProcessor.RPC_TIMER_GET_BLOCKS)
     block_batches_count = len(block_batches)
     click.echo("  Get Block RPC Calls: {:,}".format(block_batches_count))
-    block_batches_average_size = blocks_processed / block_batches_count if block_batches_count else 0.0
-    click.echo("  Get Block RPC Avg Batch Size: {:0.2f}".format(block_batches_average_size))
-    click.echo("  Get Block RPC Total Processing Time: {}".format(_get_time_from_secs(sum(block_batches))))
-    click.echo("  Get Block RPC Median Processing Time: {}".format(_get_time_from_secs(median(block_batches))))
-    click.echo("  Get Block RPC Mean Processing Time: {}".format(_get_time_from_secs(mean(block_batches))))
+    block_batches_average_size = (
+        blocks_processed / block_batches_count if block_batches_count else 0.0
+    )
+    click.echo(
+        "  Get Block RPC Avg Batch Size: {:0.2f}".format(block_batches_average_size)
+    )
+    click.echo(
+        "  Get Block RPC Total Processing Time: {}".format(
+            _get_time_from_secs(sum(block_batches))
+        )
+    )
+    click.echo(
+        "  Get Block RPC Median Processing Time: {}".format(
+            _get_time_from_secs(median(block_batches))
+        )
+    )
+    click.echo(
+        "  Get Block RPC Mean Processing Time: {}".format(
+            _get_time_from_secs(mean(block_batches))
+        )
+    )
     click.echo()
     click.echo("Transactions Receipts:")
-    transactions_processed = stats_service.get_count(TransactionProcessor.PROCESSED_STAT)
+    transactions_processed = stats_service.get_count(
+        TransactionProcessor.PROCESSED_STAT
+    )
     click.echo("  Total Processed: {:,}".format(transactions_processed))
-    transaction_batches = stats_service.get_timings(TransactionProcessor.RPC_TIMER_GET_TRANSACTION_RECEIPTS)
+    transaction_batches = stats_service.get_timings(
+        TransactionProcessor.RPC_TIMER_GET_TRANSACTION_RECEIPTS
+    )
     transaction_batches_count = len(transaction_batches)
-    transaction_batches_average_size = transactions_processed / transaction_batches_count if transaction_batches_count > 0 else 0.0
-    click.echo("  Get Transaction Receipt RPC Calls: {:,}".format(len(transaction_batches)))
-    click.echo("  Get Transaction Receipt RPC Avg Batch Size: {:0.2f}".format(transaction_batches_average_size))
-    click.echo("  Get Transaction Receipt RPC Total Processing Time: {}".format(_get_time_from_secs(sum(transaction_batches))))
-    click.echo("  Get Transaction Receipt RPC Median Processing Time: {}".format(_get_time_from_secs(median(transaction_batches)) if len(transaction_batches) else 0))
-    click.echo("  Get Transaction Receipt RPC Mean Processing Time: {}".format(_get_time_from_secs(mean(transaction_batches)) if len(transaction_batches) else 0))
+    transaction_batches_average_size = (
+        transactions_processed / transaction_batches_count
+        if transaction_batches_count > 0
+        else 0.0
+    )
+    click.echo(
+        "  Get Transaction Receipt RPC Calls: {:,}".format(len(transaction_batches))
+    )
+    click.echo(
+        "  Get Transaction Receipt RPC Avg Batch Size: {:0.2f}".format(
+            transaction_batches_average_size
+        )
+    )
+    click.echo(
+        "  Get Transaction Receipt RPC Total Processing Time: {}".format(
+            _get_time_from_secs(sum(transaction_batches))
+        )
+    )
+    click.echo(
+        "  Get Transaction Receipt RPC Median Processing Time: {}".format(
+            _get_time_from_secs(median(transaction_batches))
+            if len(transaction_batches)
+            else 0
+        )
+    )
+    click.echo(
+        "  Get Transaction Receipt RPC Mean Processing Time: {}".format(
+            _get_time_from_secs(mean(transaction_batches))
+            if len(transaction_batches)
+            else 0
+        )
+    )
     click.echo()
     click.echo("Smart Contracts:")
     contracts_processed = stats_service.get_count(ContractProcessor.PROCESSED_STAT)
     click.echo("  Total Processed: {:,}".format(contracts_processed))
     click.echo("  Supports Interfaces:")
-    supports_interface_batches = stats_service.get_timings(ContractProcessor.RPC_TIMER_CALL_SUPPORTS_INTERFACES)
-    click.echo("    Get Call Supports Interface RPC Calls: {:,}".format(len(supports_interface_batches)))
-    click.echo("    Get Call Supports Interface RPC Total Processing Time: {}".format(_get_time_from_secs(sum(supports_interface_batches))))
-    click.echo("    Get Call Supports Interface RPC Median Processing Time: {}".format(_get_time_from_secs(median(supports_interface_batches)) if len(supports_interface_batches) else 0))
-    click.echo("    Get Call Supports Interface RPC Mean Processing Time: {}".format(_get_time_from_secs(mean(supports_interface_batches)) if len(supports_interface_batches) else 0))
+    supports_interface_batches = stats_service.get_timings(
+        ContractProcessor.RPC_TIMER_CALL_SUPPORTS_INTERFACES
+    )
+    click.echo(
+        "    Get Call Supports Interface RPC Calls: {:,}".format(
+            len(supports_interface_batches)
+        )
+    )
+    click.echo(
+        "    Get Call Supports Interface RPC Total Processing Time: {}".format(
+            _get_time_from_secs(sum(supports_interface_batches))
+        )
+    )
+    click.echo(
+        "    Get Call Supports Interface RPC Median Processing Time: {}".format(
+            _get_time_from_secs(median(supports_interface_batches))
+            if len(supports_interface_batches)
+            else 0
+        )
+    )
+    click.echo(
+        "    Get Call Supports Interface RPC Mean Processing Time: {}".format(
+            _get_time_from_secs(mean(supports_interface_batches))
+            if len(supports_interface_batches)
+            else 0
+        )
+    )
     click.echo("  Contract Metadata:")
-    get_metadata_batches = stats_service.get_timings(ContractProcessor.RPC_TIMER_CALL_CONTRACT_METADATA)
-    click.echo("    Get Call Get Metadata RPC Calls: {:,}".format(len(get_metadata_batches)))
-    click.echo("    Get Call Get Metadata RPC Total Processing Time: {}".format(_get_time_from_secs(sum(get_metadata_batches))))
-    click.echo("    Get Call Get Metadata RPC Median Processing Time: {}".format(_get_time_from_secs(median(get_metadata_batches)) if len(get_metadata_batches) else 0))
-    click.echo("    Get Call Get Metadata RPC Mean Processing Time: {}".format(_get_time_from_secs(mean(get_metadata_batches)) if len(get_metadata_batches) else 0))
+    get_metadata_batches = stats_service.get_timings(
+        ContractProcessor.RPC_TIMER_CALL_CONTRACT_METADATA
+    )
+    click.echo(
+        "    Get Call Get Metadata RPC Calls: {:,}".format(len(get_metadata_batches))
+    )
+    click.echo(
+        "    Get Call Get Metadata RPC Total Processing Time: {}".format(
+            _get_time_from_secs(sum(get_metadata_batches))
+        )
+    )
+    click.echo(
+        "    Get Call Get Metadata RPC Median Processing Time: {}".format(
+            _get_time_from_secs(median(get_metadata_batches))
+            if len(get_metadata_batches)
+            else 0
+        )
+    )
+    click.echo(
+        "    Get Call Get Metadata RPC Mean Processing Time: {}".format(
+            _get_time_from_secs(mean(get_metadata_batches))
+            if len(get_metadata_batches)
+            else 0
+        )
+    )
+    click.echo()
+    click.echo("Stored Token Transfers:")
+    token_transfers_stored = stats_service.get_count(TokenProcessor.PROCESSED_STAT)
+    click.echo("  Total Token Transfers Stored: {:,}".format(token_transfers_stored))
+    dynamodb_write_token_transfer_batches = stats_service.get_timings(
+        TokenProcessor.DYNAMODB_TIMER_WRITE_TOKEN_TRANSFER
+    )
+    dynamodb_write_token_transfer_batches_count = len(
+        dynamodb_write_token_transfer_batches
+    )
+    click.echo(
+        "  Get DynamoDB TokenTransfers Batch Put Calls: {:,}".format(
+            len(dynamodb_write_token_transfer_batches)
+        )
+    )
+    dynamodb_write_batches_average_size = (
+        token_transfers_stored / dynamodb_write_token_transfer_batches_count
+        if dynamodb_write_token_transfer_batches_count
+        else 0.0
+    )
+    click.echo(
+        "  DynamoDB TokenTransfers Batch Put Avg Batch Size: {:0.2f}".format(
+            dynamodb_write_batches_average_size
+        )
+    )
+    click.echo(
+        "  DynamoDB TokenTransfers Batch Put Total Processing Time: {}".format(
+            _get_time_from_secs(sum(dynamodb_write_token_transfer_batches))
+        )
+    )
+    click.echo(
+        "  DynamoDB TokenTransfers Batch Put Median Processing Time: {}".format(
+            _get_time_from_secs(median(dynamodb_write_token_transfer_batches))
+            if len(dynamodb_write_token_transfer_batches)
+            else 0
+        )
+    )
+    click.echo(
+        "  DynamoDB TokenTransfers Batch Put Mean Processing Time: {}".format(
+            _get_time_from_secs(mean(dynamodb_write_token_transfer_batches))
+            if len(dynamodb_write_token_transfer_batches)
+            else 0
+        )
+    )
     click.echo()
     click.echo("Stored Contracts:")
-    contracts_stored = stats_service.get_count(ContractPersistenceProcessor.PROCESSED_STAT)
+    contracts_stored = stats_service.get_count(
+        ContractPersistenceProcessor.PROCESSED_STAT
+    )
     click.echo("  Total Contracts Stored: {:,}".format(contracts_stored))
-    dynamodb_write_batches = stats_service.get_timings(ContractPersistenceProcessor.DYNAMODB_TIMER_WRITE_CONTRACT)
-    dynamodb_write_batches_count = len(dynamodb_write_batches)
-    click.echo("  Get DynamoDB Batch Put Calls: {:,}".format(len(dynamodb_write_batches)))
-    dynamodb_write_batches_average_size = contracts_stored / dynamodb_write_batches_count if dynamodb_write_batches_count else 0.0
-    click.echo("  Get DynamoDB Batch Put Avg Batch Size: {:0.2f}".format(dynamodb_write_batches_average_size))
-    click.echo("  Get DynamoDB Batch Put Total Processing Time: {}".format(_get_time_from_secs(sum(dynamodb_write_batches))))
-    click.echo("  Get DynamoDB Batch Put Median Processing Time: {}".format(_get_time_from_secs(median(dynamodb_write_batches)) if len(dynamodb_write_batches) else 0))
-    click.echo("  Get DynamoDB Batch Put Mean Processing Time: {}".format(_get_time_from_secs(mean(dynamodb_write_batches)) if len(dynamodb_write_batches) else 0))
+    dynamodb_contracts_write_batches = stats_service.get_timings(
+        ContractPersistenceProcessor.DYNAMODB_TIMER_WRITE_CONTRACT
+    )
+    dynamodb_contracts_write_batches_count = len(dynamodb_contracts_write_batches)
+    click.echo(
+        "  DynamoDB Contracts Batch Put Calls: {:,}".format(
+            len(dynamodb_contracts_write_batches)
+        )
+    )
+    dynamodb_write_batches_average_size = (
+        contracts_stored / dynamodb_contracts_write_batches_count
+        if dynamodb_contracts_write_batches_count
+        else 0.0
+    )
+    click.echo(
+        "  DynamoDB Contracts Batch Put Avg Batch Size: {:0.2f}".format(
+            dynamodb_write_batches_average_size
+        )
+    )
+    click.echo(
+        "  DynamoDB Contracts Batch Put Total Processing Time: {}".format(
+            _get_time_from_secs(sum(dynamodb_contracts_write_batches))
+        )
+    )
+    click.echo(
+        "  DynamoDB Contracts Batch Put Median Processing Time: {}".format(
+            _get_time_from_secs(median(dynamodb_contracts_write_batches))
+            if len(dynamodb_contracts_write_batches)
+            else 0
+        )
+    )
+    click.echo(
+        "  DynamoDB Contracts Batch Put Mean Processing Time: {}".format(
+            _get_time_from_secs(mean(dynamodb_contracts_write_batches))
+            if len(dynamodb_contracts_write_batches)
+            else 0
+        )
+    )
 
 
 if __name__ == "__main__":

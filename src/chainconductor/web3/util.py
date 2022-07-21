@@ -76,6 +76,27 @@ class ERC721Functions:
         ["bool"],
         True,
     )
+    SAFE_TRANSFER_FROM_WITH_DATA = Function(
+        "0xb88d4fde",
+        "safeTransferFrom(address,address,uint256,bytes)",
+        ["address", "address", "uint256", "bytes"],
+        [],
+        False,
+    )
+    SAFE_TRANSFER_FROM_WITHOUT_DATA = Function(
+        "0x42842e0e",
+        "safeTransferFrom(address,address,uint256)",
+        ["address", "address", "uint256"],
+        [],
+        False,
+    )
+    TRANSFER_FROM = Function(
+        "0x42842e0e",
+        "safeTransferFrom(address,address,uint256)",
+        ["address", "address", "uint256"],
+        [],
+        False,
+    )
 
 
 class ERC721TokenReceiverFunctions:
@@ -133,6 +154,30 @@ class ERC721EnumerableFunctions:
         ["address", "uint256"],
         ["uint256"],
         True,
+    )
+
+
+class ERC1155Functions:
+    SAFE_TRANSFER_FROM_WITH_DATA = Function(
+        "0xf242432a",
+        "safeTransferFrom(address,address,uint256,uint256,bytes)",
+        ["address", "address", "uint256", "uint256", "bytes"],
+        [],
+        False,
+    )
+    SAFE_TRANSFER_FROM_WITHOUT_DATA = Function(
+        "0x0febdd49",
+        "safeTransferFrom(address,address,uint256,uint256)",
+        ["address", "address", "uint256", "uint256"],
+        [],
+        False,
+    )
+    SAFE_BATCH_TRANSFER_FROM = Function(
+        "0x2eb2c2d6",
+        "safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)",
+        ["address", "address", "uint256[]", "uint256[]", "bytes"],
+        [],
+        False,
     )
 
 

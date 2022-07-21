@@ -13,9 +13,10 @@ from .processors import (
     Processor,
     ContractProcessor,
     BlockIDTransportObject,
+    TokenProcessor,
 )
 from .stats import StatsService
-from ..data.models import Contracts
+from ..data.models import Contracts, TokenTransfers
 from ..web3.rpc import RPCClient
 
 try:  # If dotenv in installed, use it load env vars
@@ -33,21 +34,32 @@ class RunManager:
         block_processors: List[BlockProcessor],
         transaction_processors: List[TransactionProcessor],
         contract_processors: List[ContractProcessor],
-        persistence_processors: List[ContractPersistenceProcessor],
+        contract_persistence_processors: List[ContractPersistenceProcessor],
+        token_processors: List[TokenProcessor],
     ) -> None:
         self.__contract_processors = contract_processors
         self.__event_bus: EventBus = event_bus
+
         self.__block_processors: List[BlockProcessor] = block_processors
         self.__block_processors_remaining: int = len(block_processors)
+
         self.__transaction_processors: List[
             TransactionProcessor
         ] = transaction_processors
         self.__transaction_processors_remaining: int = len(transaction_processors)
+
         self.__contract_processors: List[ContractProcessor] = contract_processors
+        self.__contract_processors_remaining: int = len(contract_processors)
+
         self.__persistence_processors: List[
             ContractPersistenceProcessor
-        ] = persistence_processors
-        self.__contract_processors_remaining: int = len(persistence_processors)
+        ] = contract_persistence_processors
+        self.__contract_persistence_processors_remaining: int = len(
+            contract_persistence_processors
+        )
+
+        self.__token_processors = token_processors
+        self.__token_processors_remaining: int = len(token_processors)
 
     async def initialize(self):
         await self.__event_bus.register(
@@ -80,6 +92,8 @@ class RunManager:
         if self.__transaction_processors_remaining < 1:
             for contract_processor in self.__contract_processors:
                 await contract_processor.stop()
+            for token_processor in self.__token_processors:
+                await token_processor.stop()
 
     async def contract_processor_stopped(self):
         self.__contract_processors_remaining -= 1
@@ -104,6 +118,7 @@ async def process_contracts_async(
     transaction_processor_instances: int,
     contract_processor_instances: int,
     contract_persistence_processor_instances: int,
+    token_processor_instances: int,
 ):
     rpc_client = RPCClient(archive_node_uri)
     event_bus = EventBus()
@@ -114,6 +129,7 @@ async def process_contracts_async(
     async with session.resource("dynamodb", **dynamo_kwargs) as dynamodb:
         block_id_queue: Queue = Queue()
         transaction_queue: Queue = Queue()
+        token_queue: Queue = Queue()
         contract_queue: Queue = Queue()
         persistence_queue = Queue()
         block_processors: List[BlockProcessor] = list()
@@ -138,6 +154,7 @@ async def process_contracts_async(
                 rpc_batch_size,
                 transaction_queue,
                 contract_queue,
+                token_queue,
                 max_batch_wait_time,
             )
             transaction_processors.append(processor)
@@ -167,12 +184,25 @@ async def process_contracts_async(
             )
             persistence_processors.append(processor)
 
+        token_processors: List[TokenProcessor] = list()
+        for _ in range(token_processor_instances):
+            processor = TokenProcessor(
+                dynamodb,
+                stats_service,
+                event_bus,
+                token_queue,
+                dynamodb_batch_size,
+                max_batch_wait_time,
+            )
+            token_processors.append(processor)
+
         run_manager = RunManager(
             event_bus,
             block_processors,
             transaction_processors,
             contract_processors,
             persistence_processors,
+            token_processors,
         )
         await run_manager.initialize()
 
@@ -184,6 +214,7 @@ async def process_contracts_async(
                 + transaction_processors
                 + contract_processors
                 + persistence_processors
+                + token_processors
             )
         ]
 
@@ -208,13 +239,14 @@ async def reset_db_async(endpoint_url):
         "dynamodb",
         endpoint_url=endpoint_url,
     ) as dynamodb:
-        table = await dynamodb.Table(Contracts.table_name)
-        # noinspection PyUnresolvedReferences
-        try:
-            await table.delete()
-        except ClientError as err:
-            if type(err).__name__ != "ResourceNotFoundException":
-                # ResourceNotFound means table did not exist which is fine. Re-raise otherwise.
-                raise
-        table = await dynamodb.create_table(**Contracts.schema)
-        await table.wait_until_exists()
+        for model in (Contracts, TokenTransfers):
+            table = await dynamodb.Table(model.table_name)
+            # noinspection PyUnresolvedReferences
+            try:
+                await table.delete()
+            except ClientError as err:
+                if type(err).__name__ != "ResourceNotFoundException":
+                    # ResourceNotFound means table did not exist which is fine. Re-raise otherwise.
+                    raise
+            table = await dynamodb.create_table(**model.schema)
+            await table.wait_until_exists()
