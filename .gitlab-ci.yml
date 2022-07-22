@@ -17,13 +17,19 @@ autotest:
         - coverage run -m xmlrunner --output-file unittest-report-xunit.xml discover test
         - coverage report
         - coverage xml
+        - flake8 --exit-zero src test bin
+        - flake8 --format=gl-codeclimate --output-file=code-quality.json src test bin
+        - black --check .
     coverage: "/TOTAL\\s+\\d+\\s+\\d+\\s+(\\d+.?\\d*)\\%/"
     artifacts:
         when: always
         paths:
             - unittest-report-xunit.xml
+            - code-quality.json
+            - coverage.xml
         reports:
             junit: unittest-report-xunit.xml
             coverage_report:
                 coverage_format: cobertura
                 path: coverage.xml
+            codequality: code-quality.json

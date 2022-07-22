@@ -43,9 +43,7 @@ class RunManager:
         self.__block_processors: List[BlockProcessor] = block_processors
         self.__block_processors_remaining: int = len(block_processors)
 
-        self.__transaction_processors: List[
-            TransactionProcessor
-        ] = transaction_processors
+        self.__transaction_processors: List[TransactionProcessor] = transaction_processors
         self.__transaction_processors_remaining: int = len(transaction_processors)
 
         self.__contract_processors: List[ContractProcessor] = contract_processors
@@ -54,17 +52,13 @@ class RunManager:
         self.__persistence_processors: List[
             ContractPersistenceProcessor
         ] = contract_persistence_processors
-        self.__contract_persistence_processors_remaining: int = len(
-            contract_persistence_processors
-        )
+        self.__contract_persistence_processors_remaining: int = len(contract_persistence_processors)
 
         self.__token_processors = token_processors
         self.__token_processors_remaining: int = len(token_processors)
 
     async def initialize(self):
-        await self.__event_bus.register(
-            BLOCK_ADDING_ENDED_EVENT, self.block_id_processor_stopped
-        )
+        await self.__event_bus.register(BLOCK_ADDING_ENDED_EVENT, self.block_id_processor_stopped)
         await self.__event_bus.register(
             BlockProcessor.PROCESSOR_STOPPED_EVENT, self.block_processor_stopped
         )
@@ -246,7 +240,8 @@ async def reset_db_async(endpoint_url):
                 await table.delete()
             except ClientError as err:
                 if type(err).__name__ != "ResourceNotFoundException":
-                    # ResourceNotFound means table did not exist which is fine. Re-raise otherwise.
+                    # ResourceNotFound means table did not exist which is fine.
+                    # Re-raise otherwise.
                     raise
             table = await dynamodb.create_table(**model.schema)
             await table.wait_until_exists()

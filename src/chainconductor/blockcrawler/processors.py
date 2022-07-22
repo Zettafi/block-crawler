@@ -1,12 +1,10 @@
 import asyncio
-import decimal
 from asyncio import Queue, QueueEmpty
 from datetime import datetime, timedelta
 from typing import Optional, List, Union
 
 from eth_abi import decode
-from eth_abi.exceptions import DecodingError
-from eth_utils import decode_hex, keccak
+from eth_utils import decode_hex
 
 from .events import EventBus
 from .stats import StatsService
@@ -24,7 +22,6 @@ from ..web3.util import (
     contract_implements_function,
     ERC721MetadataFunctions,
     ERC721EnumerableFunctions,
-    ERC1155Functions,
     ERC721Functions,
 )
 
@@ -180,9 +177,10 @@ class Processor:
 
 class BlockProcessor(Processor):
     """
-    Block processor processes block IDs in the block_id_queue passing the blocks to the transaction_queue
-    until a "None" ID is received. Calls to get blocks wil be in batches specified by rpc_batch_size unless
-    the max_batch_wait is exceeded which will process all bloc IDs received up to that point.
+    Block processor processes block IDs in the block_id_queue passing the blocks to
+    the transaction_queue until a "None" ID is received. Calls to get blocks wil be
+    in batches specified by rpc_batch_size unless the max_batch_wait is exceeded
+    which will process all bloc IDs received up to that point.
     """
 
     PROCESSED_STAT = "blocks_processed"
@@ -214,15 +212,11 @@ class BlockProcessor(Processor):
         ]
 
     async def _process_batch(self, transport_objects: List[BlockIDTransportObject]):
-        block_ids = [
-            transport_object.block_id for transport_object in transport_objects
-        ]
+        block_ids = [transport_object.block_id for transport_object in transport_objects]
         with self.__stats_service.timer(self.RPC_TIMER_GET_BLOCKS):
             try:
-                blocks = await self.__rpc_client.get_blocks(
-                    set(block_ids), full_transactions=True
-                )
-            except RPCError as e:
+                blocks = await self.__rpc_client.get_blocks(set(block_ids), full_transactions=True)
+            except RPCError:
                 raise  # TODO: handle retries
 
         for block in blocks:
@@ -230,16 +224,17 @@ class BlockProcessor(Processor):
                 out_transport_object = None
                 if transaction.to_ is None:
                     # No to address is indicative of contract creation
-                    # If there is no to address, create the Contract transport object and send it on to be processed
+                    # If there is no to address,
+                    # create the Contract transport object and send it on to be processed
                     # by the transaction processor
                     out_transport_object = ContractTransportObject(
                         block=block, transaction=transaction
                     )
                 if transaction.input[:10] in self.__token_transfer_method_hashes:
                     # The first 4 bytes of hex in a contract method call are the ABI method hash
-                    # If the first 4 bytes of teh transaction input match a token transfer method hash
-                    # Create the Token transport object and send it on to be processed buy the transaction
-                    # processor
+                    # If the first 4 bytes of the transaction input match
+                    # a token transfer method hash, create the Token transport object and send
+                    # it on to be processed buy the transaction processor
                     out_transport_object = TokenTransportObject(
                         block=block, transaction=transaction
                     )
@@ -284,14 +279,10 @@ class TransactionProcessor(Processor):
         transaction_hashes = list()
         transactions_hash_map = dict()
         for in_transport_object in transport_objects:
-            transactions_hash_map[
-                in_transport_object.transaction.hash
-            ] = in_transport_object
+            transactions_hash_map[in_transport_object.transaction.hash] = in_transport_object
             transaction_hashes.append(in_transport_object.transaction.hash)
         with self.__stats_service.timer(self.RPC_TIMER_GET_TRANSACTION_RECEIPTS):
-            receipts = await self.__rpc_client.get_transaction_receipts(
-                transaction_hashes
-            )
+            receipts = await self.__rpc_client.get_transaction_receipts(transaction_hashes)
         for receipt in receipts:
             in_transport_object = transactions_hash_map[receipt.transaction_hash]
             if isinstance(in_transport_object, ContractTransportObject):
@@ -302,9 +293,7 @@ class TransactionProcessor(Processor):
                 queue: Queue = self.__token_queue
             else:
                 raise ValueError(
-                    "Unexpected transport object type {}".format(
-                        in_transport_object.__class__
-                    )
+                    "Unexpected transport object type {}".format(in_transport_object.__class__)
                 )
             out_transport_object = out_transport_object_class(
                 block=in_transport_object.block,
@@ -352,9 +341,7 @@ class ContractProcessor(Processor):
 
             if contract_implements_supports_interface:
                 contract_id = in_transport_object.transaction_receipt.contract_address
-                supported_interfaces = await self.__get_supported_interfaces(
-                    contract_id
-                )
+                supported_interfaces = await self.__get_supported_interfaces(contract_id)
                 if ERC165InterfaceID.ERC721 in supported_interfaces:
                     name, symbol, total_supply = await self.__get_contract_metadata(
                         contract_id, supported_interfaces
@@ -378,9 +365,7 @@ class ContractProcessor(Processor):
                     await self.__persistence_queue.put(out_transport_object)
             self.__stats_service.increment(self.PROCESSED_STAT)
 
-    async def __get_supported_interfaces(
-        self, contract_address
-    ) -> List[ERC165InterfaceID]:
+    async def __get_supported_interfaces(self, contract_address) -> List[ERC165InterfaceID]:
         with self.__stats_service.timer(self.RPC_TIMER_CALL_SUPPORTS_INTERFACES):
             supports_interface_responses = await self.__rpc_client.calls(
                 [
@@ -510,21 +495,30 @@ class ContractPersistenceProcessor(Processor):
         with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_CONTRACT):
             async with contracts.batch_writer() as batch:
                 for transport_object in transport_objects:
+
+                    address = transport_object.contract.address
+                    block_number = transport_object.transaction.block_number.int_value
+                    transaction_index = transport_object.transaction.transaction_index.int_value
+                    transaction_hash = transport_object.transaction.hash
+                    creator = transport_object.contract.creator
+                    timestamp = transport_object.block.timestamp.int_value
+                    name = transport_object.contract.name
+                    symbol = transport_object.contract.symbol
+                    total_supply = transport_object.contract.total_supply
+                    interfaces = [i.value for i in transport_object.contract.interfaces]
                     await batch.put_item(
                         Item={
                             "blockchain": "Ethereum Mainnet",
-                            "address": transport_object.contract.address,
-                            "block_number": transport_object.transaction.block_number.int_value,
-                            "transaction_index": transport_object.transaction.transaction_index.int_value,
-                            "transaction_hash": transport_object.transaction.hash,
-                            "creator": transport_object.contract.creator,
-                            "timestamp": transport_object.block.timestamp.int_value,
-                            "name": transport_object.contract.name,
-                            "symbol": transport_object.contract.symbol,
-                            "total_supply": transport_object.contract.total_supply,
-                            "interfaces": [
-                                i.value for i in transport_object.contract.interfaces
-                            ],
+                            "address": address,
+                            "block_number": block_number,
+                            "transaction_index": transaction_index,
+                            "transaction_hash": transaction_hash,
+                            "creator": creator,
+                            "timestamp": timestamp,
+                            "name": name,
+                            "symbol": symbol,
+                            "total_supply": total_supply,
+                            "interfaces": interfaces,
                         }
                     )
                     self.__stats_service.increment(self.PROCESSED_STAT)
@@ -574,20 +568,21 @@ class TokenProcessor(Processor):
                     function_hash = transport_object.transaction.input[:10]
                     if function_hash not in self.FUNCTION_HASH_LOOKUP:
                         raise ProcessorException(
-                            f"Transaction {transport_object.transaction.hash} has unexpected function hash {function_hash}"
+                            f"Transaction {transport_object.transaction.hash} "
+                            f"has unexpected function hash {function_hash}"
                         )
 
                     function = self.FUNCTION_HASH_LOOKUP[function_hash]
                     function_data = transport_object.transaction.input[10:]
 
                     try:
-                        parameters = decode(
-                            function.param_types, decode_hex(function_data)
-                        )
+                        parameters = decode(function.param_types, decode_hex(function_data))
                     except Exception as e:
-                        # There are occasional bad transactions in the chain, print them for now and continue
+                        # There are occasional bad transactions in the chain,
+                        # print them for now and continue
                         print(
-                            "\n\n\nException processing function params: {}\nFunction: {}\nData: {}\n\n\n".format(
+                            "\n\n\nException processing function params: "
+                            "{}\nFunction: {}\nData: {}\n\n\n".format(
                                 e, function.description, function_data
                             )
                         )
@@ -598,7 +593,8 @@ class TokenProcessor(Processor):
                         from_address, to_address, token_id = parameters
                     if function is ERC721Functions.TRANSFER_FROM:
                         from_address, to_address, token_id = parameters
-                    # TODO: Not processing ERC1155 until we figure out how to handle the mess they leave behind
+                    # TODO: Not processing ERC1155 until we figure out how
+                    #       to handle the mess they leave behind
                     # if function is ERC1155Functions.SAFE_BATCH_TRANSFER_FROM:
                     #     (
                     #         from_address,
@@ -611,16 +607,18 @@ class TokenProcessor(Processor):
                     #     from_address, to_address, token_type, token_id, _ = parameters
                     # if function is ERC1155Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA:
                     #     from_address, to_address, token_type, token_id = parameters
-
+                    transaction_hash = transport_object.transaction_receipt.transaction_hash
+                    collection_id = transport_object.transaction_receipt.to_
+                    timestamp = transport_object.block.timestamp.int_value
                     await batch.put_item(
                         Item={
                             "blockchain": "Ethereum Mainnet",
-                            "transaction_hash": transport_object.transaction_receipt.transaction_hash,
-                            "collection_id": transport_object.transaction_receipt.to_,
+                            "transaction_hash": transaction_hash,
+                            "collection_id": collection_id,
                             "token_id": str(token_id),
                             "from": from_address,
                             "to": to_address,
-                            "timestamp": transport_object.block.timestamp.int_value,
+                            "timestamp": timestamp,
                         }
                     )
                     self.__stats_service.increment(self.PROCESSED_STAT)

@@ -57,9 +57,7 @@ class CallError(Exception):
 
 class RPCError(Exception):
     def __init__(self, rpc_version, request_id, error_code, error_message) -> None:
-        super().__init__(
-            f"RPC {rpc_version} - Req {request_id} - {error_code}: {error_message}"
-        )
+        super().__init__(f"RPC {rpc_version} - Req {request_id} - {error_code}: {error_message}")
         self.__rpc_version = rpc_version
         self.__request_id = request_id
         self.__error_code = error_code
@@ -138,9 +136,7 @@ class RPCClient:
                             await ws.close()
                             raise Exception("Remote server requested socket close!")
                     elif msg.type == aiohttp.WSMsgType.ERROR:
-                        raise Exception(
-                            "Remote server returned socket error: " + msg.data
-                        )
+                        raise Exception("Remote server returned socket error: " + msg.data)
                     response_json = json.loads(msg.data)
                     rpc_response = self.__get_rpc_response(response_json)
                     return rpc_response
@@ -203,9 +199,7 @@ class RPCClient:
         rpc_requests = list()
         for block_num in block_nums:
             rpc_requests.append(
-                self.__get_rpc_request(
-                    "eth_getBlockByNumber", (hex(block_num), full_transactions)
-                )
+                self.__get_rpc_request("eth_getBlockByNumber", (hex(block_num), full_transactions))
             )
         rpc_responses = await self.__call_rpc(rpc_requests)
         blocks = list()
@@ -258,14 +252,10 @@ class RPCClient:
             )
         return blocks
 
-    async def get_transaction_receipts(
-        self, tx_hashes: List[str]
-    ) -> List[TransactionReceipt]:
+    async def get_transaction_receipts(self, tx_hashes: List[str]) -> List[TransactionReceipt]:
         rpc_requests = list()
         for tx_hash in tx_hashes:
-            rpc_requests.append(
-                self.__get_rpc_request("eth_getTransactionReceipt", (tx_hash,))
-            )
+            rpc_requests.append(self.__get_rpc_request("eth_getTransactionReceipt", (tx_hash,)))
         rpc_responses = await self.__call_rpc(rpc_requests)
         receipts: List[TransactionReceipt] = list()
         logs: List[Log] = list()
@@ -297,9 +287,7 @@ class RPCClient:
                     contract_address=rpc_response.result["contractAddress"],
                     logs=logs,
                     logs_bloom=rpc_response.result["logsBloom"],
-                    root=rpc_response.result["root"]
-                    if "root" in rpc_response.result
-                    else None,
+                    root=rpc_response.result["root"] if "root" in rpc_response.result else None,
                     status=rpc_response.result["status"]
                     if "status" in rpc_response.result
                     else None,
@@ -314,9 +302,7 @@ class RPCClient:
             if len(request.parameters) == 0:
                 encoded_params = ""
             else:
-                encoded_param_bytes = encode(
-                    request.function.param_types, request.parameters
-                )
+                encoded_param_bytes = encode(request.function.param_types, request.parameters)
                 encoded_params = encoded_param_bytes.hex()
 
             call_data = f"{request.function.function_hash}{encoded_params}"
@@ -358,9 +344,7 @@ class RPCClient:
             responses[response_request.identifier] = response
         return responses
 
-    async def get_code(
-        self, address: str, default_block: Union[HexInt, str] = "latest"
-    ):
+    async def get_code(self, address: str, default_block: Union[HexInt, str] = "latest"):
         rpc_request = self.__get_rpc_request(
             "eth_getCode",
             (

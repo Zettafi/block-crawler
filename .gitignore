@@ -5,3 +5,4 @@ __pycache__
 /unittest-report-xunit.xml
 /build/
 /coverage.xml
+/code-quality.json

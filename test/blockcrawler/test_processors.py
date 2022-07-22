@@ -15,7 +15,23 @@ from chainconductor.blockcrawler.processors import (
     TokenProcessor,
 )
 from chainconductor.web3.types import Block, Transaction, TransactionReceipt
-from chainconductor.web3.util import ERC721Functions, ERC1155Functions
+from chainconductor.web3.util import ERC721Functions
+
+
+def assert_timer_run(mocked_stats_service: MagicMock, timer):
+    mocked_stats_service.timer.assert_called_once_with(timer)
+    # enter starts the timer
+    mocked_stats_service.timer.return_value.__enter__.assert_called_once()
+    # exit ends the timer and records
+    mocked_stats_service.timer.return_value.__exit__.assert_called_once()
+
+
+class AsyncContextManager:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
 
 
 @ddt.ddt
@@ -44,16 +60,17 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_triggers_stopped_event_in_event_bus(self):
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        await self.__run_processor()
         self.__event_bus.trigger.assert_called_once_with("block_processor_stopped")
 
-    async def test_records_rpc_call_timer(self):
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
+    async def __run_processor(self):
+        # If we don't tell the processor to stop before it starts, it will run forever
+        await self.__processor.stop()
         await self.__processor.start()
-        self.__stats_service.timer.assert_called_once_with("rpc_get_blocks")
-        self.__stats_service.timer.return_value.__enter__.assert_called_once()  # enter starts the timer
-        self.__stats_service.timer.return_value.__exit__.assert_called_once()  # exit ends the timer and records
+
+    async def test_records_rpc_call_timer(self):
+        await self.__run_processor()
+        assert_timer_run(self.__stats_service, "rpc_get_blocks")
 
     async def test_increments_stats_for_each_block(self):
         block_ids = random.randint(1, 99)
@@ -83,8 +100,7 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 )
             )
         self.__rpc_client.get_blocks.return_value = get_blocks_return_value
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        await self.__run_processor()
         self.assertEqual(
             block_ids,
             self.__stats_service.increment.call_count,
@@ -118,8 +134,7 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 uncles=list(),
             )
         ]
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        await self.__run_processor()
         self.__transaction_queue.put.assert_not_called()
 
     async def test_does_not_adds_items_if_transaction_has_to_and_input_does_not_have_function(
@@ -165,8 +180,7 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 uncles=list(),
             )
         ]
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        await self.__run_processor()
         self.__transaction_queue.put.assert_not_called()
 
     async def test_adds_items_as_contract_dtos_to_transaction_queue_if_transaction_has_no_to(
@@ -212,8 +226,7 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 uncles=list(),
             )
         ]
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        await self.__run_processor()
         self.__transaction_queue.put.assert_called_once()
         self.assertIsInstance(
             self.__transaction_queue.put.call_args.args[0], ContractTransportObject
@@ -271,12 +284,9 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 uncles=list(),
             )
         ]
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        await self.__run_processor()
         self.__transaction_queue.put.assert_called_once()
-        self.assertIsInstance(
-            self.__transaction_queue.put.call_args.args[0], TokenTransportObject
-        )
+        self.assertIsInstance(self.__transaction_queue.put.call_args.args[0], TokenTransportObject)
 
 
 class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
@@ -396,21 +406,18 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             max_batch_wait=0,
         )
 
-    async def test_triggers_stopped_event_in_event_bus(self):
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
+    async def __run_processor(self):
+        await self.__processor.stop()
         await self.__processor.start()
-        self.__event_bus.trigger.assert_called_once_with(
-            "transaction_processor_stopped"
-        )
+
+    async def test_triggers_stopped_event_in_event_bus(self):
+        # If we don't tell the processor to stop before it starts, it will run forever
+        await self.__run_processor()
+        self.__event_bus.trigger.assert_called_once_with("transaction_processor_stopped")
 
     async def test_records_rpc_call_timer(self):
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
-        self.__stats_service.timer.assert_called_once_with(
-            "rpc_get_transaction_receipts"
-        )
-        self.__stats_service.timer.return_value.__enter__.assert_called_once()  # enter starts the timer
-        self.__stats_service.timer.return_value.__exit__.assert_called_once()  # exit ends the timer and records
+        await self.__run_processor()
+        assert_timer_run(self.__stats_service, "rpc_get_transaction_receipts")
 
     async def test_increments_stats_for_each_block(self):
         transactions = random.randint(1, 99)
@@ -436,8 +443,7 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         self.__rpc_client.get_transaction_receipts.return_value = (
             get_transaction_receipts_return_value
         )
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        await self.__run_processor()
         self.assertEqual(
             transactions,
             self.__stats_service.increment.call_count,
@@ -486,8 +492,7 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.__transaction_queue.get_nowait.side_effect = [cto, QueueEmpty()]
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        await self.__run_processor()
         self.__contract_queue.put.assert_called_once()
 
     async def test_puts_tokens_on_token_queue(self):
@@ -532,17 +537,8 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.__transaction_queue.get_nowait.side_effect = [tto, QueueEmpty()]
 
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        await self.__run_processor()
         self.__token_queue.put.assert_called_once()
-
-
-class AsyncContextManager:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        pass
 
 
 @ddt.ddt
@@ -559,7 +555,9 @@ class TestTokenProcessor(unittest.IsolatedAsyncioTestCase):
                 1,
             ],
         ).hex()
-        transaction_input = f"{ERC721Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA.function_hash}{encoded_params}"
+        transaction_input = (
+            f"{ERC721Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA.function_hash}{encoded_params}"
+        )
 
         self.__token_queue.get_nowait.side_effect = [
             TokenTransportObject(
@@ -620,9 +618,7 @@ class TestTokenProcessor(unittest.IsolatedAsyncioTestCase):
         ]
 
         self.__dynamodb = AsyncMock()
-        self.__dynamodb.Table.return_value.batch_writer = MagicMock(
-            AsyncContextManager()
-        )
+        self.__dynamodb.Table.return_value.batch_writer = MagicMock(AsyncContextManager())
         self.__stats_service = MagicMock()
         self.__event_bus = AsyncMock()
         self.__processor = TokenProcessor(
@@ -633,6 +629,10 @@ class TestTokenProcessor(unittest.IsolatedAsyncioTestCase):
             dynamodb_batch_size=0,
             max_batch_wait=0,
         )
+
+    async def __run_processor(self):
+        await self.__processor.stop()
+        await self.__processor.start()
 
     async def test_increments_stats_for_each_token(self):
         tokens = random.randint(1, 99)
@@ -645,7 +645,9 @@ class TestTokenProcessor(unittest.IsolatedAsyncioTestCase):
                 1,
             ],
         ).hex()
-        transaction_input = f"{ERC721Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA.function_hash}{encoded_params}"
+        transaction_input = (
+            f"{ERC721Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA.function_hash}{encoded_params}"
+        )
         for _ in range(tokens):
             token_queue_gets.append(
                 TokenTransportObject(
@@ -705,8 +707,8 @@ class TestTokenProcessor(unittest.IsolatedAsyncioTestCase):
             )
         token_queue_gets.append(QueueEmpty())
         self.__token_queue.get_nowait.side_effect = token_queue_gets
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        # If we don't tell the processor to stop before it starts, it will run forever
+        await self.__run_processor()
         self.assertEqual(
             tokens,
             self.__stats_service.increment.call_count,
@@ -715,21 +717,18 @@ class TestTokenProcessor(unittest.IsolatedAsyncioTestCase):
         self.__stats_service.increment.assert_called_with("tokens_processed")
 
     async def test_triggers_stopped_event_in_event_bus(self):
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
+        # If we don't tell the processor to stop before it starts, it will run forever
+        await self.__run_processor()
         self.__event_bus.trigger.assert_called_once_with("token_processor_stopped")
 
     async def test_records_dynamodb_timer_in_stats(self):
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
-        self.__stats_service.timer.assert_called_once_with(
-            "dynamodb_write_token_transfer"
-        )
-        self.__stats_service.timer.return_value.__enter__.assert_called_once()  # enter starts the timer
-        self.__stats_service.timer.return_value.__exit__.assert_called_once()  # exit ends the timer and records
+        # If we don't tell the processor to stop before it starts, it will run forever
+        await self.__run_processor()
+        assert_timer_run(self.__stats_service, "dynamodb_write_token_transfer")
 
     @ddt.data(
-        # The proper parameters are from_address, to_address, token_id, and then any other parameters the function may have that are not used
+        # The proper parameters are from_address, to_address, token_id,
+        # and then any other parameters the function may have that are not used
         (
             ERC721Functions.SAFE_TRANSFER_FROM_WITH_DATA,
             (
@@ -759,7 +758,9 @@ class TestTokenProcessor(unittest.IsolatedAsyncioTestCase):
     @ddt.unpack
     async def test_stores_correct_data_for_erc721_contracts(self, function, parameters):
         encoded_params = encode(function.param_types, parameters).hex()
-        transaction_input = f"{ERC721Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA.function_hash}{encoded_params}"
+        transaction_input = (
+            f"{ERC721Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA.function_hash}{encoded_params}"
+        )
         tto = TokenTransportObject(
             transaction=Transaction(
                 block_hash="",
@@ -816,9 +817,10 @@ class TestTokenProcessor(unittest.IsolatedAsyncioTestCase):
         )
 
         self.__token_queue.get_nowait.side_effect = [tto, QueueEmpty]
-        await self.__processor.stop()  # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.start()
-        self.__dynamodb.Table.return_value.batch_writer.return_value.__aenter__.return_value.put_item.assert_called_once_with(
+        # If we don't tell the processor to stop before it starts, it will run forever
+        await self.__run_processor()
+        context_manager = self.__dynamodb.Table.return_value.batch_writer.return_value.__aenter__
+        context_manager.return_value.put_item.assert_called_once_with(
             Item={
                 "blockchain": "Ethereum Mainnet",
                 "transaction_hash": "transaction hash",
