@@ -1,18 +1,42 @@
-from collections import namedtuple
+class Model:
+    def __init__(self, schema: dict) -> None:
+        self.__schema = schema
 
-Model = namedtuple("Model", ["table_name", "schema"])
+    @property
+    def table_name(self):
+        return self.__schema["TableName"]
 
-Contracts = Model(
-    "Contracts",
+    @property
+    def schema(self):
+        return self.__schema.copy()
+
+
+Collections = Model(
     {
-        "TableName": "Contracts",
+        "TableName": "Collections",
         "KeySchema": [
             {"AttributeName": "blockchain", "KeyType": "HASH"},  # Partition key
-            {"AttributeName": "address", "KeyType": "RANGE"},  # Sort key
+            {"AttributeName": "collection_id", "KeyType": "RANGE"},  # Sort key
         ],
         "AttributeDefinitions": [
             {"AttributeName": "blockchain", "AttributeType": "S"},
-            {"AttributeName": "address", "AttributeType": "S"},
+            {"AttributeName": "collection_id", "AttributeType": "S"},
+        ],
+        "ProvisionedThroughput": {"ReadCapacityUnits": 10, "WriteCapacityUnits": 10},
+    },
+)
+
+
+Tokens = Model(
+    {
+        "TableName": "Tokens",
+        "KeySchema": [
+            {"AttributeName": "blockchain_collection_id", "KeyType": "HASH"},  # Partition key
+            {"AttributeName": "token_id", "KeyType": "RANGE"},  # Sort key
+        ],
+        "AttributeDefinitions": [
+            {"AttributeName": "blockchain_collection_id", "AttributeType": "S"},
+            {"AttributeName": "token_id", "AttributeType": "S"},
         ],
         "ProvisionedThroughput": {"ReadCapacityUnits": 10, "WriteCapacityUnits": 10},
     },
@@ -20,16 +44,15 @@ Contracts = Model(
 
 
 TokenTransfers = Model(
-    "TokenTransfers",
     {
         "TableName": "TokenTransfers",
         "KeySchema": [
             {"AttributeName": "blockchain", "KeyType": "HASH"},  # Partition key
-            {"AttributeName": "transaction_hash", "KeyType": "RANGE"},  # Sort key
+            {"AttributeName": "transaction_log_index_hash", "KeyType": "RANGE"},  # Sort key
         ],
         "AttributeDefinitions": [
             {"AttributeName": "blockchain", "AttributeType": "S"},
-            {"AttributeName": "transaction_hash", "AttributeType": "S"},
+            {"AttributeName": "transaction_log_index_hash", "AttributeType": "S"},
         ],
         "ProvisionedThroughput": {"ReadCapacityUnits": 10, "WriteCapacityUnits": 10},
     },

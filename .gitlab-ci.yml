@@ -14,7 +14,7 @@ autotest:
         - pip3 --version
         - pip3 install -e .[dev]
     script:
-        - coverage run -m xmlrunner --output-file unittest-report-xunit.xml discover test
+        - coverage run -m xmlrunner --output-file unittest-report-xunit.xml discover
         - coverage report
         - coverage xml
         - flake8 --exit-zero src test bin

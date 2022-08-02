@@ -26,6 +26,30 @@ class EthCall:
         self.__parameters = list() if parameters is None else parameters.copy()
         self.__block = block
 
+    def __repr__(self) -> str:
+        return (
+            str(self.__class__)
+            + {
+                "identifier": self.__identifier,
+                "from": self.__from,
+                "to": self.__to,
+                "function": self.__function,
+                "parameters": self.__parameters,
+                "block": self.__block,
+            }.__repr__()
+        )
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, self.__class__)
+            and self.identifier == other.identifier
+            and self.from_ == other.from_
+            and self.to == other.to
+            and self.function == other.function
+            and self.parameters == other.parameters
+            and self.block == other.block
+        )
+
     @property
     def identifier(self):
         return self.__identifier
@@ -257,9 +281,13 @@ class RPCClient:
         for tx_hash in tx_hashes:
             rpc_requests.append(self.__get_rpc_request("eth_getTransactionReceipt", (tx_hash,)))
         rpc_responses = await self.__call_rpc(rpc_requests)
-        receipts: List[TransactionReceipt] = list()
-        logs: List[Log] = list()
+        receipts: List[Union[TransactionReceipt, RPCError]] = list()
         for rpc_response in rpc_responses:
+            logs: List[Log] = list()
+            if isinstance(rpc_response, RPCError):
+                receipts.append(rpc_response)
+                continue
+
             for log in rpc_response.result["logs"]:
                 logs.append(
                     Log(
@@ -343,14 +371,3 @@ class RPCClient:
                         )
             responses[response_request.identifier] = response
         return responses
-
-    async def get_code(self, address: str, default_block: Union[HexInt, str] = "latest"):
-        rpc_request = self.__get_rpc_request(
-            "eth_getCode",
-            (
-                address,
-                str(default_block),
-            ),
-        )
-        rpc_response = await self.__call_rpc(rpc_request)
-        return rpc_response.result

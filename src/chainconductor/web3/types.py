@@ -45,6 +45,9 @@ class HexInt:
     def __hash__(self) -> int:
         return self.int_value
 
+    def __repr__(self):
+        return self.__hex_str
+
     @property
     def hex_value(self) -> str:
         return self.__hex_str
@@ -52,7 +55,7 @@ class HexInt:
     @property
     def int_value(self) -> int:
         if self.__int_value is None:
-            self.__int_value = int(self.__hex_str[2:], 16)
+            self.__int_value = int(self.__hex_str, 16)
         return self.__int_value
 
 
@@ -60,7 +63,7 @@ class Type:
     pass
 
 
-class Transaction(Type):
+class Transaction(Type):  # pragma: no cover
     def __init__(
         self,
         *,
@@ -151,7 +154,7 @@ class Transaction(Type):
         return self.__s
 
 
-class Block(Type):
+class Block(Type):  # pragma: no cover
     def __init__(
         self,
         *,
@@ -274,10 +277,10 @@ class Log(Type):
         transaction_hash: str,
         block_hash: str,
         block_number: str,
-        address: str,
+        address: Optional[str],
         data: str,
         topics: List[str],
-    ):
+    ) -> object:
         self.__removed = removed
         self.__log_index = HexInt(log_index)
         self.__transaction_index = HexInt(transaction_index)
@@ -287,6 +290,36 @@ class Log(Type):
         self.__address = address
         self.__data = data
         self.__topics = topics.copy()
+
+    def __eq__(self, o: object) -> bool:
+        return (
+            isinstance(o, self.__class__)
+            and self.removed == o.removed
+            and self.log_index == o.log_index
+            and self.transaction_index == o.transaction_index
+            and self.transaction_hash == o.transaction_hash
+            and self.block_hash == o.block_hash
+            and self.block_number == o.block_number
+            and self.address == o.address
+            and self.data == o.data
+            and self.topics == o.topics
+        )
+
+    def __repr__(self) -> str:
+        return (
+            str(self.__class__.__name__)
+            + {
+                "removed": self.__removed,
+                "log_index": self.__log_index,
+                "transaction_index": self.__transaction_index,
+                "transaction_hash": self.__transaction_hash,
+                "block_hash": self.__block_hash,
+                "block_number": self.__block_number,
+                "address": self.__address,
+                "data": self.__data,
+                "topics": self.__topics,
+            }.__repr__()
+        )
 
     @property
     def removed(self) -> bool:
@@ -357,6 +390,45 @@ class TransactionReceipt(Type):
         self.__root = root
         self.__status = None if status is None else HexInt(status)
 
+    def __repr__(self) -> str:
+        return (
+            str(self.__class__.__name__)
+            + {
+                "transaction_hash ": self.__transaction_hash,
+                "transaction_index": self.__transaction_index,
+                "block_hash": self.__block_hash,
+                "block_number": self.__block_number,
+                "from_": self.__from_,
+                "to_": self.__to_,
+                "cumulative_gas_used": self.__cumulative_gas_used,
+                "gas_used": self.__gas_used,
+                "contract_address": self.__contract_address,
+                "logs": self.__logs,
+                "logs_bloom": self.__logs_bloom,
+                "root": self.__root,
+                "status": self.__status,
+            }.__repr__()
+        )
+
+    def __eq__(self, o: object) -> bool:
+        return (
+            isinstance(o, self.__class__)
+            and self.transaction_hash == o.transaction_hash
+            and self.transaction_index == o.transaction_index
+            and self.block_hash == o.block_hash
+            and self.block_number == o.block_number
+            and self.from_ == o.from_
+            and self.to_ == o.to_
+            and self.cumulative_gas_used == o.cumulative_gas_used
+            and self.gas_used == o.gas_used
+            and self.contract_address == o.contract_address
+            and self.logs == o.logs
+            and self.logs_bloom == o.logs_bloom
+            and self.root == o.root
+            and self.transaction_hash == o.transaction_hash
+            and self.status == o.status
+        )
+
     @property
     def transaction_hash(self) -> str:
         return self.__transaction_hash
@@ -410,18 +482,18 @@ class TransactionReceipt(Type):
         return self.__status
 
 
-class Metadata:
+class Metadata:  # pragma: no cover
     pass
 
 
-class ERC1155Metadata(Metadata):
+class ERC1155Metadata(Metadata):  # pragma: no cover
     def __init__(
         self, name: str, description: str, image: str, properties: Dict[str, object]
     ) -> None:
         pass
 
 
-class Token:
+class Token:  # pragma: no cover
     def __init__(
         self,
         *,
@@ -458,7 +530,7 @@ class Token:
         return self.__metadata
 
 
-class Contract:
+class Contract:  # pragma: no cover
     def __init__(
         self,
         *,
@@ -468,7 +540,6 @@ class Contract:
         name: str,
         symbol: str,
         total_supply: int,
-        tokens: List[Token],
     ) -> None:
         self.__address: str = address
         self.__creator: str = creator
@@ -476,7 +547,6 @@ class Contract:
         self.__name: str = name
         self.__symbol: str = symbol
         self.__total_supply: int = total_supply
-        self.__tokens: List[Token] = tokens
 
     @property
     def address(self) -> str:
@@ -501,7 +571,3 @@ class Contract:
     @property
     def total_supply(self) -> int:
         return self.__total_supply
-
-    @property
-    def tokens(self):
-        return self.__tokens

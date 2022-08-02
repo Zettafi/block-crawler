@@ -1,3 +1,4 @@
+from typing import Coroutine
 from typing import Callable, Dict, List
 
 
@@ -13,4 +14,6 @@ class EventBus:
     async def trigger(self, event: str, args=tuple()):
         if event in self.__registrations:
             for callee in self.__registrations[event]:
-                await callee(*args)
+                result = callee(*args)
+                if isinstance(result, Coroutine):
+                    await result

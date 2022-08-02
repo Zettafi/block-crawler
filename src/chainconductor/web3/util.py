@@ -1,7 +1,7 @@
 from typing import List, Dict
 
 
-class Function:
+class Function:  # pragma: no cover
     def __init__(
         self,
         function_hash: str,
@@ -15,6 +15,9 @@ class Function:
         self.__param_types = param_types
         self.__return_types = return_types
         self.__is_view = is_view
+
+    def __repr__(self) -> str:
+        return self.__description
 
     @property
     def function_hash(self) -> str:
@@ -37,7 +40,37 @@ class Function:
         return self.__is_view
 
 
-class ERC165Functions:
+class Event:  # pragma: no cover
+    def __init__(
+        self,
+        event_hash: str,
+        description: str,
+        indexed_param_types: List[str],
+        non_indexed_param_types: List[str],
+    ):
+        self.__event_hash = event_hash
+        self.__description = description
+        self.__indexed_param_types = indexed_param_types
+        self.__non_indexed_param_types = non_indexed_param_types
+
+    @property
+    def event_hash(self) -> str:
+        return self.__event_hash
+
+    @property
+    def description(self) -> str:
+        return self.__description
+
+    @property
+    def indexed_param_types(self) -> List[str]:
+        return self.__indexed_param_types
+
+    @property
+    def non_indexed_param_types(self) -> List[str]:
+        return self.__non_indexed_param_types
+
+
+class ERC165Functions:  # pragma: no cover
     SUPPORTS_INTERFACE = Function(
         "0x01ffc9a7",
         "supportsInterface(bytes4)->(bool)",
@@ -47,7 +80,7 @@ class ERC165Functions:
     )
 
 
-class ERC721Functions:
+class ERC721Functions:  # pragma: no cover
     BALANCE_OF_ADDRESS = Function(
         "0x70a08231",
         "balanceOf(address)->(uint256)",
@@ -99,7 +132,7 @@ class ERC721Functions:
     )
 
 
-class ERC721TokenReceiverFunctions:
+class ERC721TokenReceiverFunctions:  # pragma: no cover
     ON_ERC721_RECEIVED = Function(
         "0x01ffc9a7",
         "onERC721Received(address,address,uint256,bytes)->(bytes4)",
@@ -109,7 +142,7 @@ class ERC721TokenReceiverFunctions:
     )
 
 
-class ERC721MetadataFunctions:
+class ERC721MetadataFunctions:  # pragma: no cover
     NAME = Function(
         "0x06fdde03",
         "name()->(string)",
@@ -133,7 +166,7 @@ class ERC721MetadataFunctions:
     )
 
 
-class ERC721EnumerableFunctions:
+class ERC721EnumerableFunctions:  # pragma: no cover
     TOTAL_SUPPLY = Function(
         "0x18160ddd",
         "totalSupply()->(uint256)",
@@ -157,7 +190,7 @@ class ERC721EnumerableFunctions:
     )
 
 
-class ERC1155Functions:
+class ERC1155Functions:  # pragma: no cover
     SAFE_TRANSFER_FROM_WITH_DATA = Function(
         "0xf242432a",
         "safeTransferFrom(address,address,uint256,uint256,bytes)",
@@ -181,13 +214,22 @@ class ERC1155Functions:
     )
 
 
-class ERC1155MedataURIFunctions:
+class ERC1155MetadataURIFunctions:  # pragma: no cover
     URI = Function(
         "0x0e89341c",
         "uri(uint256)->(string)",
         ["uint256"],
         ["string"],
         True,
+    )
+
+
+class ERC721Events:  # pragma: no cover
+    TRANSFER = Event(
+        "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925",
+        "Transfer(address indexed, address indexed, uint256 indexed",
+        ["address", "address", "uint256"],
+        [],
     )
 
 
@@ -455,10 +497,7 @@ def contract_data_to_opcodes(contract_data: str):
     code = contract_data[2:]
     chunks = list()
     for i in range(0, len(code), 2):
-        try:
-            chunk = code[i : i + 2]
-        except ValueError:
-            raise ValueError(f"illegal hex character {code[i:i + 2]} in contract code")
+        chunk = code[i : i + 2]
         chunks.append(chunk)
 
     opcodes = list()

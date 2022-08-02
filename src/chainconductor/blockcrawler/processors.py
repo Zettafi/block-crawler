@@ -1,14 +1,26 @@
 import asyncio
+import re
 from asyncio import Queue, QueueEmpty
 from datetime import datetime, timedelta
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Set
 
 from eth_abi import decode
+from eth_abi.encoding import encode_uint_256
+from eth_abi.exceptions import ValueOutOfBounds
+from eth_bloom import BloomFilter
+from eth_hash.auto import keccak
 from eth_utils import decode_hex
 
+from .data_clients import (
+    IpfsBatchDataClient,
+    HttpBatchDataClient,
+    BatchDataClient,
+    ProtocolError,
+    ArweaveBatchDataClient,
+)
 from .events import EventBus
 from .stats import StatsService
-from ..data.models import Contracts, TokenTransfers
+from ..data.models import Collections, TokenTransfers, Tokens
 from ..web3.rpc import RPCClient, RPCError, EthCall
 from ..web3.types import (
     TransactionReceipt,
@@ -16,25 +28,27 @@ from ..web3.types import (
     Block,
     Contract,
     ERC165InterfaceID,
+    HexInt,
 )
 from ..web3.util import (
     ERC165Functions,
     contract_implements_function,
     ERC721MetadataFunctions,
     ERC721EnumerableFunctions,
-    ERC721Functions,
+    ERC721Events,
+    ERC1155MetadataURIFunctions,
 )
 
 
-class ProcessorException(Exception):
+class ProcessorException(Exception):  # pragma: no cover
     pass
 
 
-class TransportObject:
+class TransportObject:  # pragma: no cover
     pass
 
 
-class BlockIDTransportObject(TransportObject):
+class BlockIDTransportObject(TransportObject):  # pragma: no cover
     def __init__(self, block_id: int) -> None:
         self.__block_id: int = block_id
 
@@ -43,7 +57,7 @@ class BlockIDTransportObject(TransportObject):
         return self.__block_id
 
 
-class ContractTransportObject(TransportObject):
+class ContractTransportObject(TransportObject):  # pragma: no cover
     def __init__(
         self,
         *,
@@ -74,17 +88,125 @@ class ContractTransportObject(TransportObject):
         return self.__contract
 
 
-class TokenTransportObject(TransportObject):
+class Token:  # pragma: no cover
+    def __init__(
+        self,
+        *,
+        collection_id: str,
+        original_owner: str,
+        token_id: HexInt,
+        timestamp: HexInt,
+        metadata_uri: str = None,
+        metadata: str = None,
+    ) -> None:
+        self.__collection_id = collection_id
+        self.__original_owner = original_owner
+        self.__token_id = token_id
+        self.__timestamp = timestamp
+        self.__metadata_uri = metadata_uri
+        self.__metadata = metadata
+
+    @property
+    def collection_id(self) -> str:
+        return self.__collection_id
+
+    @property
+    def original_owner(self) -> str:
+        return self.__original_owner
+
+    @property
+    def token_id(self) -> HexInt:
+        return self.__token_id
+
+    @property
+    def timestamp(self) -> HexInt:
+        return self.__timestamp
+
+    @property
+    def metadata_uri(self):
+        return self.__metadata_uri
+
+    @property
+    def metadata(self):
+        return self.__metadata
+
+    def __repr__(self):
+        return (
+            self.__class__.__name__
+            + {
+                "collection_id": self.collection_id,
+                "token_id": self.token_id,
+                "original_owner": self.__original_owner,
+                "timestamp": self.timestamp,
+                "metadata_uri": self.metadata_uri,
+                "metadata": self.__metadata,
+            }.__repr__()
+        )
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, self.__class__)
+            and self.collection_id == other.collection_id
+            and self.token_id == other.token_id
+            and self.original_owner == other.original_owner
+            and self.timestamp == other.timestamp
+            and self.metadata_uri == other.metadata_uri
+            and self.metadata == other.metadata
+        )
+
+
+class TokenTransportObject(TransportObject):  # pragma: no cover
     def __init__(
         self,
         *,
         block: Optional[Block] = None,
         transaction: Optional[Transaction] = None,
         transaction_receipt: Optional[TransactionReceipt] = None,
+        token: Optional[Token] = None,
     ) -> None:
         self.__block: Optional[Block] = block
         self.__transaction: Optional[Transaction] = transaction
         self.__transaction_receipt: Optional[TransactionReceipt] = transaction_receipt
+        self.__token: Optional[Token] = token
+
+    def __repr__(self):
+        return (
+            str(self.__class__.__name__)
+            + {
+                "block": self.__block,
+                "transaction": self.__transaction,
+                "transaction_receipt": self.__transaction_receipt,
+                "token": self.__token,
+            }.__repr__()
+        )
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, self.__class__)
+            and self.block == other.block
+            and self.transaction == other.transaction
+            and self.transaction_receipt == other.transaction_receipt
+            and self.token == other.token
+        )
+
+    def __hash__(self):
+        hash_ = (
+            hash(self.__class__.__name__) * hash(self.__block.hash)
+            if self.__block
+            else 1 * hash(self.__transaction.hash)
+            if self.__transaction
+            else 1 * hash(self.__transaction_receipt.transaction_hash)
+            if self.__transaction_receipt
+            else 1
+            * (
+                hash(self.__token.collection_id)
+                if self.__token
+                else 1 + hash(self.__token.token_id.hex_value)
+                if self.__token and self.__token.token_id
+                else 0
+            )
+        )
+        return hash_
 
     @property
     def block(self) -> Optional[Block]:
@@ -97,6 +219,10 @@ class TokenTransportObject(TransportObject):
     @property
     def transaction_receipt(self) -> Optional[TransactionReceipt]:
         return self.__transaction_receipt
+
+    @property
+    def token(self) -> Optional[Token]:
+        return self.__token
 
 
 class Processor:
@@ -193,12 +319,12 @@ class BlockProcessor(Processor):
         stats_service: StatsService,
         event_bus: EventBus,
         rpc_batch_size: int,
-        block_id_queue: Queue,
+        inbound_queue: Queue,
         transaction_queue: Queue,
         max_batch_wait: int,
     ) -> None:
         super().__init__(
-            inbound_queue=block_id_queue,
+            inbound_queue=inbound_queue,
             max_batch_size=rpc_batch_size,
             max_batch_wait=max_batch_wait,
             event_bus=event_bus,
@@ -207,9 +333,7 @@ class BlockProcessor(Processor):
         self.__rpc_client: RPCClient = rpc_client
         self.__stats_service: StatsService = stats_service
         self.__transaction_queue: Queue = transaction_queue
-        self.__token_transfer_method_hashes = [
-            key for key in TokenProcessor.FUNCTION_HASH_LOOKUP.keys()
-        ]
+        self.__transfer_event_hash = decode_hex(ERC721Events.TRANSFER.event_hash)
 
     async def _process_batch(self, transport_objects: List[BlockIDTransportObject]):
         block_ids = [transport_object.block_id for transport_object in transport_objects]
@@ -230,11 +354,9 @@ class BlockProcessor(Processor):
                     out_transport_object = ContractTransportObject(
                         block=block, transaction=transaction
                     )
-                if transaction.input[:10] in self.__token_transfer_method_hashes:
-                    # The first 4 bytes of hex in a contract method call are the ABI method hash
-                    # If the first 4 bytes of the transaction input match
-                    # a token transfer method hash, create the Token transport object and send
-                    # it on to be processed buy the transaction processor
+                elif self.__transfer_event_hash in BloomFilter(int(block.logs_bloom, 16)):
+                    # If the event hash is in the block's bloom filter, the block may
+                    # have a transaction log with the event
                     out_transport_object = TokenTransportObject(
                         block=block, transaction=transaction
                     )
@@ -255,13 +377,13 @@ class TransactionProcessor(Processor):
         stats_service: StatsService,
         event_bus: EventBus,
         rpc_batch_size: int,
-        transaction_queue: Queue,
-        contract_queue: Queue,
-        token_queue: Queue,
+        inbound_queue: Queue,
+        outbound_contract_queue: Queue,
+        outbound_token_queue: Queue,
         max_batch_wait: int,
     ) -> None:
         super().__init__(
-            inbound_queue=transaction_queue,
+            inbound_queue=inbound_queue,
             max_batch_size=rpc_batch_size,
             max_batch_wait=max_batch_wait,
             event_bus=event_bus,
@@ -269,8 +391,9 @@ class TransactionProcessor(Processor):
         )
         self.__rpc_client: RPCClient = rpc_client
         self.__stats_service: StatsService = stats_service
-        self.__contract_queue: Queue = contract_queue
-        self.__token_queue: Queue = token_queue
+        self.__contract_queue: Queue = outbound_contract_queue
+        self.__token_queue: Queue = outbound_token_queue
+        self.__transfer_event_hash = decode_hex(ERC721Events.TRANSFER.event_hash)
 
     async def _process_batch(
         self,
@@ -287,21 +410,26 @@ class TransactionProcessor(Processor):
             in_transport_object = transactions_hash_map[receipt.transaction_hash]
             if isinstance(in_transport_object, ContractTransportObject):
                 out_transport_object_class = ContractTransportObject
-                queue: Queue = self.__contract_queue
+                queue = self.__contract_queue
             elif isinstance(in_transport_object, TokenTransportObject):
-                out_transport_object_class = TokenTransportObject
-                queue: Queue = self.__token_queue
+                if self.__transfer_event_hash in BloomFilter(int(receipt.logs_bloom, 16)):
+                    out_transport_object_class = TokenTransportObject
+                    queue = self.__token_queue
+                else:
+                    out_transport_object_class = None
+                    queue = None
             else:
                 raise ValueError(
                     "Unexpected transport object type {}".format(in_transport_object.__class__)
                 )
-            out_transport_object = out_transport_object_class(
-                block=in_transport_object.block,
-                transaction=in_transport_object.transaction,
-                transaction_receipt=receipt,
-            )
-            await queue.put(out_transport_object)
-            self.__stats_service.increment(self.PROCESSED_STAT)
+            if queue:
+                out_transport_object = out_transport_object_class(
+                    block=in_transport_object.block,
+                    transaction=in_transport_object.transaction,
+                    transaction_receipt=receipt,
+                )
+                await queue.put(out_transport_object)
+                self.__stats_service.increment(self.PROCESSED_STAT)
 
 
 class ContractProcessor(Processor):
@@ -317,12 +445,12 @@ class ContractProcessor(Processor):
         stats_service: StatsService,
         event_bus: EventBus,
         rpc_batch_size: int,
-        contract_queue: Queue,
-        persistence_queue: Queue,
+        inbound_queue: Queue,
+        outbound_queue: Queue,
         max_batch_wait: int,
     ) -> None:
         super().__init__(
-            inbound_queue=contract_queue,
+            inbound_queue=inbound_queue,
             max_batch_size=rpc_batch_size,
             max_batch_wait=max_batch_wait,
             event_bus=event_bus,
@@ -330,7 +458,7 @@ class ContractProcessor(Processor):
         )
         self.__rpc_client: RPCClient = rpc_client
         self.__stats_service: StatsService = stats_service
-        self.__persistence_queue: Queue = persistence_queue
+        self.__persistence_queue: Queue = outbound_queue
 
     async def _process_batch(self, transport_objects: List[ContractTransportObject]):
         for in_transport_object in transport_objects:
@@ -353,7 +481,6 @@ class ContractProcessor(Processor):
                         name=name,
                         symbol=symbol,
                         total_supply=total_supply,
-                        tokens=[],
                     )
 
                     out_transport_object = ContractTransportObject(
@@ -466,22 +593,22 @@ class ContractProcessor(Processor):
         return name, symbol, total_supply
 
 
-class ContractPersistenceProcessor(Processor):
-    PROCESSOR_STOPPED_EVENT = "contract_persistence_stopped"
-    PROCESSED_STAT = "contracts_persisted"
-    DYNAMODB_TIMER_WRITE_CONTRACT = "dynamodb_write_contract"
+class CollectionPersistenceProcessor(Processor):
+    PROCESSOR_STOPPED_EVENT = "collection_persistence_stopped"
+    PROCESSED_STAT = "collection_persisted"
+    DYNAMODB_TIMER_WRITE_CONTRACTS = "dynamodb_write_collections"
 
     def __init__(
         self,
         dynamodb,
         stats_service: StatsService,
         event_bus: EventBus,
-        contract_queue: Queue,
+        inbound_queue: Queue,
         dynamodb_batch_size: int,
         max_batch_wait: int,
     ) -> None:
         super().__init__(
-            inbound_queue=contract_queue,
+            inbound_queue=inbound_queue,
             max_batch_size=dynamodb_batch_size,
             max_batch_wait=max_batch_wait,
             event_bus=event_bus,
@@ -491,15 +618,16 @@ class ContractPersistenceProcessor(Processor):
         self.__stats_service: StatsService = stats_service
 
     async def _process_batch(self, transport_objects: List[ContractTransportObject]):
-        contracts = await self.__dynamodb.Table(Contracts.table_name)
-        with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_CONTRACT):
-            async with contracts.batch_writer() as batch:
+        collections = await self.__dynamodb.Table(Collections.table_name)
+        with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_CONTRACTS):
+            async with collections.batch_writer() as batch:
                 for transport_object in transport_objects:
-
-                    address = transport_object.contract.address
-                    block_number = transport_object.transaction.block_number.int_value
-                    transaction_index = transport_object.transaction.transaction_index.int_value
-                    transaction_hash = transport_object.transaction.hash
+                    collection_id = transport_object.contract.address
+                    block_number = transport_object.transaction_receipt.block_number.int_value
+                    transaction_index = (
+                        transport_object.transaction_receipt.transaction_index.int_value
+                    )
+                    transaction_hash = transport_object.transaction_receipt.transaction_hash
                     creator = transport_object.contract.creator
                     timestamp = transport_object.block.timestamp.int_value
                     name = transport_object.contract.name
@@ -509,7 +637,7 @@ class ContractPersistenceProcessor(Processor):
                     await batch.put_item(
                         Item={
                             "blockchain": "Ethereum Mainnet",
-                            "address": address,
+                            "collection_id": collection_id,
                             "block_number": block_number,
                             "transaction_index": transaction_index,
                             "transaction_hash": transaction_hash,
@@ -524,101 +652,382 @@ class ContractPersistenceProcessor(Processor):
                     self.__stats_service.increment(self.PROCESSED_STAT)
 
 
-class TokenProcessor(Processor):
-    PROCESSOR_STOPPED_EVENT = "token_processor_stopped"
-    PROCESSED_STAT = "tokens_processed"
-    DYNAMODB_TIMER_WRITE_TOKEN_TRANSFER = "dynamodb_write_token_transfer"
-
-    FUNCTION_HASH_LOOKUP = dict()
-    for function in [
-        ERC721Functions.SAFE_TRANSFER_FROM_WITH_DATA,
-        ERC721Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA,
-        ERC721Functions.TRANSFER_FROM,
-        # Not handling ERC1155 for now
-        # ERC1155Functions.SAFE_BATCH_TRANSFER_FROM,
-        # ERC1155Functions.SAFE_TRANSFER_FROM_WITH_DATA,
-        # ERC1155Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA,
-    ]:
-        FUNCTION_HASH_LOOKUP[function.function_hash] = function
+class TokenTransferProcessor(Processor):
+    PROCESSOR_STOPPED_EVENT = "token_transfer_processor_stopped"
+    PROCESSED_STAT = "token_transfers_processed"
+    DYNAMODB_TIMER_WRITE_TOKEN_TRANSFERS = "dynamodb_write_token_transfers"
+    TOPICS_DECODE_ERRORS = "token_transfers_log_topic_decode_error"
 
     def __init__(
         self,
         dynamodb,
         stats_service: StatsService,
         event_bus: EventBus,
-        token_queue: Queue,
+        inbound_queue: Queue,
+        outbound_queue: Queue,
         dynamodb_batch_size: int,
         max_batch_wait: int,
     ) -> None:
         super().__init__(
-            inbound_queue=token_queue,
+            inbound_queue=inbound_queue,
             max_batch_size=dynamodb_batch_size,
             max_batch_wait=max_batch_wait,
             event_bus=event_bus,
             stopped_event=self.PROCESSOR_STOPPED_EVENT,
         )
         self.__dynamodb = dynamodb
+        self.__outbound_queue: Queue = outbound_queue
         self.__stats_service: StatsService = stats_service
 
     async def _process_batch(self, transport_objects: List[ContractTransportObject]):
         transfers = await self.__dynamodb.Table(TokenTransfers.table_name)
-        with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_TOKEN_TRANSFER):
+        with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_TOKEN_TRANSFERS):
             async with transfers.batch_writer() as batch:
                 for transport_object in transport_objects:
-                    function_hash = transport_object.transaction.input[:10]
-                    if function_hash not in self.FUNCTION_HASH_LOOKUP:
-                        raise ProcessorException(
-                            f"Transaction {transport_object.transaction.hash} "
-                            f"has unexpected function hash {function_hash}"
-                        )
-
-                    function = self.FUNCTION_HASH_LOOKUP[function_hash]
-                    function_data = transport_object.transaction.input[10:]
-
-                    try:
-                        parameters = decode(function.param_types, decode_hex(function_data))
-                    except Exception as e:
-                        # There are occasional bad transactions in the chain,
-                        # print them for now and continue
-                        print(
-                            "\n\n\nException processing function params: "
-                            "{}\nFunction: {}\nData: {}\n\n\n".format(
-                                e, function.description, function_data
+                    for log in transport_object.transaction_receipt.logs:
+                        if (
+                            len(log.topics) == 4
+                            and log.topics[0] == ERC721Events.TRANSFER.event_hash
+                        ):
+                            # ERC-20 transfer events only have 3 topics. ERC-721 transfer events
+                            # have 4 topics. Process only logs with 4 topics.
+                            try:
+                                from_address = decode(["address"], decode_hex(log.topics[1]))[0]
+                                to_address = decode(["address"], decode_hex(log.topics[2]))[0]
+                                token_id = decode(["uint256"], decode_hex(log.topics[3]))[0]
+                                collection_id = log.address
+                            except Exception:
+                                # There are occasional bad transactions in the chain,
+                                # it's usually token IDs that are larger than 256 bits
+                                self.__stats_service.increment(self.TOPICS_DECODE_ERRORS)
+                                continue
+                            timestamp = transport_object.block.timestamp
+                            transaction_log_index_hash = keccak(
+                                (
+                                    log.block_number.hex_value
+                                    + log.transaction_index.hex_value
+                                    + log.log_index.hex_value
+                                ).encode("utf8")
+                            ).hex()
+                            await batch.put_item(
+                                Item={
+                                    "blockchain": "Ethereum Mainnet",
+                                    "transaction_log_index_hash": transaction_log_index_hash,
+                                    "collection_id": collection_id,
+                                    "token_id": str(token_id),
+                                    "from": from_address,
+                                    "to": to_address,
+                                    "block": log.block_number.int_value,
+                                    "transaction_index": log.transaction_index.int_value,
+                                    "log_index": log.log_index.int_value,
+                                    "timestamp": timestamp.int_value,
+                                }
                             )
-                        )
-                    from_address = None
-                    if function is ERC721Functions.SAFE_TRANSFER_FROM_WITH_DATA:
-                        from_address, to_address, token_id, _ = parameters
-                    if function is ERC721Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA:
-                        from_address, to_address, token_id = parameters
-                    if function is ERC721Functions.TRANSFER_FROM:
-                        from_address, to_address, token_id = parameters
-                    # TODO: Not processing ERC1155 until we figure out how
-                    #       to handle the mess they leave behind
-                    # if function is ERC1155Functions.SAFE_BATCH_TRANSFER_FROM:
-                    #     (
-                    #         from_address,
-                    #         to_address,
-                    #         token_types,
-                    #         token_ids,
-                    #         _,
-                    #     ) = parameters
-                    # if function is ERC1155Functions.SAFE_TRANSFER_FROM_WITH_DATA:
-                    #     from_address, to_address, token_type, token_id, _ = parameters
-                    # if function is ERC1155Functions.SAFE_TRANSFER_FROM_WITHOUT_DATA:
-                    #     from_address, to_address, token_type, token_id = parameters
-                    transaction_hash = transport_object.transaction_receipt.transaction_hash
-                    collection_id = transport_object.transaction_receipt.to_
-                    timestamp = transport_object.block.timestamp.int_value
-                    await batch.put_item(
+                            if (
+                                # Transferring from the 0 or collection address
+                                (from_address == collection_id or int(from_address, 16) == 0)
+                                # and not to the collection address
+                                and to_address != collection_id
+                                # and not to the 0 address
+                                and int(to_address, 16) != 0
+                                # this is a minting transfer
+                            ):
+                                token_mint = Token(
+                                    collection_id=collection_id,
+                                    original_owner=from_address,
+                                    token_id=HexInt(f"0x{token_id}"),
+                                    timestamp=timestamp,
+                                )
+                                out_transport_object = TokenTransportObject(
+                                    block=transport_object.block,
+                                    transaction=transport_object.transaction,
+                                    transaction_receipt=transport_object.transaction_receipt,
+                                    token=token_mint,
+                                )
+                                await self.__outbound_queue.put(out_transport_object)
+
+                            self.__stats_service.increment(self.PROCESSED_STAT)
+
+
+class TokenMetadataProcessor(Processor):
+    PROCESSOR_STOPPED_EVENT = "token_metadata_processor_stopped"
+    PROCESSED_STAT = "token_metadata_processed"
+    RPC_GET_TOKEN_METADATA_URI = "rpc_call_token_metadata_uri"
+    TOKEN_METADATA_INVALID_TOKEN_ID = "token_metadata_invalid_token_id"
+
+    def __init__(
+        self,
+        rpc_client: RPCClient,
+        stats_service: StatsService,
+        event_bus: EventBus,
+        rpc_batch_size: int,
+        inbound_queue: Queue,
+        outbound_token_gathering_queue: Queue,
+        outbound_token_persistence_queue: Queue,
+        max_batch_wait: float,
+    ) -> None:
+        super().__init__(
+            inbound_queue,
+            rpc_batch_size // 2,  # We'll be making 2 queries for every entry
+            max_batch_wait,
+            event_bus,
+            self.PROCESSOR_STOPPED_EVENT,
+        )
+        self.__rpc_client = rpc_client
+        self.__rpc_batch_size = rpc_batch_size
+        self.__stats_service = stats_service
+        self.__outbound_gathering_queue = outbound_token_gathering_queue
+        self.__outbound_persistence_queue = outbound_token_persistence_queue
+
+    async def _process_batch(self, transport_objects: List[TokenTransportObject]):
+        def _get_721_id_for_token(token):
+            return f"{token.token_id}-721"
+
+        def _get_1155_id_for_token(token):
+            return f"{token.token_id}-1155"
+
+        requests = list()
+        for transport_object in transport_objects:
+            token_id = transport_object.token.token_id.int_value
+            try:
+                encode_uint_256.validate_value(token_id)
+            except ValueOutOfBounds:
+                self.__stats_service.increment(self.TOKEN_METADATA_INVALID_TOKEN_ID)
+                continue
+            requests.append(
+                EthCall(
+                    _get_721_id_for_token(transport_object.token),
+                    None,
+                    transport_object.token.collection_id,
+                    ERC721MetadataFunctions.TOKEN_URI,
+                    [token_id],
+                )
+            )
+            requests.append(
+                EthCall(
+                    _get_1155_id_for_token(transport_object.token),
+                    None,
+                    transport_object.token.collection_id,
+                    ERC1155MetadataURIFunctions.URI,
+                    [token_id],
+                )
+            )
+
+        if requests:
+            with self.__stats_service.timer(self.RPC_GET_TOKEN_METADATA_URI):
+                responses = await self.__rpc_client.calls(requests)
+
+            for transport_object in transport_objects:
+                metadata_uri = None
+                for get_id in [_get_1155_id_for_token, _get_721_id_for_token]:
+                    try:
+                        response = responses[get_id(transport_object.token)]
+                    except KeyError:
+                        continue
+                    if not isinstance(response, RPCError):
+                        metadata_uri = response[0]
+                        break
+
+                out_transport_object = TokenTransportObject(
+                    block=transport_object.block,
+                    transaction=transport_object.transaction,
+                    transaction_receipt=transport_object.transaction_receipt,
+                    token=Token(
+                        collection_id=transport_object.token.collection_id,
+                        original_owner=transport_object.token.original_owner,
+                        token_id=transport_object.token.token_id,
+                        timestamp=transport_object.token.timestamp,
+                        metadata_uri=metadata_uri,
+                    ),
+                )
+                if metadata_uri:
+                    await self.__outbound_gathering_queue.put(out_transport_object)
+                else:
+                    await self.__outbound_persistence_queue.put(out_transport_object)
+                self.__stats_service.increment(self.PROCESSED_STAT)
+        else:
+            for transport_object in transport_objects:
+                await self.__outbound_persistence_queue.put(transport_object)
+
+
+class TokenMetadataGatheringProcessor(Processor):
+    PROCESSOR_STOPPED_EVENT = "token_metadata_gathering_processor_stopped"
+    PROCESSED_STAT = "token_metadata_gathering_processed"
+    PROTOCOL_MATCH_REGEX = re.compile("^([^:]+)://.+")
+    METADATA_RETRIEVAL_HTTP_TIMER = "metadata_retrieval_http"
+    METADATA_RETRIEVAL_HTTP_ERROR_STAT = "metadata_retrieval_http_error"
+    METADATA_RETRIEVAL_IPFS_TIMER = "metadata_retrieval_ipfs"
+    METADATA_RETRIEVAL_IPFS_ERROR_STAT = "metadata_retrieval_ipfs_error"
+    METADATA_RETRIEVAL_ARWEAVE_TIMER = "metadata_retrieval_arweave"
+    METADATA_RETRIEVAL_ARWEAVE_ERROR_STAT = "metadata_retrieval_arweave_error"
+    METADATA_RETRIEVAL_UNSUPPORTED_PROTOCOL_STAT = "metadata_retrieval_unsupported_protocol"
+
+    def __init__(
+        self,
+        stats_service: StatsService,
+        event_bus: EventBus,
+        http_batch_size: int,
+        inbound_queue: Queue,
+        outbound_queue: Queue,
+        http_batch_client: HttpBatchDataClient,
+        ipfs_batch_client: IpfsBatchDataClient,
+        arweave_batch_client: ArweaveBatchDataClient,
+        max_batch_wait: float,
+    ) -> None:
+        super().__init__(
+            inbound_queue,
+            http_batch_size,
+            max_batch_wait,
+            event_bus,
+            self.PROCESSOR_STOPPED_EVENT,
+        )
+        self.__stats_service = stats_service
+        self.__outbound_queue = outbound_queue
+        self.__http_batch_client = http_batch_client
+        self.__ipfs_batch_client = ipfs_batch_client
+        self.__arweave_batch_client = arweave_batch_client
+
+    async def _process_batch(self, transport_objects: List[TokenTransportObject]):
+        http_uris = set()
+        ipfs_uris = set()
+        arweave_uris = set()
+        tto_uri_map = dict()
+        coroutines = list()
+        for transport_object in transport_objects:
+            uri = transport_object.token.metadata_uri
+            proto = self.__get_protocol_from_uri(uri)
+
+            tto_uri_map[transport_object] = uri
+            if proto in ("https", "http"):
+                http_uris.add(uri)
+            elif proto == "ipfs":
+                ipfs_uris.add(uri)
+            elif proto == "ar":
+                arweave_uris.add(uri)
+            else:
+                self.__stats_service.increment(self.METADATA_RETRIEVAL_UNSUPPORTED_PROTOCOL_STAT)
+                await self.__outbound_queue.put(transport_object)
+                self.__stats_service.increment(self.PROCESSED_STAT)
+
+        if http_uris:
+            coroutines.append(
+                self.__timed_batch_client_get(
+                    self.METADATA_RETRIEVAL_HTTP_TIMER, self.__http_batch_client, http_uris
+                )
+            )
+        if ipfs_uris:
+            coroutines.append(
+                self.__timed_batch_client_get(
+                    self.METADATA_RETRIEVAL_IPFS_TIMER, self.__ipfs_batch_client, ipfs_uris
+                )
+            )
+        if arweave_uris:
+            coroutines.append(
+                self.__timed_batch_client_get(
+                    self.METADATA_RETRIEVAL_ARWEAVE_TIMER, self.__arweave_batch_client, arweave_uris
+                )
+            )
+
+        if coroutines:
+            responses = await asyncio.gather(*coroutines)
+            for response in responses:
+                for transport_object in transport_objects:
+                    if transport_object in tto_uri_map:
+                        uri = tto_uri_map[transport_object]
+                        if uri in response:
+                            uri_response = response[uri]
+                            if isinstance(uri_response, ProtocolError):
+                                out_transport_object = transport_object
+                                proto = self.__get_protocol_from_uri(uri)
+                                if proto in ("http", "https"):
+                                    self.__stats_service.increment(
+                                        self.METADATA_RETRIEVAL_HTTP_ERROR_STAT
+                                    )
+                                elif proto == "ipfs":
+                                    self.__stats_service.increment(
+                                        self.METADATA_RETRIEVAL_IPFS_ERROR_STAT
+                                    )
+                                elif proto == "ar":
+                                    self.__stats_service.increment(
+                                        self.METADATA_RETRIEVAL_ARWEAVE_ERROR_STAT
+                                    )
+                            else:
+                                out_transport_object = TokenTransportObject(
+                                    block=transport_object.block,
+                                    transaction=transport_object.transaction,
+                                    transaction_receipt=transport_object.transaction_receipt,
+                                    token=Token(
+                                        token_id=transport_object.token.token_id,
+                                        collection_id=transport_object.token.collection_id,
+                                        original_owner=transport_object.token.original_owner,
+                                        timestamp=transport_object.token.timestamp,
+                                        metadata_uri=transport_object.token.metadata_uri,
+                                        metadata=response[uri],
+                                    ),
+                                )
+                            await self.__outbound_queue.put(out_transport_object)
+                            self.__stats_service.increment(self.PROCESSED_STAT)
+
+    def __get_protocol_from_uri(self, uri):
+        match = self.PROTOCOL_MATCH_REGEX.fullmatch(uri)
+        return match.group(1).lower() if match else None
+
+    async def __timed_batch_client_get(
+        self, timer: str, batch_client: BatchDataClient, uris: Set[str]
+    ):
+        with self.__stats_service.timer(timer):
+            return await batch_client.get(uris)
+
+
+class TokenPersistenceProcessor(Processor):
+    PROCESSOR_STOPPED_EVENT = "token_persistence_processor_stopped"
+    PROCESSED_STAT = "tokens_persisted"
+    DYNAMODB_TIMER_WRITE_TOKENS = "dynamodb_write_tokens"
+
+    def __init__(
+        self,
+        dynamodb,
+        stats_service: StatsService,
+        event_bus: EventBus,
+        inbound_queue: Queue,
+        dynamodb_batch_size: int,
+        max_batch_wait: float,
+    ) -> None:
+        super().__init__(
+            inbound_queue,
+            dynamodb_batch_size,
+            max_batch_wait,
+            event_bus,
+            self.PROCESSOR_STOPPED_EVENT,
+        )
+        self.__stats_service = stats_service
+        self.__dynamodb = dynamodb
+
+    async def _process_batch(self, transport_objects: List[TokenTransportObject]):
+        table = await self.__dynamodb.Table(Tokens.table_name)
+        with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_TOKENS):
+            async with table.batch_writer() as batch_writer:
+                for transport_object in transport_objects:
+                    blockchain = "Ethereum Mainnet"
+                    collection_id = transport_object.token.collection_id
+                    blockchain_collection_id = keccak(
+                        (blockchain + collection_id).encode("utf8")
+                    ).hex()
+                    timestamp = transport_object.token.timestamp.int_value
+                    original_owner = transport_object.token.original_owner
+                    token_id = str(transport_object.token.token_id.int_value)
+                    metadata_uri = transport_object.token.metadata_uri
+                    metadata = transport_object.token.metadata
+                    await batch_writer.put_item(
                         Item={
-                            "blockchain": "Ethereum Mainnet",
-                            "transaction_hash": transaction_hash,
+                            "blockchain_collection_id": blockchain_collection_id,
+                            "token_id": token_id,
+                            "blockchain": blockchain,
                             "collection_id": collection_id,
-                            "token_id": str(token_id),
-                            "from": from_address,
-                            "to": to_address,
-                            "timestamp": timestamp,
+                            "original_owner": original_owner,
+                            "mint_timestamp": timestamp,
+                            "metadata_uri": metadata_uri,
+                            "metadata": metadata,
                         }
                     )
                     self.__stats_service.increment(self.PROCESSED_STAT)
