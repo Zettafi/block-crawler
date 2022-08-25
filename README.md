@@ -117,7 +117,7 @@ aws help config-vars
 Once your config is all setup, you can run dynamodb commands like this one:
 
 ```bash
-aws --endpoint-url http://localhost:8000 dynamodb scan --table-name Contracts
+aws --endpoint-url http://localhost:8000 dynamodb scan --table-name Collections
 ```
 
 ## Deployment

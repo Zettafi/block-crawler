@@ -8,11 +8,11 @@ class StatsService:
         self.__counters: Dict[str, int] = dict()
         self.__timers: Dict[str, List[int]] = dict()
 
-    def increment(self, stat: str):
+    def increment(self, stat: str, quantity: int = 1):
         if stat in self.__counters:
-            self.__counters[stat] += 1
+            self.__counters[stat] += quantity
         else:
-            self.__counters[stat] = 1
+            self.__counters[stat] = quantity
 
     def get_count(self, stat: str):
         if stat in self.__counters:
@@ -24,11 +24,14 @@ class StatsService:
     @contextmanager
     def timer(self, stat: str):
         start = time.perf_counter_ns()
-        yield None
-        end = time.perf_counter_ns()
-        if stat not in self.__timers:
-            self.__timers[stat] = list()
-        self.__timers[stat].append(end - start)
+        try:
+            yield None
+        finally:
+            end = time.perf_counter_ns()
+            duration = end - start
+            if stat not in self.__timers:
+                self.__timers[stat] = list()
+            self.__timers[stat].append(duration)
 
     def get_timings(self, stat):
         if stat in self.__timers:
@@ -36,3 +39,9 @@ class StatsService:
         else:
             timings = list()
         return timings
+
+    def dump(self):
+        pass
+
+    def load(self, stats_data):
+        pass

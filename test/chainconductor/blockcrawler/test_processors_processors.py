@@ -1,32 +1,34 @@
 import random
 import unittest
-from asyncio import QueueEmpty
+from logging import Logger
 from unittest import TestCase
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch, call, ANY
 
 import ddt
+from botocore.exceptions import ClientError
 from eth_abi import encode
 from eth_hash.auto import keccak
 from eth_utils import decode_hex
 
 from chainconductor.blockcrawler.data_clients import ProtocolError
 from chainconductor.blockcrawler.processors import (
-    BlockProcessor,
-    BlockIDTransportObject,
     ContractTransportObject,
     TokenTransportObject,
-    TransactionProcessor,
-    TokenTransferProcessor,
-    CollectionPersistenceProcessor,
-    TokenMetadataProcessor,
+    TokenTransferPersistenceBatchProcessor,
+    CollectionPersistenceBatchProcessor,
+    TokenMetadataUriBatchProcessor,
     Token,
-    TokenPersistenceProcessor,
-    TokenMetadataGatheringProcessor,
+    TokenPersistenceBatchProcessor,
+    TokenMetadataRetrievalBatchProcessor,
+    BlockBatchProcessor,
+    TransactionBatchProcessor,
+    ContractBatchProcessor,
+    RPCErrorRetryDecoratingBatchProcessor,
 )
-from chainconductor.web3.rpc import EthCall, RPCError
+from chainconductor.blockcrawler.stats import StatsService
+from chainconductor.web3.rpc import EthCall, RPCServerError, RPCClient
 from chainconductor.web3.types import (
     Block,
-    Transaction,
     TransactionReceipt,
     Contract,
     ERC165InterfaceID,
@@ -37,8 +39,10 @@ from chainconductor.web3.util import (
     ERC721Events,
     ERC721MetadataFunctions,
     ERC1155MetadataURIFunctions,
+    ERC165Functions,
+    ERC721EnumerableFunctions,
 )
-
+from chainconductor.blockcrawler.processors.queued_batch import QueuedBatchProcessor
 from .. import async_context_manager_mock
 
 
@@ -50,48 +54,77 @@ def assert_timer_run(mocked_stats_service: MagicMock, timer):
     mocked_stats_service.timer.return_value.__exit__.assert_called_once()
 
 
-@ddt.ddt
-class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+class BatchedQueueProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__acquisition_strategy = AsyncMock()
+        self.__disposition_strategy = AsyncMock()
+        self.__batch_processor = AsyncMock()
+        self.__batch_processor.side_effect = lambda batch: batch
+        self.__logger = AsyncMock(Logger)
+        self.__processor = QueuedBatchProcessor(
+            acquisition_strategy=self.__acquisition_strategy,
+            disposition_strategy=self.__disposition_strategy,
+            batch_processor=self.__batch_processor,
+            logger=self.__logger,
+            max_processors=1,
+        )
+
+    async def test_passes_acquired_items_to_batch_processor(self):
+        self.__acquisition_strategy.return_value = [1, "two", 3.0, None]
+        await self.__processor.run()
+        self.__batch_processor.assert_awaited_with([1, "two", 3.0])
+
+    async def test_passes_none_marker_to_disposition_strategy_as_separate_final_call(self):
+        self.__acquisition_strategy.return_value = [1, 2, 3, None]
+        await self.__processor.run()
+        self.__disposition_strategy.assert_awaited_with(None)
+
+    async def test_passes_batch_results_to_disposition_strategy(self):
+        self.__acquisition_strategy.return_value = ["str", 2.3, 3, {}, [], None]
+        await self.__processor.run()
+        self.__disposition_strategy.assert_has_awaits([call(["str", 2.3, 3, {}, []])])
+
+    async def test_block_processor_exceptions_are_logged_and_disposition_strategy_not_called(self):
+        self.__acquisition_strategy.return_value = ["value", None]
+        expected = Exception()
+        self.__batch_processor.side_effect = expected
+        await self.__processor.run()
+        self.__logger.exception.assert_called_once()
+
+    async def test_does_not_send_empty_batch_to_processor(self):
+        self.__acquisition_strategy.return_value = [None]
+        await self.__processor.run()
+        self.__batch_processor.assert_not_called()
+
+    async def test_batch_error_drains_inbound_and_alerts_outbound_without_processing(self):
+        self.__batch_processor.side_effect = Exception
+        self.__acquisition_strategy.side_effect = [["a"], ["b", None]]
+        await self.__processor.run()
+        self.__acquisition_strategy.assert_has_awaits([call(), call()])
+        self.__disposition_strategy.assert_awaited_once_with(None)
+        self.__batch_processor.assert_awaited_once_with(["a"])
+
+
+class BlockBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__rpc_client = AsyncMock()
         self.__rpc_client.get_blocks.return_value = []
-        self.__inbound_queue = (
-            MagicMock()
-        )  # Queue is asynchronous, but we don't use any async methods
-        self.__inbound_queue.get_nowait.side_effect = [
-            BlockIDTransportObject(0),
-            QueueEmpty(),
-        ]
-        self.__outbound_queue = AsyncMock()
         self.__stats_service = MagicMock()
-        self.__event_bus = AsyncMock()
-        self.__processor = BlockProcessor(
+        self.__processor = BlockBatchProcessor(
             rpc_client=self.__rpc_client,
-            inbound_queue=self.__inbound_queue,
-            transaction_queue=self.__outbound_queue,
-            event_bus=self.__event_bus,
             stats_service=self.__stats_service,
-            rpc_batch_size=0,
-            max_batch_wait=0,
         )
 
-    async def test_triggers_stopped_event_in_event_bus(self):
-        await self.__run_processor()
-        self.__event_bus.trigger.assert_called_once_with("block_processor_stopped")
-
-    async def __run_processor(self):
-        # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__processor.stop()
-        await self.__processor.start()
-
     async def test_records_rpc_call_timer(self):
-        await self.__run_processor()
+        await self.__processor([0])
         assert_timer_run(self.__stats_service, "rpc_get_blocks")
 
     async def test_increments_stats_for_each_block(self):
-        block_ids = random.randint(1, 99)
+        block_id_count = random.randint(1, 99)
+        block_ids = list()
         get_blocks_return_value = list()
-        for block_id in range(block_ids):
+        for block_id in range(block_id_count):
+            block_ids.append(block_id)
             get_blocks_return_value.append(
                 Block(
                     number=hex(block_id),
@@ -104,6 +137,7 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     state_root="",
                     receipts_root="",
                     miner="",
+                    mix_hash="",
                     difficulty="",
                     total_difficulty="",
                     extra_data="",
@@ -116,15 +150,53 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 )
             )
         self.__rpc_client.get_blocks.return_value = get_blocks_return_value
-        await self.__run_processor()
+        await self.__processor(block_ids)
         self.assertEqual(
-            block_ids,
+            block_id_count,
             self.__stats_service.increment.call_count,
             "Expected as many increment calls as there were blocks",
         )
         self.__stats_service.increment.assert_called_with("blocks_processed")
 
-    async def test_does_not_add_items_to_outbound_queue_if_there_are_no_transactions(
+    async def test_sends_block_ids_to_rpc_client_get_blocks(self):
+        await self.__processor([0, 1])
+        self.__rpc_client.get_blocks.assert_awaited_with({0, 1}, full_transactions=ANY)
+
+    async def test_sends_full_transactions_false_to_rpc_client_get_blocks(self):
+        await self.__processor([0, 1])
+        self.__rpc_client.get_blocks.assert_awaited_with(ANY, full_transactions=False)
+
+    async def test_returns_items_if_there_are_transactions(
+        self,
+    ):
+        block = Block(
+            number="0x00",
+            hash="",
+            parent_hash="",
+            nonce="",
+            sha3_uncles="",
+            logs_bloom="",
+            transactions_root="",
+            state_root="",
+            receipts_root="",
+            miner="",
+            mix_hash="",
+            difficulty="",
+            total_difficulty="",
+            extra_data="",
+            size="",
+            gas_limit="",
+            gas_used="",
+            timestamp="",
+            transactions=["1", "2"],
+            uncles=list(),
+        )
+        self.__rpc_client.get_blocks.return_value = [block]
+        expected = [("1", block), ("2", block)]
+        actual = await self.__processor([0])
+        self.assertEqual(expected, actual)
+
+    async def test_does_not_return_items_if_there_are_no_transactions(
         self,
     ):
         self.__rpc_client.get_blocks.return_value = [
@@ -139,6 +211,7 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 state_root="",
                 receipts_root="",
                 miner="",
+                mix_hash="",
                 difficulty="",
                 total_difficulty="",
                 extra_data="",
@@ -150,253 +223,17 @@ class BlockProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 uncles=list(),
             )
         ]
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_not_called()
-
-    async def test_does_not_add_items_to_outbound_queue_if_bloom_filter_has_no_transfers(
-        self,
-    ):
-        self.__rpc_client.get_blocks.return_value = [
-            Block(
-                number="0x00",
-                hash="",
-                parent_hash="",
-                nonce="",
-                sha3_uncles="",
-                logs_bloom="0x00",
-                transactions_root="",
-                state_root="",
-                receipts_root="",
-                miner="",
-                difficulty="",
-                total_difficulty="",
-                extra_data="",
-                size="",
-                gas_limit="",
-                gas_used="",
-                timestamp="",
-                transactions=[
-                    Transaction(
-                        block_hash="",
-                        block_number="",
-                        from_="",
-                        gas="",
-                        gas_price="",
-                        hash="",
-                        input="",
-                        nonce="",
-                        to_="someone",
-                        transaction_index="",
-                        value="",
-                        v="",
-                        r="",
-                        s="",
-                    ),
-                ],
-                uncles=list(),
-            )
-        ]
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_not_called()
-
-    async def test_adds_items_as_contract_dtos_to_outbound_queue_if_transaction_has_no_to(
-        self,
-    ):
-        self.__rpc_client.get_blocks.return_value = [
-            Block(
-                number="0x00",
-                hash="",
-                parent_hash="",
-                nonce="",
-                sha3_uncles="",
-                logs_bloom="0x00",
-                transactions_root="",
-                state_root="",
-                receipts_root="",
-                miner="",
-                difficulty="",
-                total_difficulty="",
-                extra_data="",
-                size="",
-                gas_limit="",
-                gas_used="",
-                timestamp="",
-                transactions=[
-                    Transaction(
-                        block_hash="",
-                        block_number="",
-                        from_="",
-                        gas="",
-                        gas_price="",
-                        hash="",
-                        input="",
-                        nonce="",
-                        to_=None,
-                        transaction_index="",
-                        value="",
-                        v="",
-                        r="",
-                        s="",
-                    ),
-                ],
-                uncles=list(),
-            )
-        ]
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_called_once()
-        self.assertIsInstance(self.__outbound_queue.put.call_args.args[0], ContractTransportObject)
-
-    @patch("chainconductor.blockcrawler.processors.BloomFilter")
-    async def test_checks_block_logs_bloom_for_transfer_event(self, bloom_filter_patch):
-        self.__rpc_client.get_blocks.return_value = [
-            Block(
-                number="0x00",
-                hash="",
-                parent_hash="",
-                nonce="",
-                sha3_uncles="",
-                logs_bloom="0x998877665544332211",
-                transactions_root="",
-                state_root="",
-                receipts_root="",
-                miner="",
-                difficulty="",
-                total_difficulty="",
-                extra_data="",
-                size="",
-                gas_limit="",
-                gas_used="",
-                timestamp="",
-                transactions=[
-                    Transaction(
-                        block_hash="",
-                        block_number="",
-                        from_="",
-                        gas="",
-                        gas_price="",
-                        hash="",
-                        input="",
-                        nonce="",
-                        to_="someone",
-                        transaction_index="",
-                        value="",
-                        v="",
-                        r="",
-                        s="",
-                    ),
-                ],
-                uncles=list(),
-            )
-        ]
-        await self.__run_processor()
-
-        expected = decode_hex("0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925")
-        bloom_filter_patch.return_value.__contains__.assert_called_once_with(expected)
-
-    @patch("chainconductor.blockcrawler.processors.BloomFilter")
-    async def test_inits_block_logs_bloom_with_int_of_logs_bloom(self, bloom_filter_patch):
-        self.__rpc_client.get_blocks.return_value = [
-            Block(
-                number="0x00",
-                hash="",
-                parent_hash="",
-                nonce="",
-                sha3_uncles="",
-                logs_bloom="0x998877665544332211",
-                transactions_root="",
-                state_root="",
-                receipts_root="",
-                miner="",
-                difficulty="",
-                total_difficulty="",
-                extra_data="",
-                size="",
-                gas_limit="",
-                gas_used="",
-                timestamp="",
-                transactions=[
-                    Transaction(
-                        block_hash="",
-                        block_number="",
-                        from_="",
-                        gas="",
-                        gas_price="",
-                        hash="",
-                        input="",
-                        nonce="",
-                        to_="someone",
-                        transaction_index="",
-                        value="",
-                        v="",
-                        r="",
-                        s="",
-                    ),
-                ],
-                uncles=list(),
-            )
-        ]
-        await self.__run_processor()
-
-        expected = int("0x998877665544332211", 16)
-        bloom_filter_patch.assert_called_once_with(expected)
-
-    @patch("chainconductor.blockcrawler.processors.BloomFilter")
-    async def test_adds_items_as_token_dtos_to_outbound_queue_transfer_event_in_bloom_filter(
-        self, bloom_filter_patch
-    ):
-        self.__rpc_client.get_blocks.return_value = [
-            Block(
-                number="0x00",
-                hash="",
-                parent_hash="",
-                nonce="",
-                sha3_uncles="",
-                logs_bloom="0x00",
-                transactions_root="",
-                state_root="",
-                receipts_root="",
-                miner="",
-                difficulty="",
-                total_difficulty="",
-                extra_data="",
-                size="",
-                gas_limit="",
-                gas_used="",
-                timestamp="",
-                transactions=[
-                    Transaction(
-                        block_hash="",
-                        block_number="",
-                        from_="",
-                        gas="",
-                        gas_price="",
-                        hash="",
-                        input="",
-                        nonce="",
-                        to_="someone",
-                        transaction_index="",
-                        value="",
-                        v="",
-                        r="",
-                        s="",
-                    ),
-                ],
-                uncles=list(),
-            )
-        ]
-        bloom_filter_patch.return_value.__contains__.return_value = True
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_called_once()
-        self.assertIsInstance(self.__outbound_queue.put.call_args.args[0], TokenTransportObject)
+        actual = await self.__processor([0])
+        self.assertEqual([], actual)
 
 
 @ddt.ddt
-class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+class TransactionBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__rpc_client = AsyncMock()
         self.__rpc_client.get_transaction_receipts.return_value = [
             TransactionReceipt(
-                transaction_hash="",
+                transaction_hash="tx hash",
                 transaction_index="",
                 block_hash="",
                 block_number="",
@@ -411,26 +248,10 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 status="",
             )
         ]
-        self.__inbound_queue = MagicMock()
-        self.__inbound_queue.get_nowait.side_effect = [
-            ContractTransportObject(
-                transaction=Transaction(
-                    block_hash="",
-                    block_number="",
-                    from_="",
-                    gas="",
-                    gas_price="",
-                    hash="",
-                    input="",
-                    nonce="",
-                    to_="someone",
-                    transaction_index="",
-                    value="",
-                    v="",
-                    r="",
-                    s="",
-                ),
-                block=Block(
+        self.__default_batch = [
+            (
+                "tx hash",
+                Block(
                     number="0x00",
                     hash="",
                     parent_hash="",
@@ -441,6 +262,7 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     state_root="",
                     receipts_root="",
                     miner="",
+                    mix_hash="",
                     difficulty="",
                     total_difficulty="",
                     extra_data="",
@@ -448,47 +270,31 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     gas_limit="",
                     gas_used="",
                     timestamp="",
-                    transactions=list(),
+                    transactions=list("tx hash"),
                     uncles=list(),
                 ),
             ),
-            QueueEmpty(),
         ]
-        self.__outbound_contract_queue = AsyncMock()
-        self.__outbound_token_queue = AsyncMock()
         self.__stats_service = MagicMock()
-        self.__event_bus = AsyncMock()
-        self.__processor = TransactionProcessor(
+        self.__processor = TransactionBatchProcessor(
             rpc_client=self.__rpc_client,
-            inbound_queue=self.__inbound_queue,
-            outbound_contract_queue=self.__outbound_contract_queue,
-            outbound_token_queue=self.__outbound_token_queue,
-            event_bus=self.__event_bus,
             stats_service=self.__stats_service,
-            rpc_batch_size=0,
-            max_batch_wait=0,
         )
 
-    async def __run_processor(self):
-        await self.__processor.stop()
-        await self.__processor.start()
-
-    async def test_triggers_stopped_event_in_event_bus(self):
-        # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__run_processor()
-        self.__event_bus.trigger.assert_called_once_with("transaction_processor_stopped")
-
     async def test_records_rpc_call_timer(self):
-        await self.__run_processor()
+        await self.__processor(self.__default_batch)
         assert_timer_run(self.__stats_service, "rpc_get_transaction_receipts")
 
     async def test_increments_stats_for_each_block(self):
         transactions = random.randint(1, 99)
         get_transaction_receipts_return_value = list()
-        for _ in range(transactions):
+        transaction_hashes = list()
+        for i in range(transactions):
+            transaction_hash = f"tx {i}"
+            transaction_hashes.append(transaction_hash)
             get_transaction_receipts_return_value.append(
                 TransactionReceipt(
-                    transaction_hash="",
+                    transaction_hash=transaction_hash,
                     transaction_index="",
                     block_hash="",
                     block_number="",
@@ -498,7 +304,7 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     gas_used="",
                     contract_address="",
                     logs=list(),
-                    logs_bloom="",
+                    logs_bloom="0x2",
                     root="",
                     status="",
                 )
@@ -506,7 +312,35 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         self.__rpc_client.get_transaction_receipts.return_value = (
             get_transaction_receipts_return_value
         )
-        await self.__run_processor()
+        batch = [
+            (
+                tx_hash,
+                Block(
+                    number="0x00",
+                    hash="",
+                    parent_hash="",
+                    nonce="",
+                    sha3_uncles="",
+                    logs_bloom="0x00",
+                    transactions_root="",
+                    state_root="",
+                    receipts_root="",
+                    miner="",
+                    mix_hash="",
+                    difficulty="",
+                    total_difficulty="",
+                    extra_data="",
+                    size="",
+                    gas_limit="",
+                    gas_used="",
+                    timestamp="",
+                    transactions=transaction_hashes,
+                    uncles=list(),
+                ),
+            )
+            for tx_hash in transaction_hashes
+        ]
+        await self.__processor(batch)
         self.assertEqual(
             transactions,
             self.__stats_service.increment.call_count,
@@ -514,101 +348,111 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.__stats_service.increment.assert_called_with("transactions_processed")
 
-    async def test_puts_contracts_on_contract_queue(self):
-        cto = ContractTransportObject(
-            transaction=Transaction(
-                block_hash="",
-                block_number="",
-                from_="",
-                gas="",
-                gas_price="",
-                hash="",
-                input="",
-                nonce="",
-                to_="someone",
-                transaction_index="",
-                value="",
-                v="",
-                r="",
-                s="",
-            ),
-            block=Block(
-                number="0x00",
-                hash="",
-                parent_hash="",
-                nonce="",
-                sha3_uncles="",
-                logs_bloom="",
-                transactions_root="",
-                state_root="",
-                receipts_root="",
-                miner="",
-                difficulty="",
-                total_difficulty="",
-                extra_data="",
-                size="",
-                gas_limit="",
-                gas_used="",
-                timestamp="",
-                transactions=list(),
-                uncles=list(),
-            ),
+    async def test_returns_contracts_as_contract_with_transaction_receipt_attached(self):
+        block = Block(
+            number="0x00",
+            hash="",
+            parent_hash="",
+            nonce="",
+            sha3_uncles="",
+            logs_bloom="",
+            transactions_root="",
+            state_root="",
+            receipts_root="",
+            miner="",
+            mix_hash="",
+            difficulty="",
+            total_difficulty="",
+            extra_data="",
+            size="",
+            gas_limit="",
+            gas_used="",
+            timestamp="",
+            transactions=list(),
+            uncles=list(),
         )
-        self.__inbound_queue.get_nowait.side_effect = [cto, QueueEmpty()]
-        await self.__run_processor()
-        self.__outbound_contract_queue.put.assert_called_once()
+        cto = ("tx hash", block)
+        transaction_receipt = TransactionReceipt(
+            transaction_hash="tx hash",
+            transaction_index="",
+            block_hash="",
+            block_number="",
+            from_="",
+            to_=None,
+            cumulative_gas_used="",
+            gas_used="",
+            contract_address="",
+            logs=list(),
+            logs_bloom="0x00",
+            root="",
+            status="",
+        )
+        self.__rpc_client.get_transaction_receipts.return_value = [transaction_receipt]
+        actual = await self.__processor([cto])
+        expected = [
+            ContractTransportObject(
+                block=block,
+                transaction_receipt=transaction_receipt,
+            )
+        ]
+        self.assertEqual(expected, actual)
 
     @patch("chainconductor.blockcrawler.processors.BloomFilter")
-    async def test_puts_tokens_on_token_queue_if_transfer_event_in_logs_bloom(self, bloom_patch):
-        tto = TokenTransportObject(
-            transaction=Transaction(
-                block_hash="",
-                block_number="",
-                from_="",
-                gas="",
-                gas_price="",
-                hash="",
-                input="",
-                nonce="",
-                to_="someone",
-                transaction_index="",
-                value="",
-                v="",
-                r="",
-                s="",
-            ),
-            block=Block(
-                number="0x00",
-                hash="",
-                parent_hash="",
-                nonce="",
-                sha3_uncles="",
-                logs_bloom="0x00",
-                transactions_root="",
-                state_root="",
-                receipts_root="",
-                miner="",
-                difficulty="",
-                total_difficulty="",
-                extra_data="",
-                size="",
-                gas_limit="",
-                gas_used="",
-                timestamp="",
-                transactions=list(),
-                uncles=list(),
-            ),
+    async def test_returns_tokens_with_receipt_if_transfer_event_in_logs_bloom(self, bloom_patch):
+        block = Block(
+            number="0x00",
+            hash="",
+            parent_hash="",
+            nonce="",
+            sha3_uncles="",
+            logs_bloom="0x00",
+            transactions_root="",
+            state_root="",
+            receipts_root="",
+            miner="",
+            mix_hash="",
+            difficulty="",
+            total_difficulty="",
+            extra_data="",
+            size="",
+            gas_limit="",
+            gas_used="",
+            timestamp="",
+            transactions=list("tx hash"),
+            uncles=list(),
         )
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty()]
+        tto = ("tx hash", block)
+        transaction_receipt = TransactionReceipt(
+            transaction_hash="tx hash",
+            transaction_index="",
+            block_hash="",
+            block_number="",
+            from_="",
+            to_="",
+            cumulative_gas_used="",
+            gas_used="",
+            contract_address="",
+            logs=list(),
+            logs_bloom="0x00",
+            root="",
+            status="",
+        )
+        self.__rpc_client.get_transaction_receipts.return_value = [transaction_receipt]
         bloom_patch.return_value.__contains__.return_value = True
-        await self.__run_processor()
-        self.__outbound_token_queue.put.assert_called_once()
+        actual = await self.__processor([tto])
+        expected = [
+            TokenTransportObject(
+                block=block,
+                transaction_receipt=transaction_receipt,
+            )
+        ]
+        self.assertEqual(expected, actual)
 
     @patch("chainconductor.blockcrawler.processors.BloomFilter")
     async def test_constructs_bloom_filter_with_transaction_logs_bloom(self, bloom_patch):
         self.__rpc_client.get_transaction_receipts.return_value = [
             TransactionReceipt(
-                transaction_hash="",
+                transaction_hash="tx",
                 transaction_index="",
                 block_hash="",
                 block_number="",
@@ -623,24 +467,9 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 status="",
             )
         ]
-        tto = TokenTransportObject(
-            transaction=Transaction(
-                block_hash="",
-                block_number="",
-                from_="",
-                gas="",
-                gas_price="",
-                hash="",
-                input="",
-                nonce="",
-                to_="someone",
-                transaction_index="",
-                value="",
-                v="",
-                r="",
-                s="",
-            ),
-            block=Block(
+        tto = (
+            "tx",
+            Block(
                 number="0x00",
                 hash="",
                 parent_hash="",
@@ -651,6 +480,7 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 state_root="",
                 receipts_root="",
                 miner="",
+                mix_hash="",
                 difficulty="",
                 total_difficulty="",
                 extra_data="",
@@ -658,85 +488,47 @@ class TransactionProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 gas_limit="",
                 gas_used="",
                 timestamp="",
-                transactions=list(),
+                transactions=list("tx"),
                 uncles=list(),
             ),
         )
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty()]
-        await self.__run_processor()
+        await self.__processor([tto])
         bloom_patch.assert_called_once_with(int("0x998877665544332211", 16))
 
     @patch("chainconductor.blockcrawler.processors.BloomFilter")
     async def test_checks_bloom_filter_against_transfer_event_hash(self, bloom_patch):
-        tto = TokenTransportObject(
-            transaction=Transaction(
-                block_hash="",
-                block_number="",
-                from_="",
-                gas="",
-                gas_price="",
-                hash="",
-                input="",
-                nonce="",
-                to_="someone",
-                transaction_index="",
-                value="",
-                v="",
-                r="",
-                s="",
-            ),
-            block=Block(
-                number="0x00",
-                hash="",
-                parent_hash="",
-                nonce="",
-                sha3_uncles="",
-                logs_bloom="",
-                transactions_root="",
-                state_root="",
-                receipts_root="",
-                miner="",
-                difficulty="",
-                total_difficulty="",
-                extra_data="",
-                size="",
-                gas_limit="",
-                gas_used="",
-                timestamp="",
-                transactions=list(),
-                uncles=list(),
-            ),
+        block = Block(
+            number="0x00",
+            hash="",
+            parent_hash="",
+            nonce="",
+            sha3_uncles="",
+            logs_bloom="",
+            transactions_root="",
+            state_root="",
+            receipts_root="",
+            miner="",
+            mix_hash="",
+            difficulty="",
+            total_difficulty="",
+            extra_data="",
+            size="",
+            gas_limit="",
+            gas_used="",
+            timestamp="",
+            transactions=list("tx hash"),
+            uncles=list(),
         )
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty()]
-        await self.__run_processor()
-        expected = decode_hex("0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925")
+        await self.__processor([("tx hash", block)])
+        expected = decode_hex("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
         bloom_patch.return_value.__contains__.assert_called_once_with(expected)
 
 
 @ddt.ddt
-class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+class TokenTransferPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__inbound_queue = MagicMock()
-        self.__outbound_queue = AsyncMock()
-
-        self.__inbound_queue.get_nowait.side_effect = [
+        self.__default_batch = [
             TokenTransportObject(
-                transaction=Transaction(
-                    block_hash="",
-                    block_number="",
-                    from_="",
-                    gas="",
-                    gas_price="",
-                    hash="",
-                    input="",
-                    nonce="",
-                    to_="someone",
-                    transaction_index="",
-                    value="",
-                    v="",
-                    r="",
-                    s="",
-                ),
                 transaction_receipt=TransactionReceipt(
                     transaction_hash="",
                     transaction_index="",
@@ -763,6 +555,7 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     state_root="",
                     receipts_root="",
                     miner="",
+                    mix_hash="",
                     difficulty="",
                     total_difficulty="",
                     extra_data="",
@@ -774,30 +567,23 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     uncles=list(),
                 ),
             ),
-            QueueEmpty(),
         ]
 
         self.__dynamodb = AsyncMock()
         self.__dynamodb.Table.return_value.batch_writer = async_context_manager_mock()
         self.__stats_service = MagicMock()
-        self.__event_bus = AsyncMock()
-        self.__processor = TokenTransferProcessor(
+        self.__logger = MagicMock()
+        self.__blockchain = "expected blockchain"
+        self.__processor = TokenTransferPersistenceBatchProcessor(
             dynamodb=self.__dynamodb,
             stats_service=self.__stats_service,
-            event_bus=self.__event_bus,
-            inbound_queue=self.__inbound_queue,
-            outbound_queue=self.__outbound_queue,
-            dynamodb_batch_size=0,
-            max_batch_wait=0,
+            logger=self.__logger,
+            blockchain=self.__blockchain[:],
         )
-
-    async def __run_processor(self):
-        await self.__processor.stop()
-        await self.__processor.start()
 
     async def test_increments_stats_for_each_token(self):
         tokens = random.randint(1, 99)
-        inbound_queue_gets = list()
+        batch_items = list()
 
         log_topics = [
             ERC721Events.TRANSFER.event_hash,
@@ -807,24 +593,8 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         ]
 
         for _ in range(tokens):
-            inbound_queue_gets.append(
+            batch_items.append(
                 TokenTransportObject(
-                    transaction=Transaction(
-                        block_hash="",
-                        block_number="",
-                        from_="",
-                        gas="",
-                        gas_price="",
-                        hash="",
-                        input="",
-                        nonce="",
-                        to_="someone",
-                        transaction_index="",
-                        value="",
-                        v="",
-                        r="",
-                        s="",
-                    ),
                     transaction_receipt=TransactionReceipt(
                         transaction_hash="",
                         transaction_index="",
@@ -863,6 +633,7 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                         state_root="",
                         receipts_root="",
                         miner="",
+                        mix_hash="",
                         difficulty="",
                         total_difficulty="",
                         extra_data="",
@@ -875,25 +646,17 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     ),
                 )
             )
-        inbound_queue_gets.append(QueueEmpty())
-        self.__inbound_queue.get_nowait.side_effect = inbound_queue_gets
-        # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.assertEqual(
             tokens,
             self.__stats_service.increment.call_count,
             "Expected as many increment calls as there were transactions",
         )
-        self.__stats_service.increment.assert_called_with("token_transfers_processed")
-
-    async def test_triggers_stopped_event_in_event_bus(self):
-        # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__run_processor()
-        self.__event_bus.trigger.assert_called_once_with("token_transfer_processor_stopped")
+        self.__stats_service.increment.assert_called_with("token_transfers_persisted")
 
     async def test_records_dynamodb_timer_in_stats(self):
         # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__run_processor()
+        await self.__processor(self.__default_batch)
         assert_timer_run(self.__stats_service, "dynamodb_write_token_transfers")
 
     async def test_stores_correct_data(self):
@@ -904,22 +667,6 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             encode(["uint256"], [1]).hex(),
         ]
         tto = TokenTransportObject(
-            transaction=Transaction(
-                block_hash="",
-                block_number="",
-                from_="wrong from",
-                gas="",
-                gas_price="",
-                hash="",
-                input="",
-                nonce="",
-                to_="wrong to",
-                transaction_index="",
-                value="",
-                v="",
-                r="",
-                s="",
-            ),
             transaction_receipt=TransactionReceipt(
                 transaction_hash="transaction hash",
                 transaction_index="",
@@ -958,6 +705,7 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 state_root="",
                 receipts_root="",
                 miner="",
+                mix_hash="",
                 difficulty="",
                 total_difficulty="",
                 extra_data="",
@@ -970,12 +718,11 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty]
-        await self.__run_processor()
+        await self.__processor([tto])
         context_manager = self.__dynamodb.Table.return_value.batch_writer.return_value.__aenter__
-        context_manager.return_value.put_item.assert_called_once_with(
+        context_manager.return_value.put_item.assert_awaited_once_with(
             Item={
-                "blockchain": "Ethereum Mainnet",
+                "blockchain": self.__blockchain,
                 "transaction_log_index_hash": keccak("0x200x100x30".encode("utf8")).hex(),
                 "collection_id": "to address",
                 "token_id": "1",
@@ -997,22 +744,6 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         log_data = encode(["uint256"], [1]).hex()
 
         tto = TokenTransportObject(
-            transaction=Transaction(
-                block_hash="",
-                block_number="",
-                from_="wrong from",
-                gas="",
-                gas_price="",
-                hash="",
-                input="",
-                nonce="",
-                to_="wrong to",
-                transaction_index="",
-                value="",
-                v="",
-                r="",
-                s="",
-            ),
             transaction_receipt=TransactionReceipt(
                 transaction_hash="transaction hash",
                 transaction_index="",
@@ -1051,6 +782,7 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 state_root="",
                 receipts_root="",
                 miner="",
+                mix_hash="",
                 difficulty="",
                 total_difficulty="",
                 extra_data="",
@@ -1063,11 +795,10 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty]
-        await self.__run_processor()
+        actual = await self.__processor([tto])
         context_manager = self.__dynamodb.Table.return_value.batch_writer.return_value.__aenter__
         context_manager.return_value.put_item.assert_not_called()
-        self.__outbound_queue.put.assert_not_called()
+        self.assertEqual([], actual)
 
     @ddt.data(
         # Contract to 0
@@ -1082,9 +813,7 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         ),
     )
     @ddt.unpack
-    async def test_does_not_place_internal_transfer_events_onm_outbound_queue(
-        self, from_address, to_address
-    ):
+    async def test_does_not_add_internal_transfer_events_to_result(self, from_address, to_address):
         log_topics = [
             ERC721Events.TRANSFER.event_hash,
             encode(["address"], [from_address]).hex(),
@@ -1093,22 +822,6 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         ]
 
         tto = TokenTransportObject(
-            transaction=Transaction(
-                block_hash="",
-                block_number="",
-                from_="wrong from",
-                gas="",
-                gas_price="",
-                hash="",
-                input="",
-                nonce="",
-                to_="wrong to",
-                transaction_index="",
-                value="",
-                v="",
-                r="",
-                s="",
-            ),
             transaction_receipt=TransactionReceipt(
                 transaction_hash="transaction hash",
                 transaction_index="",
@@ -1147,6 +860,7 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 state_root="",
                 receipts_root="",
                 miner="",
+                mix_hash="",
                 difficulty="",
                 total_difficulty="",
                 extra_data="",
@@ -1159,9 +873,8 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty]
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_not_called()
+        actual = await self.__processor([tto])
+        self.assertEqual([], actual)
 
     async def test_does_not_process_non_transfer_events(self):
         log_topics = [
@@ -1172,22 +885,6 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         ]
 
         tto = TokenTransportObject(
-            transaction=Transaction(
-                block_hash="",
-                block_number="",
-                from_="wrong from",
-                gas="",
-                gas_price="",
-                hash="",
-                input="",
-                nonce="",
-                to_="wrong to",
-                transaction_index="",
-                value="",
-                v="",
-                r="",
-                s="",
-            ),
             transaction_receipt=TransactionReceipt(
                 transaction_hash="transaction hash",
                 transaction_index="",
@@ -1226,6 +923,7 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 state_root="",
                 receipts_root="",
                 miner="",
+                mix_hash="",
                 difficulty="",
                 total_difficulty="",
                 extra_data="",
@@ -1238,40 +936,24 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty]
-        await self.__run_processor()
+        await self.__processor([tto])
         context_manager = self.__dynamodb.Table.return_value.batch_writer.return_value.__aenter__
         context_manager.return_value.put_item.assert_not_called()
-        self.__outbound_queue.put.assert_not_called()
+        actual = await self.__processor([tto])
+        self.assertEqual([], actual)
 
     @ddt.data(
         "0x759a401a287ffad0fa2deae15fe3b6169506d657", "0x0000000000000000000000000000000000000000"
     )
-    async def test_token_transaction_from_minting_address_to_outbound_queue(self, from_address):
+    async def test_token_transaction_from_minting_address_added_to_result(self, from_address):
         log_topics = [
             ERC721Events.TRANSFER.event_hash,
             encode(["address"], [from_address]).hex(),
             encode(["address"], ["0xcd5db1feb8758b9bc8d3172d3f229b29ba47024f"]).hex(),
-            encode(["uint256"], [1]).hex(),
+            encode(["uint256"], [11247]).hex(),
         ]
 
         tto = TokenTransportObject(
-            transaction=Transaction(
-                block_hash="",
-                block_number="",
-                from_=from_address,
-                gas="",
-                gas_price="",
-                hash="",
-                input="",
-                nonce="",
-                to_="someone",
-                transaction_index="",
-                value="",
-                v="",
-                r="",
-                s="",
-            ),
             transaction_receipt=TransactionReceipt(
                 transaction_hash="transaction hash",
                 transaction_index="",
@@ -1310,6 +992,7 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 state_root="",
                 receipts_root="",
                 miner="",
+                mix_hash="",
                 difficulty="",
                 total_difficulty="",
                 extra_data="",
@@ -1321,33 +1004,194 @@ class TokenTransferProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 uncles=list(),
             ),
         )
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty()]
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_called_once()
-
-
-class ContractPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self) -> None:
-        self.__inbound_queue = MagicMock()
-
-        self.__inbound_queue.get_nowait.side_effect = [
-            ContractTransportObject(
-                transaction=Transaction(
-                    block_hash="",
-                    block_number="0x01",
-                    from_="",
-                    gas="",
-                    gas_price="",
-                    hash="",
-                    input="",
-                    nonce="",
-                    to_="someone",
-                    transaction_index="0x02",
-                    value="",
-                    v="",
-                    r="",
-                    s="",
+        actual = await self.__processor([tto])
+        expected = [
+            TokenTransportObject(
+                block=tto.block,
+                transaction_receipt=tto.transaction_receipt,
+                token=Token(
+                    collection_id="0x759a401a287ffad0fa2deae15fe3b6169506d657",
+                    original_owner="0xcd5db1feb8758b9bc8d3172d3f229b29ba47024f",
+                    token_id=HexInt("0x2bef"),
+                    timestamp=HexInt("0x0"),
                 ),
+            )
+        ]
+        self.assertEqual(expected, actual)
+
+
+class ContractBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__rpc_client = AsyncMock(RPCClient)
+        self.__rpc_client.calls.return_value = dict()
+        self.__stats_service = AsyncMock(StatsService)
+        self.__processor = ContractBatchProcessor(self.__rpc_client, self.__stats_service)
+        transaction_receipt = TransactionReceipt(
+            transaction_hash="",
+            transaction_index="",
+            block_number="",
+            block_hash="",
+            from_="0x99",
+            to_="",
+            cumulative_gas_used="",
+            gas_used="",
+            contract_address="contract address",
+            logs=list(),
+            logs_bloom="",
+            root="",
+            status="",
+        )
+        self.__default_batch = [ContractTransportObject(transaction_receipt=transaction_receipt)]
+
+    async def test_records_time_for_rpc_call(self):
+        await self.__processor(self.__default_batch)
+        assert_timer_run(self.__stats_service, ContractBatchProcessor.RPC_TIMER_CALL_CONTRACT_INFO)
+
+    async def test_gets_contract_data(self):
+        await self.__processor(self.__default_batch)
+        contract_address = self.__default_batch[0].transaction_receipt.contract_address
+        self.__rpc_client.calls.assert_any_await(
+            [
+                EthCall(
+                    ERC165InterfaceID.ERC721.value,
+                    None,
+                    contract_address,
+                    ERC165Functions.SUPPORTS_INTERFACE,
+                    [ERC165InterfaceID.ERC721.bytes],
+                ),
+                EthCall(
+                    ERC165InterfaceID.ERC721_METADATA.value,
+                    None,
+                    contract_address,
+                    ERC165Functions.SUPPORTS_INTERFACE,
+                    [ERC165InterfaceID.ERC721_METADATA.bytes],
+                ),
+                EthCall(
+                    ERC165InterfaceID.ERC721_ENUMERABLE.value,
+                    None,
+                    contract_address,
+                    ERC165Functions.SUPPORTS_INTERFACE,
+                    [ERC165InterfaceID.ERC721_ENUMERABLE.bytes],
+                ),
+                EthCall(
+                    ERC165InterfaceID.ERC1155.value,
+                    None,
+                    contract_address,
+                    ERC165Functions.SUPPORTS_INTERFACE,
+                    [ERC165InterfaceID.ERC1155.bytes],
+                ),
+                EthCall(
+                    ERC165InterfaceID.ERC1155_METADATA_URI.value,
+                    None,
+                    contract_address,
+                    ERC165Functions.SUPPORTS_INTERFACE,
+                    [ERC165InterfaceID.ERC1155_METADATA_URI.bytes],
+                ),
+                EthCall(
+                    "symbol",
+                    None,
+                    self.__default_batch[0].transaction_receipt.contract_address,
+                    ERC721MetadataFunctions.SYMBOL,
+                ),
+                EthCall(
+                    "name",
+                    None,
+                    self.__default_batch[0].transaction_receipt.contract_address,
+                    ERC721MetadataFunctions.NAME,
+                ),
+                EthCall(
+                    "total_supply",
+                    None,
+                    self.__default_batch[0].transaction_receipt.contract_address,
+                    ERC721EnumerableFunctions.TOTAL_SUPPLY,
+                ),
+            ]
+        )
+
+    async def test_adds_all_interfaces_returning_true_to_contract(self):
+        self.__rpc_client.calls.return_value = {
+            ERC165InterfaceID.ERC721.value: (True,),
+            ERC165InterfaceID.ERC721_METADATA.value: (False,),
+            ERC165InterfaceID.ERC721_ENUMERABLE.value: (True,),
+            ERC165InterfaceID.ERC1155.value: (False,),
+            ERC165InterfaceID.ERC1155_METADATA_URI.value: (False,),
+        }
+        actual = await self.__processor(self.__default_batch)
+        expected = [ERC165InterfaceID.ERC721, ERC165InterfaceID.ERC721_ENUMERABLE]
+        self.assertEqual(expected, actual[0].contract.interfaces)
+
+    async def test_adds_no_interfaces_returning_error(self):
+        self.__rpc_client.calls.return_value = {
+            ERC165InterfaceID.ERC721.value: (True,),
+            ERC165InterfaceID.ERC721_METADATA.value: RPCServerError("", "", "", ""),
+            ERC165InterfaceID.ERC721_ENUMERABLE.value: (True,),
+            ERC165InterfaceID.ERC1155.value: RPCServerError("", "", "", ""),
+            ERC165InterfaceID.ERC1155_METADATA_URI.value: RPCServerError("", "", "", ""),
+        }
+        actual = await self.__processor(self.__default_batch)
+        expected = [ERC165InterfaceID.ERC721, ERC165InterfaceID.ERC721_ENUMERABLE]
+        self.assertEqual(expected, actual[0].contract.interfaces)
+
+    async def test_sets_name_when_not_error(self):
+        expected = "Expected Name"
+        self.__rpc_client.calls.return_value = {
+            "name": (expected[:],),
+            ERC165InterfaceID.ERC721.value: (True,),
+        }
+        actual = await self.__processor(self.__default_batch)
+        self.assertEqual(expected, actual[0].contract.name)
+
+    async def test_sets_error_for_name_when_error(self):
+        self.__rpc_client.calls.return_value = {
+            "name": RPCServerError("", "", "", ""),
+            ERC165InterfaceID.ERC721.value: (True,),
+        }
+        actual = await self.__processor(self.__default_batch)
+        self.assertEqual("#ERROR", actual[0].contract.name)
+
+    async def test_sets_symbol_when_not_error(self):
+        expected = "Expected Symbol"
+        self.__rpc_client.calls.return_value = {
+            "symbol": (expected[:],),
+            ERC165InterfaceID.ERC721.value: (True,),
+        }
+        actual = await self.__processor(self.__default_batch)
+        self.assertEqual(expected, actual[0].contract.symbol)
+
+    async def test_sets_error_for_symbol_when_error(self):
+        self.__rpc_client.calls.return_value = {
+            "symbol": RPCServerError("", "", "", ""),
+            ERC165InterfaceID.ERC721.value: (True,),
+        }
+        actual = await self.__processor(self.__default_batch)
+        self.assertEqual("#ERROR", actual[0].contract.symbol)
+
+    async def test_sets_total_supply_when_not_error(self):
+        expected = "Expected Supply"
+        self.__rpc_client.calls.return_value = {
+            "total_supply": (expected[:],),
+            ERC165InterfaceID.ERC721.value: (True,),
+        }
+        actual = await self.__processor(self.__default_batch)
+        self.assertEqual(expected, actual[0].contract.total_supply)
+
+    async def test_sets_error_for_total_supply_when_error(self):
+        self.__rpc_client.calls.return_value = {
+            "total_supply": RPCServerError("", "", "", ""),
+            ERC165InterfaceID.ERC721.value: (True,),
+        }
+        actual = await self.__processor(self.__default_batch)
+        self.assertEqual("#ERROR", actual[0].contract.total_supply)
+
+    async def test_does_not_return_contract_when_not_721(self):
+        actual = await self.__processor(self.__default_batch)
+        self.assertEqual([], actual)
+
+
+class CollectionPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__default_batch = [
+            ContractTransportObject(
                 transaction_receipt=TransactionReceipt(
                     transaction_hash="",
                     transaction_index="0x02",
@@ -1374,6 +1218,7 @@ class ContractPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     state_root="",
                     receipts_root="",
                     miner="",
+                    mix_hash="",
                     difficulty="",
                     total_difficulty="",
                     extra_data="",
@@ -1393,48 +1238,24 @@ class ContractPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     total_supply=0,
                 ),
             ),
-            QueueEmpty(),
         ]
 
         self.__dynamodb = AsyncMock()
         self.__dynamodb.Table.return_value.batch_writer = async_context_manager_mock()
         self.__stats_service = MagicMock()
-        self.__event_bus = AsyncMock()
-        self.__processor = CollectionPersistenceProcessor(
+        self.__blockchain = "expected blockchain"
+        self.__processor = CollectionPersistenceBatchProcessor(
             dynamodb=self.__dynamodb,
             stats_service=self.__stats_service,
-            event_bus=self.__event_bus,
-            inbound_queue=self.__inbound_queue,
-            dynamodb_batch_size=0,
-            max_batch_wait=0,
+            blockchain=self.__blockchain[:],
         )
-
-    async def __run_processor(self):
-        await self.__processor.stop()
-        await self.__processor.start()
 
     async def test_increments_stats_for_each_token(self):
         tokens = random.randint(1, 99)
-        inbound_queue_gets = list()
+        batch_items = list()
         for _ in range(tokens):
-            inbound_queue_gets.append(
+            batch_items.append(
                 ContractTransportObject(
-                    transaction=Transaction(
-                        block_hash="",
-                        block_number="0x01",
-                        from_="",
-                        gas="",
-                        gas_price="",
-                        hash="",
-                        input="",
-                        nonce="",
-                        to_="",
-                        transaction_index="0x02",
-                        value="",
-                        v="",
-                        r="",
-                        s="",
-                    ),
                     transaction_receipt=TransactionReceipt(
                         transaction_hash="",
                         transaction_index="0x02",
@@ -1461,6 +1282,7 @@ class ContractPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                         state_root="",
                         receipts_root="",
                         miner="",
+                        mix_hash="",
                         difficulty="",
                         total_difficulty="",
                         extra_data="",
@@ -1481,10 +1303,7 @@ class ContractPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     ),
                 )
             )
-        inbound_queue_gets.append(QueueEmpty())
-        self.__inbound_queue.get_nowait.side_effect = inbound_queue_gets
-        # If we don't tell the processor to stop before it starts, it will run forever
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.assertEqual(
             tokens,
             self.__stats_service.increment.call_count,
@@ -1492,33 +1311,13 @@ class ContractPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.__stats_service.increment.assert_called_with("collection_persisted")
 
-    async def test_triggers_stopped_event_in_event_bus(self):
-        await self.__run_processor()
-        self.__event_bus.trigger.assert_called_once_with("collection_persistence_stopped")
-
     async def test_records_dynamodb_timer_in_stats(self):
-        await self.__run_processor()
+        await self.__processor(self.__default_batch)
         assert_timer_run(self.__stats_service, "dynamodb_write_collections")
 
     async def test_stores_correct_data(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch = [
             ContractTransportObject(
-                transaction=Transaction(
-                    block_hash="",
-                    block_number="0x01",
-                    from_="",
-                    gas="",
-                    gas_price="",
-                    hash="transaction hash",
-                    input="",
-                    nonce="",
-                    to_="someone",
-                    transaction_index="0x02",
-                    value="",
-                    v="",
-                    r="",
-                    s="",
-                ),
                 transaction_receipt=TransactionReceipt(
                     transaction_hash="transaction hash",
                     transaction_index="0x02",
@@ -1545,6 +1344,7 @@ class ContractPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     state_root="",
                     receipts_root="",
                     miner="",
+                    mix_hash="",
                     difficulty="",
                     total_difficulty="",
                     extra_data="",
@@ -1564,14 +1364,13 @@ class ContractPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     total_supply=99,
                 ),
             ),
-            QueueEmpty(),
         ]
 
-        await self.__run_processor()
+        await self.__processor(batch)
         context_manager = self.__dynamodb.Table.return_value.batch_writer.return_value.__aenter__
-        context_manager.return_value.put_item.assert_called_once_with(
+        context_manager.return_value.put_item.assert_awaited_once_with(
             Item={
-                "blockchain": "Ethereum Mainnet",
+                "blockchain": self.__blockchain,
                 "collection_id": "Expected Contract Address",
                 "block_number": 1,
                 "transaction_index": 2,
@@ -1586,10 +1385,9 @@ class ContractPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
 
-class TokenMetadataProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+class TokenMetadataUriBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__inbound_queue = MagicMock()
-        self.__inbound_queue.get_nowait.side_effect = [
+        self.__default_batch = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -1598,34 +1396,20 @@ class TokenMetadataProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     timestamp=HexInt("0x40"),
                 )
             ),
-            QueueEmpty(),
         ]
-        self.__outbound_gathering_queue = AsyncMock()
-        self.__outbound_persistence_queue = AsyncMock()
         self.__rpc_client = AsyncMock()
-        self.__rpc_client.calls.return_value = {"0x30-721": (None,), "0x30-1155": (None,)}
+        self.__rpc_client.calls.return_value = {"0x10-0x30-721": (None,), "0x10-0x30-1155": (None,)}
         self.__stats_service = MagicMock()
-        self.__event_bus = AsyncMock()
-        self.__processor = TokenMetadataProcessor(
+        self.__processor = TokenMetadataUriBatchProcessor(
             stats_service=self.__stats_service,
-            event_bus=self.__event_bus,
-            inbound_queue=self.__inbound_queue,
-            outbound_token_gathering_queue=self.__outbound_gathering_queue,
-            outbound_token_persistence_queue=self.__outbound_persistence_queue,
             rpc_client=self.__rpc_client,
-            rpc_batch_size=99,
-            max_batch_wait=99,
         )
-
-    async def __run_processor(self):
-        await self.__processor.stop()
-        await self.__processor.start()
 
     async def test_increments_stats_for_each_token(self):
         tokens = random.randint(1, 99)
-        inbound_queue_gets = list()
+        batch_items = list()
         for _ in range(tokens):
-            inbound_queue_gets.append(
+            batch_items.append(
                 TokenTransportObject(
                     token=Token(
                         collection_id="0x10",
@@ -1635,25 +1419,19 @@ class TokenMetadataProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 )
             )
-        inbound_queue_gets.append(QueueEmpty())
-        self.__inbound_queue.get_nowait.side_effect = inbound_queue_gets
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.assertEqual(
             tokens,
             self.__stats_service.increment.call_count,
             "Expected as many increment calls as there were tokens",
         )
-        self.__stats_service.increment.assert_called_with("token_metadata_processed")
-
-    async def test_triggers_stopped_event_in_event_bus(self):
-        await self.__run_processor()
-        self.__event_bus.trigger.assert_called_once_with("token_metadata_processor_stopped")
+        self.__stats_service.increment.assert_called_with("token_metadata_uris_processed")
 
     async def test_calls_721_and_1155_methods_with_correct_data_for_all_tokens(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
-                    collection_id="collection id 1",
+                    collection_id="0x03",
                     original_owner="",
                     token_id=HexInt("0x01"),
                     timestamp=HexInt("0x00"),
@@ -1661,188 +1439,114 @@ class TokenMetadataProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             ),
             TokenTransportObject(
                 token=Token(
-                    collection_id="collection id 2",
+                    collection_id="0x03",
                     original_owner="",
                     token_id=HexInt("0x02"),
                     timestamp=HexInt("0x00"),
                 )
             ),
-            QueueEmpty(),
         ]
         self.__rpc_client.calls.return_value = {
-            "0x01-721": (None,),
-            "0x01-1155": (None,),
-            "0x02-721": (None,),
-            "0x02-1155": (None,),
+            "0x03-0x01-721": (None,),
+            "0x03-0x01-1155": (None,),
+            "0x03-0x02-721": (None,),
+            "0x03-0x02-1155": (None,),
         }
-        await self.__run_processor()
-        self.__rpc_client.calls.assert_called_once_with(
+        await self.__processor(batch_items)
+        self.__rpc_client.calls.assert_awaited_once_with(
             [
-                EthCall(
-                    "0x01-721", None, "collection id 1", ERC721MetadataFunctions.TOKEN_URI, [1]
-                ),
-                EthCall("0x01-1155", None, "collection id 1", ERC1155MetadataURIFunctions.URI, [1]),
-                EthCall(
-                    "0x02-721", None, "collection id 2", ERC721MetadataFunctions.TOKEN_URI, [2]
-                ),
-                EthCall("0x02-1155", None, "collection id 2", ERC1155MetadataURIFunctions.URI, [2]),
+                EthCall("0x03-0x01-721", None, "0x03", ERC721MetadataFunctions.TOKEN_URI, [1]),
+                EthCall("0x03-0x01-1155", None, "0x03", ERC1155MetadataURIFunctions.URI, [1]),
+                EthCall("0x03-0x02-721", None, "0x03", ERC721MetadataFunctions.TOKEN_URI, [2]),
+                EthCall("0x03-0x02-1155", None, "0x03", ERC1155MetadataURIFunctions.URI, [2]),
             ]
         )
 
     async def test_uses_721_URI_when_1155_URI_not_present(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
-                    collection_id="collection id 1",
+                    collection_id="0x03",
                     original_owner="",
                     token_id=HexInt("0x01"),
                     timestamp=HexInt("0x00"),
                 )
             ),
-            QueueEmpty(),
         ]
         self.__rpc_client.calls.return_value = {
-            "0x01-721": ("721 URI",),
-            "0x01-1155": RPCError(
+            "0x03-0x01-721": ("721 URI",),
+            "0x03-0x01-1155": RPCServerError(
                 rpc_version="", error_code="", error_message="", request_id="0x01-1155"
             ),
         }
-        await self.__run_processor()
-        self.__outbound_gathering_queue.put.assert_called_once()
-        actual = self.__outbound_gathering_queue.put.call_args.args[0].token.metadata_uri
-        self.assertEqual("721 URI", actual)
+        actual = await self.__processor(batch_items)
+        self.assertEqual("721 URI", actual[0].token.metadata_uri)
 
     async def test_uses_1155_URI_when_present(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
-                    collection_id="collection id 1",
+                    collection_id="0x02",
                     original_owner="",
                     token_id=HexInt("0x01"),
                     timestamp=HexInt("0x00"),
                 )
             ),
-            QueueEmpty(),
         ]
         self.__rpc_client.calls.return_value = {
-            "0x01-721": ("721 URI",),
-            "0x01-1155": ("1155 URI",),
+            "0x02-0x01-721": ("721 URI",),
+            "0x02-0x01-1155": ("1155 URI",),
         }
-        await self.__run_processor()
-        self.__outbound_gathering_queue.put.assert_called_once()
-        actual = self.__outbound_gathering_queue.put.call_args.args[0].token.metadata_uri
-        self.assertEqual("1155 URI", actual)
+        actual = await self.__processor(batch_items)
+        self.assertEqual("1155 URI", actual[0].token.metadata_uri)
 
-    async def test_sets_none_and_puts_in_persistence_queue_when_no_uri_from_either(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+    async def test_sets_none_when_no_uri_from_either(self):
+        batch_items = [
             TokenTransportObject(
                 token=Token(
-                    collection_id="collection id 1",
+                    collection_id="0x02",
                     original_owner="",
                     token_id=HexInt("0x01"),
                     timestamp=HexInt("0x00"),
                 )
             ),
-            QueueEmpty(),
         ]
         self.__rpc_client.calls.return_value = {
-            "0x01-721": RPCError(
+            "0x02-0x01-721": RPCServerError(
                 rpc_version="", error_code="", error_message="", request_id="0x01-721"
             ),
-            "0x01-1155": RPCError(
+            "0x02-0x01-1155": RPCServerError(
                 rpc_version="", error_code="", error_message="", request_id="0x01-1155"
             ),
         }
-        await self.__run_processor()
         self.__rpc_client.calls.return_value = {
-            "0x01-721": (None,),
-            "0x01-1155": (None,),
+            "0x02-0x01-721": (None,),
+            "0x02-0x01-1155": (None,),
         }
-        self.__outbound_persistence_queue.put.assert_called_once()
-        actual = self.__outbound_persistence_queue.put.call_args.args[0].token.metadata_uri
-        self.assertEqual(None, actual)
-
-    async def test_token_transaction_direct_to_persistence_queue_for_invalid_token_id(self):
-        tto = TokenTransportObject(
-            block=Block(
-                number="0x00",
-                hash="",
-                parent_hash="",
-                nonce="",
-                sha3_uncles="",
-                logs_bloom="",
-                transactions_root="",
-                state_root="",
-                receipts_root="",
-                miner="",
-                difficulty="",
-                total_difficulty="",
-                extra_data="",
-                size="",
-                gas_limit="",
-                gas_used="",
-                timestamp="0x0",
-                transactions=list(),
-                uncles=list(),
-            ),
-            token=Token(
-                collection_id="collection ID",
-                original_owner="original owner",
-                token_id=HexInt(
-                    "0x10000000000000000000000000000000000000000000000000000000000000000"
-                ),
-                timestamp=HexInt("0x11"),
-            ),
-        )
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty()]
-        await self.__run_processor()
-        self.__outbound_persistence_queue.put.assert_called_once_with(tto)
+        actual = await self.__processor(batch_items)
+        self.assertEqual(None, actual[0].token.metadata_uri)
 
 
-class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__inbound_queue = MagicMock()
-        self.__inbound_queue.get_nowait.side_effect = [
-            TokenTransportObject(
-                token=Token(
-                    collection_id="0x10",
-                    original_owner="0x20",
-                    token_id=HexInt("0x30"),
-                    timestamp=HexInt("0x40"),
-                    metadata_uri="metadata URI",
-                )
-            ),
-            QueueEmpty(),
-        ]
-        self.__outbound_queue = AsyncMock()
         self.__rpc_client = AsyncMock()
         self.__stats_service = MagicMock()
-        self.__event_bus = AsyncMock()
-        self.__http_batch_client = AsyncMock()
-        self.__ipfs_batch_client = AsyncMock()
-        self.__arweave_batch_client = AsyncMock()
+        self.__http_data_client = AsyncMock()
+        self.__ipfs_data_client = AsyncMock()
+        self.__arweave_data_client = AsyncMock()
 
-        self.__processor = TokenMetadataGatheringProcessor(
+        self.__processor = TokenMetadataRetrievalBatchProcessor(
             stats_service=self.__stats_service,
-            event_bus=self.__event_bus,
-            inbound_queue=self.__inbound_queue,
-            outbound_queue=self.__outbound_queue,
-            http_batch_client=self.__http_batch_client,
-            ipfs_batch_client=self.__ipfs_batch_client,
-            arweave_batch_client=self.__arweave_batch_client,
-            http_batch_size=99,
-            max_batch_wait=99,
+            http_data_client=self.__http_data_client,
+            ipfs_data_client=self.__ipfs_data_client,
+            arweave_data_client=self.__arweave_data_client,
         )
-
-    async def __run_processor(self):
-        await self.__processor.stop()
-        await self.__processor.start()
 
     async def test_increments_stats_for_each_token(self):
         tokens = random.randint(1, 99)
-        inbound_queue_gets = list()
+        batch_items = list()
         for _ in range(tokens):
-            inbound_queue_gets.append(
+            batch_items.append(
                 TokenTransportObject(
                     token=Token(
                         collection_id="0x10",
@@ -1853,30 +1557,38 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 )
             )
-        inbound_queue_gets.append(QueueEmpty())
-        self.__inbound_queue.get_nowait.side_effect = inbound_queue_gets
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.assertEqual(
             tokens,
             len(
                 [
                     a
                     for a in self.__stats_service.increment.call_args_list
-                    if a == (("token_metadata_gathering_processed",),)
+                    if a == (("token_metadata_retrieves",),)
                 ]
             ),
             "Expected as many increment calls as there were tokens",
         )
-        self.__stats_service.increment.assert_called_with("token_metadata_gathering_processed")
+        self.__stats_service.increment.assert_called_with("token_metadata_retrieves")
 
-    async def test_triggers_stopped_event_in_event_bus(self):
-        await self.__run_processor()
-        self.__event_bus.trigger.assert_called_once_with(
-            "token_metadata_gathering_processor_stopped"
-        )
+    async def test_adds_encoding_error_stat_when_decode_error_raised(self):
+        batch_items = [
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x30"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="http://metadata.uri",
+                ),
+            ),
+        ]
+        self.__http_data_client.get.side_effect = UnicodeDecodeError("", b"", 1, 1, "")
+        await self.__processor(batch_items)
+        self.__stats_service.increment.assert_any_call("metadata_retrieval_encoding_error")
 
     async def test_adds_unsupported_stat_when_unsupported_protocol_in_uri(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -1886,13 +1598,57 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="unsupported://metadata.uri",
                 ),
             ),
-            QueueEmpty(),
         ]
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.__stats_service.increment.assert_any_call("metadata_retrieval_unsupported_protocol")
 
+    async def test_properly_handles_multiple_tokens_with_the_same_metadata_uri(self):
+        tto1 = TokenTransportObject(
+            token=Token(
+                collection_id="0x10",
+                original_owner="0x20",
+                token_id=HexInt("0x01"),
+                timestamp=HexInt("0x40"),
+                metadata_uri="http://metadata.uri",
+            ),
+        )
+        tto2 = TokenTransportObject(
+            token=Token(
+                collection_id="0x10",
+                original_owner="0x20",
+                token_id=HexInt("0x02"),
+                timestamp=HexInt("0x40"),
+                metadata_uri="http://metadata.uri",
+            ),
+        )
+        batch_items = [tto1, tto2]
+        tto1 = TokenTransportObject(
+            token=Token(
+                collection_id="0x10",
+                original_owner="0x20",
+                token_id=HexInt("0x01"),
+                timestamp=HexInt("0x40"),
+                metadata_uri="http://metadata.uri",
+                metadata="expected metadata",
+            ),
+        )
+        tto2 = TokenTransportObject(
+            token=Token(
+                collection_id="0x10",
+                original_owner="0x20",
+                token_id=HexInt("0x02"),
+                timestamp=HexInt("0x40"),
+                metadata_uri="http://metadata.uri",
+                metadata="expected metadata",
+            ),
+        )
+        expected = [tto1, tto2]
+        self.__http_data_client.get.return_value = "expected metadata"
+        actual = await self.__processor(batch_items)
+        self.assertEqual(expected, actual)
+
     async def test_uses_http_client_when_uri_is_http_s(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -1911,15 +1667,14 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="https://metadata.uri/2",
                 ),
             ),
-            QueueEmpty(),
         ]
-        await self.__run_processor()
-        self.__http_batch_client.get.assert_called_once_with(
-            {"http://metadata.uri/1", "https://metadata.uri/2"}
+        await self.__processor(batch_items)
+        self.__http_data_client.get.assert_has_awaits(
+            (call("http://metadata.uri/1"), call("https://metadata.uri/2"))
         )
 
     async def test_adds_http_client_timing_when_uri_is_http_s(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -1929,23 +1684,13 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="http://metadata.uri",
                 ),
             ),
-            TokenTransportObject(
-                token=Token(
-                    collection_id="0x10",
-                    original_owner="0x20",
-                    token_id=HexInt("0x50"),
-                    timestamp=HexInt("0x40"),
-                    metadata_uri="https://metadata.uri",
-                ),
-            ),
-            QueueEmpty(),
         ]
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.__stats_service.timer.assert_called_once_with("metadata_retrieval_http")
 
     async def test_adds_error_stats_when_http_errors(self):
-        self.__http_batch_client.get.return_value = {"http://meadata.uri": ProtocolError()}
-        self.__inbound_queue.get_nowait.side_effect = [
+        self.__http_data_client.get.side_effect = ProtocolError()
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -1955,13 +1700,12 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="http://meadata.uri",
                 )
             ),
-            QueueEmpty(),
         ]
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.__stats_service.increment.assert_any_call("metadata_retrieval_http_error")
 
     async def test_no_change_to_token_when_http_errors(self):
-        self.__http_batch_client.get.return_value = {"http://meadata.uri": ProtocolError()}
+        self.__http_data_client.get.side_effect = ProtocolError()
         tto = TokenTransportObject(
             token=Token(
                 collection_id="0x10",
@@ -1971,15 +1715,11 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 metadata_uri="http://meadata.uri",
             )
         )
-        self.__inbound_queue.get_nowait.side_effect = [
-            tto,
-            QueueEmpty(),
-        ]
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_called_once_with(tto)
+        actual = await self.__processor([tto])
+        self.assertEqual([tto], actual)
 
-    async def test_places_http_response_in_outbound_token(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+    async def test_places_http_response_in_result_token(self):
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -1998,48 +1738,36 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="http://meadata.uri/0x31",
                 )
             ),
-            QueueEmpty(),
         ]
-        self.__http_batch_client.get.return_value = {
-            "http://meadata.uri/0x31": "0x31 metadata",
-            "http://meadata.uri/0x30": "0x30 metadata",
-        }
+        self.__http_data_client.get.side_effect = ["0x30 metadata", "0x31 metadata"]
 
-        await self.__run_processor()
-        self.assertEqual(
-            2, self.__outbound_queue.put.call_count, "Expected two outbound queue puts"
-        )
-        self.__outbound_queue.put.assert_has_calls(
-            [
-                call(
-                    TokenTransportObject(
-                        token=Token(
-                            collection_id="0x10",
-                            original_owner="0x20",
-                            token_id=HexInt("0x30"),
-                            timestamp=HexInt("0x40"),
-                            metadata_uri="http://meadata.uri/0x30",
-                            metadata="0x30 metadata",
-                        )
-                    )
-                ),
-                call(
-                    TokenTransportObject(
-                        token=Token(
-                            collection_id="0x10",
-                            original_owner="0x20",
-                            token_id=HexInt("0x31"),
-                            timestamp=HexInt("0x40"),
-                            metadata_uri="http://meadata.uri/0x31",
-                            metadata="0x31 metadata",
-                        )
-                    )
-                ),
-            ]
-        )
+        actual = await self.__processor(batch_items)
+        expected = [
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x30"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="http://meadata.uri/0x30",
+                    metadata="0x30 metadata",
+                )
+            ),
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x31"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="http://meadata.uri/0x31",
+                    metadata="0x31 metadata",
+                )
+            ),
+        ]
+        self.assertEqual(expected, actual)
 
     async def test_uses_ipfs_client_when_uri_is_ipfs(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -2058,15 +1786,14 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="ipfs://metadata.uri/2",
                 ),
             ),
-            QueueEmpty(),
         ]
-        await self.__run_processor()
-        self.__ipfs_batch_client.get.assert_called_once_with(
-            {"ipfs://metadata.uri/1", "ipfs://metadata.uri/2"}
+        await self.__processor(batch_items)
+        self.__ipfs_data_client.get.assert_has_awaits(
+            [call("ipfs://metadata.uri/1"), call("ipfs://metadata.uri/2")]
         )
 
     async def test_adds_ipfs_client_timing_when_uri_is_ipfs(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -2076,14 +1803,13 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="ipfs://metadata.uri",
                 ),
             ),
-            QueueEmpty(),
         ]
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.__stats_service.timer.assert_called_once_with("metadata_retrieval_ipfs")
 
     async def test_adds_error_stats_when_ipfs_errors(self):
-        self.__ipfs_batch_client.get.return_value = {"ipfs://meadata.uri": ProtocolError()}
-        self.__inbound_queue.get_nowait.side_effect = [
+        self.__ipfs_data_client.get.side_effect = ProtocolError()
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -2093,13 +1819,12 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="ipfs://meadata.uri",
                 )
             ),
-            QueueEmpty(),
         ]
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.__stats_service.increment.assert_any_call("metadata_retrieval_ipfs_error")
 
     async def test_no_change_to_token_when_ipfs_errors(self):
-        self.__ipfs_batch_client.get.return_value = {"ipfs://meadata.uri": ProtocolError()}
+        self.__ipfs_data_client.get.side_effect = ProtocolError()
         tto = TokenTransportObject(
             token=Token(
                 collection_id="0x10",
@@ -2109,15 +1834,11 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 metadata_uri="ipfs://meadata.uri",
             )
         )
-        self.__inbound_queue.get_nowait.side_effect = [
-            tto,
-            QueueEmpty(),
-        ]
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_called_once_with(tto)
+        actual = await self.__processor([tto])
+        self.assertEqual([tto], actual)
 
-    async def test_places_ipfs_response_in_outbound_token(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+    async def test_places_ipfs_response_in_response(self):
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -2136,48 +1857,36 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="ipfs://meadata.uri/0x31",
                 )
             ),
-            QueueEmpty(),
         ]
-        self.__ipfs_batch_client.get.return_value = {
-            "ipfs://meadata.uri/0x31": "0x31 metadata",
-            "ipfs://meadata.uri/0x30": "0x30 metadata",
-        }
+        self.__ipfs_data_client.get.side_effect = ["0x30 metadata", "0x31 metadata"]
 
-        await self.__run_processor()
-        self.assertEqual(
-            2, self.__outbound_queue.put.call_count, "Expected two outbound queue puts"
-        )
-        self.__outbound_queue.put.assert_has_calls(
-            [
-                call(
-                    TokenTransportObject(
-                        token=Token(
-                            collection_id="0x10",
-                            original_owner="0x20",
-                            token_id=HexInt("0x30"),
-                            timestamp=HexInt("0x40"),
-                            metadata_uri="ipfs://meadata.uri/0x30",
-                            metadata="0x30 metadata",
-                        )
-                    )
-                ),
-                call(
-                    TokenTransportObject(
-                        token=Token(
-                            collection_id="0x10",
-                            original_owner="0x20",
-                            token_id=HexInt("0x31"),
-                            timestamp=HexInt("0x40"),
-                            metadata_uri="ipfs://meadata.uri/0x31",
-                            metadata="0x31 metadata",
-                        )
-                    )
-                ),
-            ]
-        )
+        actual = await self.__processor(batch_items)
+        expected = [
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x30"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="ipfs://meadata.uri/0x30",
+                    metadata="0x30 metadata",
+                )
+            ),
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x31"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="ipfs://meadata.uri/0x31",
+                    metadata="0x31 metadata",
+                )
+            ),
+        ]
+        self.assertEqual(expected, actual)
 
     async def test_uses_arweave_client_when_uri_is_arweave(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -2196,15 +1905,14 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="ar://metadata.uri/2",
                 ),
             ),
-            QueueEmpty(),
         ]
-        await self.__run_processor()
-        self.__arweave_batch_client.get.assert_called_once_with(
-            {"ar://metadata.uri/1", "ar://metadata.uri/2"}
+        await self.__processor(batch_items)
+        self.__arweave_data_client.get.assert_has_awaits(
+            (call("ar://metadata.uri/1"), call("ar://metadata.uri/2"))
         )
 
     async def test_adds_arweave_client_timing_when_uri_is_arweave(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -2214,14 +1922,13 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="ar://metadata.uri",
                 ),
             ),
-            QueueEmpty(),
         ]
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.__stats_service.timer.assert_called_once_with("metadata_retrieval_arweave")
 
     async def test_adds_error_stats_when_arweave_errors(self):
-        self.__arweave_batch_client.get.return_value = {"ar://meadata.uri": ProtocolError()}
-        self.__inbound_queue.get_nowait.side_effect = [
+        self.__arweave_data_client.get.side_effect = ProtocolError()
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -2230,14 +1937,13 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     timestamp=HexInt("0x40"),
                     metadata_uri="ar://meadata.uri",
                 )
-            ),
-            QueueEmpty(),
+            )
         ]
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.__stats_service.increment.assert_any_call("metadata_retrieval_arweave_error")
 
     async def test_no_change_to_token_when_arweave_errors(self):
-        self.__arweave_batch_client.get.return_value = {"ar://meadata.uri": ProtocolError()}
+        self.__arweave_data_client.get.side_effect = ProtocolError()
         tto = TokenTransportObject(
             token=Token(
                 collection_id="0x10",
@@ -2247,15 +1953,11 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 metadata_uri="ar://meadata.uri",
             )
         )
-        self.__inbound_queue.get_nowait.side_effect = [
-            tto,
-            QueueEmpty(),
-        ]
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_called_once_with(tto)
+        actual = await self.__processor([tto])
+        self.assertEqual([tto], actual)
 
-    async def test_places_arweave_response_in_outbound_token(self):
-        self.__inbound_queue.get_nowait.side_effect = [
+    async def test_places_arweave_response_in_result_token(self):
+        batch_items = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -2274,47 +1976,35 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata_uri="ar://meadata.uri/0x31",
                 )
             ),
-            QueueEmpty(),
         ]
-        self.__arweave_batch_client.get.return_value = {
-            "ar://meadata.uri/0x31": "0x31 metadata",
-            "ar://meadata.uri/0x30": "0x30 metadata",
-        }
+        self.__arweave_data_client.get.side_effect = ["0x30 metadata", "0x31 metadata"]
 
-        await self.__run_processor()
-        self.assertEqual(
-            2, self.__outbound_queue.put.call_count, "Expected two outbound queue puts"
-        )
-        self.__outbound_queue.put.assert_has_calls(
-            [
-                call(
-                    TokenTransportObject(
-                        token=Token(
-                            collection_id="0x10",
-                            original_owner="0x20",
-                            token_id=HexInt("0x30"),
-                            timestamp=HexInt("0x40"),
-                            metadata_uri="ar://meadata.uri/0x30",
-                            metadata="0x30 metadata",
-                        )
-                    )
-                ),
-                call(
-                    TokenTransportObject(
-                        token=Token(
-                            collection_id="0x10",
-                            original_owner="0x20",
-                            token_id=HexInt("0x31"),
-                            timestamp=HexInt("0x40"),
-                            metadata_uri="ar://meadata.uri/0x31",
-                            metadata="0x31 metadata",
-                        )
-                    )
-                ),
-            ]
-        )
+        actual = await self.__processor(batch_items)
+        expected = [
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x30"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="ar://meadata.uri/0x30",
+                    metadata="0x30 metadata",
+                )
+            ),
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x31"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="ar://meadata.uri/0x31",
+                    metadata="0x31 metadata",
+                )
+            ),
+        ]
+        self.assertEqual(expected, actual)
 
-    async def test_token_transaction_from_inbound_queue_to_outbound_queue(self):
+    async def test_token_transaction_with_invalid_uri_from_input_to_output(self):
         tto = TokenTransportObject(
             block=Block(
                 number="0x00",
@@ -2327,6 +2017,7 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 state_root="",
                 receipts_root="",
                 miner="",
+                mix_hash="",
                 difficulty="",
                 total_difficulty="",
                 extra_data="",
@@ -2345,15 +2036,13 @@ class TokenMetadataGatheringProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 metadata_uri="metadata uri",
             ),
         )
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty()]
-        await self.__run_processor()
-        self.__outbound_queue.put.assert_called_once()
+        actual = await self.__processor([tto])
+        self.assertEqual([tto], actual)
 
 
-class TokenPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+class TokenPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__inbound_queue = MagicMock()
-        self.__inbound_queue.get_nowait.side_effect = [
+        self.__default_batch = [
             TokenTransportObject(
                 token=Token(
                     collection_id="0x10",
@@ -2364,7 +2053,6 @@ class TokenPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     metadata="the metadata",
                 )
             ),
-            QueueEmpty(),
         ]
 
         self.__dynamodb = AsyncMock()
@@ -2373,25 +2061,20 @@ class TokenPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             self.__dynamodb.Table.return_value.batch_writer.return_value.__aenter__.return_value
         )
         self.__stats_service = MagicMock()
-        self.__event_bus = AsyncMock()
-        self.__processor = TokenPersistenceProcessor(
+        self.__logger = MagicMock()
+        self.__blockchain = "expected blockchain"
+        self.__processor = TokenPersistenceBatchProcessor(
             dynamodb=self.__dynamodb,
             stats_service=self.__stats_service,
-            event_bus=self.__event_bus,
-            inbound_queue=self.__inbound_queue,
-            dynamodb_batch_size=0,
-            max_batch_wait=0,
+            logger=self.__logger,
+            blockchain=self.__blockchain[:],
         )
-
-    async def __run_processor(self):
-        await self.__processor.stop()
-        await self.__processor.start()
 
     async def test_increments_stats_for_each_token_mint(self):
         tokens = random.randint(1, 99)
-        inbound_queue_gets = list()
+        batch_items = list()
         for _ in range(tokens):
-            inbound_queue_gets.append(
+            batch_items.append(
                 TokenTransportObject(
                     token=Token(
                         collection_id="0x10",
@@ -2401,9 +2084,7 @@ class TokenPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 )
             )
-        inbound_queue_gets.append(QueueEmpty())
-        self.__inbound_queue.get_nowait.side_effect = inbound_queue_gets
-        await self.__run_processor()
+        await self.__processor(batch_items)
         self.assertEqual(
             tokens,
             self.__stats_service.increment.call_count,
@@ -2411,12 +2092,8 @@ class TokenPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.__stats_service.increment.assert_called_with("tokens_persisted")
 
-    async def test_triggers_stopped_event_in_event_bus(self):
-        await self.__run_processor()
-        self.__event_bus.trigger.assert_called_once_with("token_persistence_processor_stopped")
-
     async def test_records_dynamodb_timer_in_stats(self):
-        await self.__run_processor()
+        await self.__processor(self.__default_batch)
         assert_timer_run(self.__stats_service, "dynamodb_write_tokens")
 
     @patch("chainconductor.blockcrawler.processors.keccak", return_value=b"keccak hash")
@@ -2431,10 +2108,9 @@ class TokenPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 timestamp=HexInt("0x40"),
             )
         )
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty()]
-        await self.__run_processor()
-        keccak_patch.assert_called_once_with(b"Ethereum Mainnet0x10")
-        self.__dynamodb_batch_writer_context.put_item.assert_called_once()
+        await self.__processor([tto])
+        keccak_patch.assert_called_once_with(self.__blockchain.encode("utf8") + b"0x10")
+        self.__dynamodb_batch_writer_context.put_item.assert_awaited_once()
         actual = self.__dynamodb_batch_writer_context.put_item.call_args.kwargs["Item"][
             "blockchain_collection_id"
         ]
@@ -2451,14 +2127,12 @@ class TokenPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 timestamp=HexInt("0x40"),
             )
         )
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty()]
-
-        await self.__run_processor()
-        self.__dynamodb_batch_writer_context.put_item.assert_called_once_with(
+        await self.__processor([tto])
+        self.__dynamodb_batch_writer_context.put_item.assert_awaited_once_with(
             Item={
                 "blockchain_collection_id": b"keccak_hash".hex(),
                 "token_id": "48",
-                "blockchain": "Ethereum Mainnet",
+                "blockchain": self.__blockchain,
                 "collection_id": "0x10",
                 "original_owner": "0x20",
                 "mint_timestamp": 64,
@@ -2480,14 +2154,12 @@ class TokenPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 metadata="the metadata",
             )
         )
-        self.__inbound_queue.get_nowait.side_effect = [tto, QueueEmpty()]
-
-        await self.__run_processor()
-        self.__dynamodb_batch_writer_context.put_item.assert_called_once_with(
+        await self.__processor([tto])
+        self.__dynamodb_batch_writer_context.put_item.assert_awaited_once_with(
             Item={
                 "blockchain_collection_id": b"keccak_hash".hex(),
                 "token_id": "48",
-                "blockchain": "Ethereum Mainnet",
+                "blockchain": self.__blockchain,
                 "collection_id": "0x10",
                 "original_owner": "0x20",
                 "mint_timestamp": 64,
@@ -2496,25 +2168,15 @@ class TokenPersistenceProcessorTestCase(unittest.IsolatedAsyncioTestCase):
             }
         )
 
+    async def test_logs_exception_for_error_writing_batch(self):
+        batch_writer = self.__dynamodb.Table.return_value.batch_writer.return_value
+        batch_writer.__aexit__.side_effect = ClientError({}, "name")
+        await self.__processor([])
+        self.__logger.exception.assert_called_once()
+
 
 class TokenTransportTestCase(TestCase):
     def test_same_attributes_is_equal(self):
-        transaction = Transaction(
-            hash="hash",
-            block_hash="block_hash",
-            block_number="0x01",
-            from_="from_",
-            gas="gas",
-            gas_price="gas_price",
-            input="input",
-            nonce="nonce",
-            to_="to_",
-            transaction_index="0x00",
-            value="value",
-            v="v",
-            r="r",
-            s="s",
-        )
         block = Block(
             number="0x01",
             hash="block_hash",
@@ -2526,6 +2188,7 @@ class TokenTransportTestCase(TestCase):
             state_root="state_root",
             receipts_root="receipts_root",
             miner="miner",
+            mix_hash="",
             difficulty="difficulty",
             total_difficulty="total_difficulty",
             extra_data="extra_data",
@@ -2533,7 +2196,7 @@ class TokenTransportTestCase(TestCase):
             gas_limit="gas_limit",
             gas_used="gas_used",
             timestamp="timestamp",
-            transactions=[transaction],
+            transactions=["transaction"],
             uncles=["uncle1"],
         )
         transaction_receipt = TransactionReceipt(
@@ -2573,153 +2236,17 @@ class TokenTransportTestCase(TestCase):
         )
         left = TokenTransportObject(
             block=block,
-            transaction=transaction,
             transaction_receipt=transaction_receipt,
             token=token,
         )
         right = TokenTransportObject(
             block=block,
-            transaction=transaction,
             transaction_receipt=transaction_receipt,
             token=token,
         )
         self.assertEqual(left, right)
 
-    def test_different_transactions_is_not_equal(self):
-        block = Block(
-            number="0x01",
-            hash="block_hash",
-            parent_hash="parent_hash",
-            nonce="nonce",
-            sha3_uncles="sha3_uncles",
-            logs_bloom="logs_bloom",
-            transactions_root="transactions_root",
-            state_root="state_root",
-            receipts_root="receipts_root",
-            miner="miner",
-            difficulty="difficulty",
-            total_difficulty="total_difficulty",
-            extra_data="extra_data",
-            size="size",
-            gas_limit="gas_limit",
-            gas_used="gas_used",
-            timestamp="timestamp",
-            transactions=[
-                Transaction(
-                    hash="hash",
-                    block_hash="block_hash",
-                    block_number="0x01",
-                    from_="from_",
-                    gas="gas",
-                    gas_price="gas_price",
-                    input="input",
-                    nonce="nonce",
-                    to_="to_",
-                    transaction_index="0x00",
-                    value="value",
-                    v="v",
-                    r="r",
-                    s="s",
-                )
-            ],
-            uncles=["uncle1"],
-        )
-        transaction_receipt = TransactionReceipt(
-            transaction_hash="hash",
-            transaction_index="0x00",
-            block_hash="block_hash",
-            block_number="0x01",
-            from_="from_",
-            to_="to_",
-            cumulative_gas_used="cumulative_gas_used",
-            gas_used="gas_used",
-            contract_address="contract_address",
-            logs=[
-                Log(
-                    removed=False,
-                    log_index="0x00",
-                    transaction_index="transaction_index",
-                    transaction_hash="transaction_hash",
-                    block_hash="block_hash",
-                    block_number="block_number",
-                    address="address",
-                    data="data",
-                    topics=["topic"],
-                )
-            ],
-            logs_bloom="logs_bloom",
-            root="root",
-            status="0x01",
-        )
-        token = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x11"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
-        )
-        left = TokenTransportObject(
-            block=block,
-            transaction=Transaction(
-                hash="hash",
-                block_hash="block_hash",
-                block_number="0x01",
-                from_="from_",
-                gas="gas",
-                gas_price="gas_price",
-                input="input",
-                nonce="nonce",
-                to_="to_",
-                transaction_index="0x01",
-                value="value",
-                v="v",
-                r="r",
-                s="s",
-            ),
-            transaction_receipt=transaction_receipt,
-            token=token,
-        )
-        right = TokenTransportObject(
-            block=block,
-            transaction=Transaction(
-                hash="hash",
-                block_hash="block_hash",
-                block_number="0x01",
-                from_="from_",
-                gas="gas",
-                gas_price="gas_price",
-                input="input",
-                nonce="nonce",
-                to_="to_",
-                transaction_index="0x02",
-                value="value",
-                v="v",
-                r="r",
-                s="s",
-            ),
-            transaction_receipt=transaction_receipt,
-            token=token,
-        )
-        self.assertNotEqual(left, right)
-
     def test_different_blocks_is_not_equal(self):
-        transaction = Transaction(
-            hash="hash",
-            block_hash="block_hash",
-            block_number="0x01",
-            from_="from_",
-            gas="gas",
-            gas_price="gas_price",
-            input="input",
-            nonce="nonce",
-            to_="to_",
-            transaction_index="0x00",
-            value="value",
-            v="v",
-            r="r",
-            s="s",
-        )
         transaction_receipt = TransactionReceipt(
             transaction_hash="hash",
             transaction_index="0x00",
@@ -2767,6 +2294,7 @@ class TokenTransportTestCase(TestCase):
                 state_root="state_root",
                 receipts_root="receipts_root",
                 miner="miner",
+                mix_hash="",
                 difficulty="difficulty",
                 total_difficulty="total_difficulty",
                 extra_data="extra_data",
@@ -2774,10 +2302,9 @@ class TokenTransportTestCase(TestCase):
                 gas_limit="gas_limit",
                 gas_used="gas_used",
                 timestamp="timestamp",
-                transactions=[transaction],
+                transactions=["transaction"],
                 uncles=["uncle1"],
             ),
-            transaction=transaction,
             transaction_receipt=transaction_receipt,
             token=token,
         )
@@ -2793,6 +2320,7 @@ class TokenTransportTestCase(TestCase):
                 state_root="state_root",
                 receipts_root="receipts_root",
                 miner="miner",
+                mix_hash="",
                 difficulty="difficulty",
                 total_difficulty="total_difficulty",
                 extra_data="extra_data",
@@ -2800,32 +2328,15 @@ class TokenTransportTestCase(TestCase):
                 gas_limit="gas_limit",
                 gas_used="gas_used",
                 timestamp="timestamp",
-                transactions=[transaction],
+                transactions=["transaction"],
                 uncles=["uncle1"],
             ),
-            transaction=transaction,
             transaction_receipt=transaction_receipt,
             token=token,
         )
         self.assertNotEqual(left, right)
 
     def test_different_transaction_receipts_is_not_equal(self):
-        transaction = Transaction(
-            hash="hash",
-            block_hash="block_hash",
-            block_number="0x01",
-            from_="from_",
-            gas="gas",
-            gas_price="gas_price",
-            input="input",
-            nonce="nonce",
-            to_="to_",
-            transaction_index="0x00",
-            value="value",
-            v="v",
-            r="r",
-            s="s",
-        )
         block = Block(
             number="0x01",
             hash="block_hash",
@@ -2837,6 +2348,7 @@ class TokenTransportTestCase(TestCase):
             state_root="state_root",
             receipts_root="receipts_root",
             miner="miner",
+            mix_hash="",
             difficulty="difficulty",
             total_difficulty="total_difficulty",
             extra_data="extra_data",
@@ -2844,7 +2356,7 @@ class TokenTransportTestCase(TestCase):
             gas_limit="gas_limit",
             gas_used="gas_used",
             timestamp="timestamp",
-            transactions=[transaction],
+            transactions=["transaction"],
             uncles=["uncle1"],
         )
         token = Token(
@@ -2857,7 +2369,6 @@ class TokenTransportTestCase(TestCase):
         )
         left = TokenTransportObject(
             block=block,
-            transaction=transaction,
             transaction_receipt=TransactionReceipt(
                 transaction_hash="hash",
                 transaction_index="0x00",
@@ -2889,7 +2400,6 @@ class TokenTransportTestCase(TestCase):
         )
         right = TokenTransportObject(
             block=block,
-            transaction=transaction,
             transaction_receipt=TransactionReceipt(
                 transaction_hash="hash",
                 transaction_index="0x00",
@@ -2922,22 +2432,6 @@ class TokenTransportTestCase(TestCase):
         self.assertNotEqual(left, right)
 
     def test_different_tokens_is_not_equal(self):
-        transaction = Transaction(
-            hash="hash",
-            block_hash="block_hash",
-            block_number="0x01",
-            from_="from_",
-            gas="gas",
-            gas_price="gas_price",
-            input="input",
-            nonce="nonce",
-            to_="to_",
-            transaction_index="0x00",
-            value="value",
-            v="v",
-            r="r",
-            s="s",
-        )
         block = Block(
             number="0x01",
             hash="block_hash",
@@ -2949,6 +2443,7 @@ class TokenTransportTestCase(TestCase):
             state_root="state_root",
             receipts_root="receipts_root",
             miner="miner",
+            mix_hash="",
             difficulty="difficulty",
             total_difficulty="total_difficulty",
             extra_data="extra_data",
@@ -2956,7 +2451,7 @@ class TokenTransportTestCase(TestCase):
             gas_limit="gas_limit",
             gas_used="gas_used",
             timestamp="timestamp",
-            transactions=[transaction],
+            transactions=["transaction"],
             uncles=["uncle1"],
         )
         transaction_receipt = TransactionReceipt(
@@ -2988,7 +2483,6 @@ class TokenTransportTestCase(TestCase):
         )
         left = TokenTransportObject(
             block=block,
-            transaction=transaction,
             transaction_receipt=transaction_receipt,
             token=Token(
                 collection_id="str",
@@ -3001,7 +2495,6 @@ class TokenTransportTestCase(TestCase):
         )
         right = TokenTransportObject(
             block=block,
-            transaction=transaction,
             transaction_receipt=transaction_receipt,
             token=Token(
                 collection_id="str",
@@ -3015,136 +2508,38 @@ class TokenTransportTestCase(TestCase):
         self.assertNotEqual(left, right)
 
 
-class TokenTestCase(TestCase):
-    def test_equal_attributes_is_equal(self):
-        left = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
-        )
-        right = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
-        )
-        self.assertEqual(left, right)
+class RPCErrorRetryDecoratingBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__decorated_processor = AsyncMock()
+        self.__processor = RPCErrorRetryDecoratingBatchProcessor(self.__decorated_processor)
 
-    def test_different_collection_ids_is_not_equal(self):
-        left = Token(
-            collection_id="c1",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
-        )
-        right = Token(
-            collection_id="c2",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
-        )
-        self.assertNotEqual(left, right)
+    async def test_passes_input_to_decorated_processor(self):
+        expected = ["expected input"]
+        await self.__processor(expected.copy())
+        self.__decorated_processor.assert_awaited_once_with(expected)
 
-    def test_different_original_owners_is_not_equal(self):
-        left = Token(
-            collection_id="o1",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
-        )
-        right = Token(
-            collection_id="str",
-            original_owner="02",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
-        )
-        self.assertNotEqual(left, right)
+    async def test_returns_results_from_decorated_processor(self):
+        expected = "expected result"
+        self.__decorated_processor.return_value = expected[:]
+        actual = await self.__processor(list())
+        self.assertEqual(expected, actual)
 
-    def test_different_token_ids_is_not_equal(self):
-        left = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
+    async def test_does_not_retry_with_non_RPCError(self):
+        retries = random.randint(1, 20)
+        processor = RPCErrorRetryDecoratingBatchProcessor(
+            self.__decorated_processor, max_retries=retries
         )
-        right = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x13"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
-        )
-        self.assertNotEqual(left, right)
+        self.__decorated_processor.side_effect = Exception("Argh")
+        with self.assertRaisesRegex(Exception, "Argh"):
+            await processor([])
+        self.__decorated_processor.assert_called_once()
 
-    def test_different_timestamps_is_not_equal(self):
-        left = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
+    async def test_retries_max_retries_amount_with_RPCError_and_reraises(self):
+        retries = random.randint(1, 20)
+        processor = RPCErrorRetryDecoratingBatchProcessor(
+            self.__decorated_processor, max_retries=retries
         )
-        right = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x01"),
-            metadata_uri="metadata_uri",
-            metadata="metadata",
-        )
-        self.assertNotEqual(left, right)
-
-    def test_different_metadata_uris_is_not_equal(self):
-        left = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri1",
-            metadata="metadata",
-        )
-        right = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri2",
-            metadata="metadata",
-        )
-        self.assertNotEqual(left, right)
-
-    def test_different_metadatas_is_not_equal(self):
-        left = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata1",
-        )
-        right = Token(
-            collection_id="str",
-            original_owner="str",
-            token_id=HexInt("0x12"),
-            timestamp=HexInt("0x00"),
-            metadata_uri="metadata_uri",
-            metadata="metadata2",
-        )
-        self.assertNotEqual(left, right)
+        self.__decorated_processor.side_effect = RPCServerError("Argh", "", "", "")
+        with self.assertRaisesRegex(RPCServerError, "Argh"):
+            await processor([])
+        self.__decorated_processor.assert_has_awaits([call([])] * retries)

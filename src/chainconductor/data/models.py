@@ -57,3 +57,17 @@ TokenTransfers = Model(
         "ProvisionedThroughput": {"ReadCapacityUnits": 10, "WriteCapacityUnits": 10},
     },
 )
+
+
+LastBlock = Model(
+    {
+        "TableName": "LastBlock",
+        "KeySchema": [
+            {"AttributeName": "blockchain", "KeyType": "HASH"},
+        ],
+        "AttributeDefinitions": [
+            {"AttributeName": "blockchain", "AttributeType": "S"},
+        ],
+        "ProvisionedThroughput": {"ReadCapacityUnits": 10, "WriteCapacityUnits": 10},
+    },
+)

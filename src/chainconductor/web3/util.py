@@ -1,7 +1,7 @@
 from typing import List, Dict
 
 
-class Function:  # pragma: no cover
+class Function:
     def __init__(
         self,
         function_hash: str,
@@ -16,15 +16,15 @@ class Function:  # pragma: no cover
         self.__return_types = return_types
         self.__is_view = is_view
 
-    def __repr__(self) -> str:
-        return self.__description
+    def __repr__(self) -> str:  # pragma: no cover
+        return self.__class__.__name__ + ": " + self.__description
 
     @property
     def function_hash(self) -> str:
         return self.__function_hash
 
     @property
-    def description(self) -> str:
+    def description(self) -> str:  # pragma: no cover
         return self.__description
 
     @property
@@ -36,11 +36,11 @@ class Function:  # pragma: no cover
         return self.__return_types
 
     @property
-    def is_view(self):
+    def is_view(self):  # pragma: no cover
         return self.__is_view
 
 
-class Event:  # pragma: no cover
+class Event:
     def __init__(
         self,
         event_hash: str,
@@ -58,19 +58,19 @@ class Event:  # pragma: no cover
         return self.__event_hash
 
     @property
-    def description(self) -> str:
+    def description(self) -> str:  # pragma: no cover
         return self.__description
 
     @property
-    def indexed_param_types(self) -> List[str]:
+    def indexed_param_types(self) -> List[str]:  # pragma: no cover
         return self.__indexed_param_types
 
     @property
-    def non_indexed_param_types(self) -> List[str]:
+    def non_indexed_param_types(self) -> List[str]:  # pragma: no cover
         return self.__non_indexed_param_types
 
 
-class ERC165Functions:  # pragma: no cover
+class ERC165Functions:
     SUPPORTS_INTERFACE = Function(
         "0x01ffc9a7",
         "supportsInterface(bytes4)->(bool)",
@@ -80,7 +80,17 @@ class ERC165Functions:  # pragma: no cover
     )
 
 
-class ERC721Functions:  # pragma: no cover
+class ERC721TokenReceiverFunctions:
+    ON_ERC721_RECEIVED = Function(
+        "0x01ffc9a7",
+        "onERC721Received(address,address,uint256,bytes)->(bytes4)",
+        ["address", "address", "uint256", "bytes"],
+        ["bytes4"],
+        True,
+    )
+
+
+class ERC721Functions:
     BALANCE_OF_ADDRESS = Function(
         "0x70a08231",
         "balanceOf(address)->(uint256)",
@@ -132,17 +142,7 @@ class ERC721Functions:  # pragma: no cover
     )
 
 
-class ERC721TokenReceiverFunctions:  # pragma: no cover
-    ON_ERC721_RECEIVED = Function(
-        "0x01ffc9a7",
-        "onERC721Received(address,address,uint256,bytes)->(bytes4)",
-        ["address", "address", "uint256", "bytes"],
-        ["bytes4"],
-        True,
-    )
-
-
-class ERC721MetadataFunctions:  # pragma: no cover
+class ERC721MetadataFunctions:
     NAME = Function(
         "0x06fdde03",
         "name()->(string)",
@@ -166,7 +166,7 @@ class ERC721MetadataFunctions:  # pragma: no cover
     )
 
 
-class ERC721EnumerableFunctions:  # pragma: no cover
+class ERC721EnumerableFunctions:
     TOTAL_SUPPLY = Function(
         "0x18160ddd",
         "totalSupply()->(uint256)",
@@ -190,30 +190,6 @@ class ERC721EnumerableFunctions:  # pragma: no cover
     )
 
 
-class ERC1155Functions:  # pragma: no cover
-    SAFE_TRANSFER_FROM_WITH_DATA = Function(
-        "0xf242432a",
-        "safeTransferFrom(address,address,uint256,uint256,bytes)",
-        ["address", "address", "uint256", "uint256", "bytes"],
-        [],
-        False,
-    )
-    SAFE_TRANSFER_FROM_WITHOUT_DATA = Function(
-        "0x0febdd49",
-        "safeTransferFrom(address,address,uint256,uint256)",
-        ["address", "address", "uint256", "uint256"],
-        [],
-        False,
-    )
-    SAFE_BATCH_TRANSFER_FROM = Function(
-        "0x2eb2c2d6",
-        "safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)",
-        ["address", "address", "uint256[]", "uint256[]", "bytes"],
-        [],
-        False,
-    )
-
-
 class ERC1155MetadataURIFunctions:  # pragma: no cover
     URI = Function(
         "0x0e89341c",
@@ -226,8 +202,8 @@ class ERC1155MetadataURIFunctions:  # pragma: no cover
 
 class ERC721Events:  # pragma: no cover
     TRANSFER = Event(
-        "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925",
-        "Transfer(address indexed, address indexed, uint256 indexed",
+        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+        "Transfer(address indexed, address indexed, uint256 indexed)",
         ["address", "address", "uint256"],
         [],
     )

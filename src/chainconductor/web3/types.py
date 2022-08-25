@@ -46,7 +46,7 @@ class HexInt:
         return self.int_value
 
     def __repr__(self):
-        return self.__hex_str
+        return self.__class__.__name__ + ": " + self.__hex_str
 
     @property
     def hex_value(self) -> str:
@@ -96,6 +96,49 @@ class Transaction(Type):  # pragma: no cover
         self.__v = HexInt(v)
         self.__r = HexInt(r)
         self.__s = HexInt(s)
+
+    def __eq__(self, o: object) -> bool:
+        return (
+            isinstance(o, self.__class__)
+            and self.hash == o.hash
+            and self.block_hash == o.block_hash
+            and self.block_number == o.block_number
+            and self.from_ == o.from_
+            and self.gas == o.gas
+            and self.gas_price == o.gas_price
+            and self.input == o.input
+            and self.nonce == o.nonce
+            and self.to_ == o.to_
+            and self.transaction_index == o.transaction_index
+            and self.value == o.value
+            and self.v == o.v
+            and self.r == o.r
+            and self.s == o.s
+        )
+
+    def __repr__(self) -> str:
+        return (
+            self.__class__.__name__
+            + ": "
+            + repr(
+                {
+                    "hash": self.hash,
+                    "block_hash": self.block_hash,
+                    "block_number": self.block_number,
+                    "from_": self.from_,
+                    "gas": self.gas,
+                    "gas_price": self.gas_price,
+                    "input": self.input,
+                    "nonce": self.nonce,
+                    "to_": self.to_,
+                    "transaction_index": self.transaction_index,
+                    "value": self.value,
+                    "v": self.v,
+                    "r": self.r,
+                    "s": self.s,
+                }
+            )
+        )
 
     @property
     def block_hash(self) -> str:
@@ -154,7 +197,7 @@ class Transaction(Type):  # pragma: no cover
         return self.__s
 
 
-class Block(Type):  # pragma: no cover
+class Block(Type):
     def __init__(
         self,
         *,
@@ -168,6 +211,7 @@ class Block(Type):  # pragma: no cover
         state_root: str,
         receipts_root: str,
         miner: str,
+        mix_hash: str,
         difficulty: str,
         total_difficulty: str,
         extra_data: str,
@@ -183,20 +227,76 @@ class Block(Type):  # pragma: no cover
         self.__parent_hash = parent_hash
         self.__nonce = nonce
         self.__sha3_uncles = sha3_uncles
-        self.__logs_bloom = logs_bloom
+        self.__logs_bloom = HexInt(logs_bloom)
         self.__transactions_root = transactions_root
         self.__state_root = state_root
         self.__receipts_root = receipts_root
         self.__miner = miner
+        self.__mix_hash = mix_hash
         self.__difficulty = HexInt(difficulty)
-        self.__total_difficulty = total_difficulty
+        self.__total_difficulty = HexInt(total_difficulty)
         self.__extra_data = extra_data
         self.__size = HexInt(size)
         self.__gas_limit = HexInt(gas_limit)
         self.__gas_used = HexInt(gas_used)
         self.__timestamp = HexInt(timestamp)
         self.__transactions = transactions.copy()
-        self.__uncles = uncles
+        self.__uncles = uncles.copy()
+
+    def __eq__(self, o: object) -> bool:
+        return (
+            isinstance(o, self.__class__)
+            and self.number == o.number
+            and self.hash == o.hash
+            and self.parent_hash == o.parent_hash
+            and self.nonce == o.nonce
+            and self.sha3_uncles == o.sha3_uncles
+            and self.logs_bloom == o.logs_bloom
+            and self.transactions_root == o.transactions_root
+            and self.state_root == o.state_root
+            and self.receipts_root == o.receipts_root
+            and self.miner == o.miner
+            and self.mix_hash == o.mix_hash
+            and self.difficulty == o.difficulty
+            and self.total_difficulty == o.total_difficulty
+            and self.extra_data == o.extra_data
+            and self.size == o.size
+            and self.gas_limit == o.gas_limit
+            and self.gas_used == o.gas_used
+            and self.timestamp == o.timestamp
+            and self.transactions == o.transactions
+            and self.uncles == o.uncles
+        )
+
+    def __repr__(self) -> str:
+        return (
+            str(self.__class__.__name__)
+            + ": "
+            + repr(
+                {
+                    "number": self.number,
+                    "hash": self.hash,
+                    "parent_hash": self.parent_hash,
+                    "nonce": self.nonce,
+                    "sha3_uncles": self.sha3_uncles,
+                    "logs_bloom": self.logs_bloom,
+                    "transactions_root": self.transactions_root,
+                    "state_root": self.state_root,
+                    "receipts_root": self.receipts_root,
+                    "miner": self.miner,
+                    "mix_hash": self.mix_hash,
+                    "difficulty": self.difficulty,
+                    "total_difficulty": self.total_difficulty,
+                    "extra_data": self.extra_data,
+                    "size": self.size,
+                    "gas_limit": self.gas_limit,
+                    "gas_used": self.gas_used,
+                    "timestamp": self.timestamp,
+                    "transactions": self.transactions,
+                    "uncles": self.uncles,
+                }
+            )
+        )
 
     @property
     def number(self) -> HexInt:
@@ -219,7 +319,7 @@ class Block(Type):  # pragma: no cover
         return self.__sha3_uncles
 
     @property
-    def logs_bloom(self) -> str:
+    def logs_bloom(self) -> HexInt:
         return self.__logs_bloom
 
     @property
@@ -239,8 +339,16 @@ class Block(Type):  # pragma: no cover
         return self.__miner
 
     @property
+    def mix_hash(self) -> str:
+        return self.__mix_hash
+
+    @property
     def difficulty(self) -> HexInt:
         return self.__difficulty
+
+    @property
+    def total_difficulty(self) -> HexInt:
+        return self.__total_difficulty
 
     @property
     def extra_data(self) -> str:
@@ -265,6 +373,10 @@ class Block(Type):  # pragma: no cover
     @property
     def timestamp(self) -> HexInt:
         return self.__timestamp
+
+    @property
+    def uncles(self) -> List[str]:
+        return self.__uncles.copy()
 
 
 class Log(Type):
@@ -367,13 +479,13 @@ class TransactionReceipt(Type):
         block_hash: str,
         block_number: str,
         from_: str,
-        to_: str,
+        to_: Union[str, None],
         cumulative_gas_used: str,
         gas_used: str,
-        contract_address: str,
+        contract_address: Union[str, None],
         logs: List[Log],
         logs_bloom: str,
-        root: str,
+        root: Union[str, None],
         status: str,
     ) -> None:
         self.__transaction_hash = transaction_hash
@@ -386,7 +498,7 @@ class TransactionReceipt(Type):
         self.__gas_used = HexInt(gas_used)
         self.__contract_address = contract_address
         self.__logs = logs.copy()
-        self.__logs_bloom = logs_bloom
+        self.__logs_bloom = HexInt(logs_bloom)
         self.__root = root
         self.__status = None if status is None else HexInt(status)
 
@@ -470,7 +582,7 @@ class TransactionReceipt(Type):
         return self.__logs.copy()
 
     @property
-    def logs_bloom(self) -> str:
+    def logs_bloom(self) -> HexInt:
         return self.__logs_bloom
 
     @property

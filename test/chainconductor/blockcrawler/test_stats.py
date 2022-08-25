@@ -9,7 +9,7 @@ class TestStats(unittest.TestCase):
         self.__stats_service = StatsService()
 
     def test_increment_increases_count(self):
-        stats = random.randint(1, 1_000_000)
+        stats = random.randint(1, 1_000)
         for _ in range(stats):
             self.__stats_service.increment("stat")
         self.assertEqual(stats, self.__stats_service.get_count("stat"))
@@ -18,7 +18,7 @@ class TestStats(unittest.TestCase):
         self.assertEqual(0, self.__stats_service.get_count("stat"))
 
     def test_timer_adds_timing_for_stat(self):
-        stats = random.randint(1, 1_000_000)
+        stats = random.randint(1, 1_000)
         for _ in range(stats):
             with self.__stats_service.timer("stat"):
                 pass
@@ -37,3 +37,9 @@ class TestStats(unittest.TestCase):
     def test_get_timings_is_empty_for_untimed_stat(self):
         timings = self.__stats_service.get_timings("stat")
         self.assertEqual(0, len(timings), "Expected zero timing events")
+
+    def test_timer_adds_timer_and_re_raises_when_exception_raised(self):
+        with self.assertRaisesRegex(Exception, "Argh"):
+            with self.__stats_service.timer("stat"):
+                raise Exception("Argh")
+        self.assertEqual(1, len(self.__stats_service.get_timings("stat")))

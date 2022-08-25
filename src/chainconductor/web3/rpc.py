@@ -1,12 +1,13 @@
-from typing import Union, Dict, List, Set, Tuple, Optional
+import asyncio
+from typing import Optional, Union, Dict, List, Set, Tuple
 
 import aiohttp
-import ujson as json
+from aiohttp import ClientError
 from eth_abi import decode, encode
 from eth_utils import decode_hex
 
-from .types import Block, Transaction, HexInt, Log, TransactionReceipt
-from .util import Function
+from chainconductor.web3.types import Block, Transaction, HexInt, Log, TransactionReceipt
+from chainconductor.web3.util import Function
 
 
 class EthCall:
@@ -26,7 +27,7 @@ class EthCall:
         self.__parameters = list() if parameters is None else parameters.copy()
         self.__block = block
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # pragma: no cover
         return (
             str(self.__class__)
             + {
@@ -80,6 +81,14 @@ class CallError(Exception):
 
 
 class RPCError(Exception):
+    pass
+
+
+class RPCTransportError(RPCError):
+    pass
+
+
+class RPCServerError(RPCError):
     def __init__(self, rpc_version, request_id, error_code, error_message) -> None:
         super().__init__(f"RPC {rpc_version} - Req {request_id} - {error_code}: {error_message}")
         self.__rpc_version = rpc_version
@@ -127,10 +136,6 @@ class RPCClient:
     def __init__(self, provider_url) -> None:
         self.__nonce = 0
         self.__provider_url = provider_url
-        self.__aiohttp_tcp_connector = aiohttp.TCPConnector()
-
-    def __del__(self):
-        self.__aiohttp_tcp_connector.close()
 
     async def __call(self, method, *params) -> RPCResponse:
         request = self.__get_rpc_request(method, params)
@@ -138,32 +143,16 @@ class RPCClient:
 
     async def __call_rpc(
         self, rpc_request: Union[Dict, List[Dict]]
-    ) -> Union[RPCResponse, List[Union[RPCResponse, RPCError]]]:
-        async with aiohttp.ClientSession(
-            connector=self.__aiohttp_tcp_connector, connector_owner=False
-        ) as session:
-            async with session.post(self.__provider_url, json=rpc_request) as response:
-                response_json = await response.json()
-                rpc_response = self.__get_rpc_response(response_json)
-                return rpc_response
-
-    async def __ws_call(self, method, *params):
-        request = self.__get_rpc_request(method, params)
-        async with aiohttp.ClientSession(
-            connector=self.__aiohttp_tcp_connector, connector_owner=False
-        ) as session:
-            async with session.ws_connect(self.__provider_url) as ws:
-                await ws.send_json(request)
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        if msg.data == "close cmd":
-                            await ws.close()
-                            raise Exception("Remote server requested socket close!")
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        raise Exception("Remote server returned socket error: " + msg.data)
-                    response_json = json.loads(msg.data)
+    ) -> Union[RPCResponse, List[Union[RPCResponse, RPCServerError]]]:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.__provider_url, json=rpc_request) as response:
+                    response_json = await response.json()
                     rpc_response = self.__get_rpc_response(response_json)
                     return rpc_response
+
+        except (ClientError, asyncio.TimeoutError) as cause:
+            raise RPCTransportError(cause)
 
     def __get_rpc_request(self, method, params):
         data = {
@@ -175,13 +164,14 @@ class RPCClient:
         self.__nonce += 1
         return data
 
-    def __get_rpc_response(self, response_json: Dict):
+    @staticmethod
+    def __get_rpc_response(response_json: Dict):
         if isinstance(response_json, list):
             rpc_response = list()
             for response_json_item in response_json:
                 if "error" in response_json_item:
                     rpc_response.append(
-                        RPCError(
+                        RPCServerError(
                             response_json_item["jsonrpc"],
                             response_json_item["id"],
                             response_json_item["error"]["code"],
@@ -199,7 +189,7 @@ class RPCClient:
 
         else:
             if "error" in response_json:
-                raise RPCError(
+                raise RPCServerError(
                     response_json["jsonrpc"],
                     response_json["id"],
                     response_json["error"]["code"],
@@ -263,6 +253,7 @@ class RPCClient:
                     state_root=rpc_response.result["stateRoot"],
                     receipts_root=rpc_response.result["receiptsRoot"],
                     miner=rpc_response.result["miner"],
+                    mix_hash=rpc_response.result["mixHash"],
                     difficulty=rpc_response.result["difficulty"],
                     total_difficulty=rpc_response.result["totalDifficulty"],
                     extra_data=rpc_response.result["extraData"],
@@ -281,13 +272,12 @@ class RPCClient:
         for tx_hash in tx_hashes:
             rpc_requests.append(self.__get_rpc_request("eth_getTransactionReceipt", (tx_hash,)))
         rpc_responses = await self.__call_rpc(rpc_requests)
-        receipts: List[Union[TransactionReceipt, RPCError]] = list()
+        receipts: List[Union[TransactionReceipt, RPCServerError]] = list()
         for rpc_response in rpc_responses:
             logs: List[Log] = list()
-            if isinstance(rpc_response, RPCError):
+            if isinstance(rpc_response, RPCServerError):
                 receipts.append(rpc_response)
                 continue
-
             for log in rpc_response.result["logs"]:
                 logs.append(
                     Log(
@@ -323,7 +313,7 @@ class RPCClient:
             )
         return receipts
 
-    async def calls(self, requests: List[EthCall]) -> Dict[str, Union[Tuple, RPCError]]:
+    async def calls(self, requests: List[EthCall]) -> Dict[str, Union[Tuple, RPCServerError]]:
         rpc_requests = list()
         rpc_request_id_lookup: Dict[int, EthCall] = dict()
         for request in requests:
@@ -345,10 +335,10 @@ class RPCClient:
             rpc_requests.append(rpc_request)
 
         rpc_responses = await self.__call_rpc(rpc_requests)
-        responses: Dict[str, Union[Tuple, RPCError]] = dict()
+        responses: Dict[str, Union[Tuple, RPCServerError]] = dict()
         for rpc_response in rpc_responses:
             response_request = rpc_request_id_lookup[rpc_response.request_id]
-            if isinstance(rpc_response, RPCError):
+            if isinstance(rpc_response, RPCServerError):
                 response = rpc_response
             else:
                 encoded_response: str = rpc_response.result
@@ -363,7 +353,7 @@ class RPCClient:
                             encoded_response_bytes,
                         )
                     except Exception as e:
-                        response = RPCError(
+                        response = RPCServerError(
                             rpc_response.rpc_version,
                             rpc_response.request_id,
                             "Response Decode Error",

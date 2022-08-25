@@ -1,10 +1,8 @@
+import asyncio
 import re
 from re import Pattern
-from typing import Set, Dict
 
 import aiohttp
-import asyncio
-
 from aiohttp import ClientError
 
 
@@ -12,60 +10,60 @@ class ProtocolError(Exception):
     pass
 
 
-class BatchDataClient:
-    async def get(self, uris: Set[str]):
+class ProtocolTimeoutError(ProtocolError):
+    pass
+
+
+class DataClient:
+    async def get(self, uri: str):
         raise NotImplementedError
 
 
-class HttpBatchDataClient(BatchDataClient):
-    async def _get(self, uri: str) -> tuple:
-        async with aiohttp.ClientSession() as session:
+class HttpDataClient(DataClient):
+    def __init__(self, request_timeout: float) -> None:
+        self.__timeout = aiohttp.ClientTimeout(total=request_timeout)
+
+    async def get(self, uri: str) -> str:
+        async with aiohttp.ClientSession(timeout=self.__timeout) as session:
             try:
                 async with session.get(uri) as response:
                     response.raise_for_status()
                     data = await response.text()
+            except asyncio.TimeoutError:
+                raise ProtocolTimeoutError(
+                    f"A timeout occurred for URI {uri} after {self.__timeout} seconds"
+                )
             except ClientError as e:
-                data = ProtocolError(f"An error occurred getting data for URI {uri}: {e}")
-            return uri, data
-
-    async def get(self, uris: Set[str]) -> Dict[str, str]:
-        coroutines = list()
-        for uri in uris:
-            coroutines.append(self._get(uri))
-        results = await asyncio.gather(*coroutines)
-        result = {k: v for k, v in results}
-        return result
+                raise ProtocolError(f"An error occurred getting data for URI {uri}: {e}")
+        return data
 
 
-class UriTranslatingBatchDataClient(HttpBatchDataClient):
-    def __init__(self, base_uri: str, regex_pattern: Pattern) -> None:
+class UriTranslatingDataClient(HttpDataClient):
+    def __init__(self, base_uri: str, regex_pattern: Pattern, request_timeout: float) -> None:
+        super(UriTranslatingDataClient, self).__init__(request_timeout)
         self.__base_uri: str = base_uri
         self.__regex_pattern: Pattern = regex_pattern
 
-    async def get(self, uris: Set[str]) -> Dict[str, str]:
-        http_uris = set()
-        uri_translate = dict()
-        for uri in uris:
-            match = self.__regex_pattern.fullmatch(uri)
-            if not match:
-                raise ValueError(f"URI {uri} is not a valid")
-            http_uri = f"{self.__base_uri}{match.group(1)}"
-            uri_translate[http_uri] = uri
-            http_uris.add(http_uri)
-        http_result = await super().get(http_uris)
-        result = {uri_translate[k]: v for k, v in http_result.items()}
+    async def get(self, uri: str) -> str:
+        match = self.__regex_pattern.fullmatch(uri)
+        if not match:
+            raise ValueError(f"URI {uri} is not a valid")
+        http_uri = f"{self.__base_uri}{match.group(1)}"
+        result = await super().get(http_uri)
         return result
 
 
-class IpfsBatchDataClient(UriTranslatingBatchDataClient):
-    URI_REGEX = re.compile(r"^ipfs://(.+)$")
+class IpfsDataClient(UriTranslatingDataClient):
+    URI_REGEX = re.compile(r"^ipfs://(?:ipfs/)?(.+)$")
 
-    def __init__(self, gateway_uri: str) -> None:
-        super(IpfsBatchDataClient, self).__init__(f"{gateway_uri}/ipfs/", self.URI_REGEX)
+    def __init__(self, gateway_uri: str, request_timeout: float) -> None:
+        super(IpfsDataClient, self).__init__(
+            f"{gateway_uri}/ipfs/", self.URI_REGEX, request_timeout
+        )
 
 
-class ArweaveBatchDataClient(UriTranslatingBatchDataClient):
+class ArweaveDataClient(UriTranslatingDataClient):
     URI_REGEX = re.compile(r"^ar://(.+)$")
 
-    def __init__(self, gateway_uri: str) -> None:
-        super(ArweaveBatchDataClient, self).__init__(f"{gateway_uri}/", self.URI_REGEX)
+    def __init__(self, gateway_uri: str, request_timeout: float) -> None:
+        super(ArweaveDataClient, self).__init__(f"{gateway_uri}/", self.URI_REGEX, request_timeout)
