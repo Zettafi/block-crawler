@@ -572,3 +572,9 @@ async def set_last_block_id_for_block_chain(blockchain: str, last_block_id: int,
                 "block_id": last_block_id,
             }
         )
+
+
+async def get_block(evm_node_uri):
+    rpc = RPCClient(evm_node_uri)
+    block_number = await rpc.get_block_number()
+    return block_number.int_value

@@ -10,6 +10,7 @@ from chainconductor.blockcrawler.commands import (
     crawl_evm_blocks,
     listen_for_and_process_new_evm_blocks,
     set_last_block_id_for_block_chain,
+    get_block,
 )
 from chainconductor.blockcrawler.stats import StatsService
 from chainconductor.blockcrawler.stats_writer import StatsWriter
@@ -62,7 +63,7 @@ def block_crawler():
 @click.option(
     "--evm-archive-node-uri",
     envvar="EVM_ARCHIVE_NODE_URI",
-    help="URI to access the archive node Ethereum RPC HTTP server",
+    help="URI to access the archive node EVM RPC HTTP server",
 )
 @click.option(
     "--dynamodb-uri",
@@ -475,6 +476,22 @@ def seed(blockchain, last_block_id, dynamodb_uri):
     loop.run_until_complete(
         set_last_block_id_for_block_chain(blockchain, last_block_id, dynamodb_uri)
     )
+
+
+@block_crawler.command()
+@click.option(
+    "--evm-archive-node-uri",
+    envvar="EVM_ARCHIVE_NODE_URI",
+    help="URI to access the archive node EVM RPC HTTP server",
+)
+def block_number(evm_archive_node_uri):
+    """
+    Get the current block for a blockchain.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    block_number = loop.run_until_complete(get_block(evm_archive_node_uri))
+    click.echo(block_number)
 
 
 if __name__ == "__main__":
