@@ -1,5 +1,6 @@
 import asyncio
 import decimal
+import json
 import re
 from logging import Logger
 from typing import List, Callable, Tuple, Coroutine, Any, Dict
@@ -803,7 +804,7 @@ class RPCErrorRetryDecoratingBatchProcessor:
             # noinspection PyBroadException
             try:
                 return await self.__processor(batch_items)
-            except RPCError:
+            except (RPCError, asyncio.TimeoutError, json.decoder.JSONDecodeError):
                 if retries > self.__max_retries:
                     raise
                 else:
