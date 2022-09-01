@@ -8,7 +8,7 @@ import aiohttp.client_exceptions
 import ddt
 
 from chainconductor.web3.rpc import EthCall, RPCClient, RPCError, RPCServerError
-from chainconductor.web3.types import TransactionReceipt, Log, Block, Transaction, HexInt
+from chainconductor.web3.types import TransactionReceipt, Log, Block, HexInt
 from chainconductor.web3.util import (
     ERC721Functions,
     ERC165Functions,
@@ -250,11 +250,17 @@ class GetTransactionReceiptTestCase(BaseRPCClientTestCase):
         )
 
     async def test_get_transaction_receipts_sends_request_to_correct_endpoint(self):
-        await self._rpc_client.get_transaction_receipts(["hash"])
+        try:
+            await self._rpc_client.get_transaction_receipts(["hash"])
+        except RPCError:
+            pass
         self._post_patch.assert_called_once_with(self._rpc_url, json=ANY)
 
     async def test_get_transaction_receipts_sends_all_requests(self):
-        await self._rpc_client.get_transaction_receipts(["hash"])
+        try:
+            await self._rpc_client.get_transaction_receipts(["hash"])
+        except RPCError:
+            pass
         self._post_patch.assert_called_once_with(
             ANY,
             json=[
@@ -434,7 +440,7 @@ class GetBlocksTestCase(BaseRPCClientTestCase):
         await self._rpc_client.get_blocks({1, 2, 3})
         self._post_patch.assert_called_once_with(self._rpc_url, json=ANY)
 
-    async def test_get_blocks_sends_all_requests_and_defaults_full_transactions_to_false(self):
+    async def test_get_blocks_sends_all_requests_full_transactions_to_false(self):
         await self._rpc_client.get_blocks({1, 2})
         self._post_patch.assert_called_once_with(
             ANY,
@@ -454,22 +460,7 @@ class GetBlocksTestCase(BaseRPCClientTestCase):
             ],
         )
 
-    @ddt.data([True, False])
-    async def test_get_blocks_passes_full_transactions_value(self, full_transactions: bool):
-        await self._rpc_client.get_blocks({1}, full_transactions)
-        self._post_patch.assert_called_once_with(
-            ANY,
-            json=[
-                {
-                    "jsonrpc": "2.0",
-                    "method": "eth_getBlockByNumber",
-                    "params": ("0x1", full_transactions),
-                    "id": 0,
-                },
-            ],
-        )
-
-    async def test_get_blocks_parses_eresponse_into_block_entities_without_full_txs(self):
+    async def test_get_blocks_parses_response_into_block_entities(self):
         self._set_post_patch_return_value(
             [
                 {
@@ -525,98 +516,6 @@ class GetBlocksTestCase(BaseRPCClientTestCase):
             )
         ]
         actual = await self._rpc_client.get_blocks({1})
-        self.assertEqual(expected, actual)
-
-    async def test_get_blocks_parses_response_into_block_entities_with_full_txs(self):
-        self._set_post_patch_return_value(
-            [
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "result": {
-                        "difficulty": "0x4ea3f27bc",
-                        "extraData": "0x476574682f4c5649562f76312e302e302f6c696e75782f676f312e342e32",  # noqa: E501
-                        "gasLimit": "0x1388",
-                        "gasUsed": "0x0",
-                        "hash": "0xdc0818cf78f21a8e70579cb46a43643f78291264dda342ae31049421c82d21ae",  # noqa: E501
-                        "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",  # noqa: E501
-                        "miner": "0xbb7b8287f3f0a933474a79eae42cbca977791171",
-                        "mixHash": "0x4fffe9ae21f1c9e15207b1f472d5bbdd68c9595d461666602f2be20daf5e7843",  # noqa: E501
-                        "nonce": "0x689056015818adbe",
-                        "number": "0x1b4",
-                        "parentHash": "0xe99e022112df268087ea7eafaf4790497fd21dbeeb6bd7a1721df161a6657a54",  # noqa: E501
-                        "receiptsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",  # noqa: E501
-                        "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",  # noqa: E501
-                        "size": "0x220",
-                        "stateRoot": "0xddc8b0234c2e0cad087c8b389aa7ef01f7d79b2570bccb77ce48648aa61c904d",  # noqa: E501
-                        "timestamp": "0x55ba467c",
-                        "totalDifficulty": "0x78ed983323d",
-                        "transactions": [
-                            {
-                                "blockHash": "0x1d59ff54b1eb26b013ce3cb5fc9dab3705b415a67127a003c3e61eb445bb8df2",  # noqa: E501
-                                "blockNumber": "0x5daf3b",
-                                "from": "0xa7d9ddbe1f17865597fbd27ec712455208b6b76d",
-                                "gas": "0xc350",
-                                "gasPrice": "0x4a817c800",
-                                "hash": "0x88df016429689c079f3b2f6ad39fa052532c56795b733da78a91ebe6a713944b",  # noqa: E501
-                                "input": "0x68656c6c6f21",
-                                "nonce": "0x15",
-                                "to": "0xf02c1c8e6114b1dbe8937a39260b5b0a374432bb",
-                                "transactionIndex": "0x41",
-                                "value": "0xf3dbb76162000",
-                                "v": "0x25",
-                                "r": "0x1b5e176d927f8e9ab405058b2d2457392da3e20f328b16ddabcebc33eaac5fea",  # noqa: E501
-                                "s": "0x4ba69724e8f69de52f0125ad8b3c5c2cef33019bac3249e2c0a2192766d1721c",  # noqa: E501
-                            }
-                        ],
-                        "transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",  # noqa: E501
-                        "uncles": ["uncle hash 1", "uncle hash 2"],
-                    },
-                }
-            ]
-        )
-        expected = [
-            Block(
-                difficulty="0x4ea3f27bc",
-                extra_data="0x476574682f4c5649562f76312e302e302f6c696e75782f676f312e342e32",
-                gas_limit="0x1388",
-                gas_used="0x0",
-                hash="0xdc0818cf78f21a8e70579cb46a43643f78291264dda342ae31049421c82d21ae",
-                logs_bloom="0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",  # noqa: E501
-                miner="0xbb7b8287f3f0a933474a79eae42cbca977791171",
-                mix_hash="0x4fffe9ae21f1c9e15207b1f472d5bbdd68c9595d461666602f2be20daf5e7843",
-                nonce="0x689056015818adbe",
-                number="0x1b4",
-                parent_hash="0xe99e022112df268087ea7eafaf4790497fd21dbeeb6bd7a1721df161a6657a54",
-                receipts_root="0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-                sha3_uncles="0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
-                size="0x220",
-                state_root="0xddc8b0234c2e0cad087c8b389aa7ef01f7d79b2570bccb77ce48648aa61c904d",
-                timestamp="0x55ba467c",
-                total_difficulty="0x78ed983323d",
-                transactions=[
-                    Transaction(
-                        block_hash="0x1d59ff54b1eb26b013ce3cb5fc9dab3705b415a67127a003c3e61eb445bb8df2",  # noqa: E501
-                        block_number="0x5daf3b",
-                        from_="0xa7d9ddbe1f17865597fbd27ec712455208b6b76d",
-                        gas="0xc350",
-                        gas_price="0x4a817c800",
-                        hash="0x88df016429689c079f3b2f6ad39fa052532c56795b733da78a91ebe6a713944b",
-                        input="0x68656c6c6f21",
-                        nonce="0x15",
-                        to_="0xf02c1c8e6114b1dbe8937a39260b5b0a374432bb",
-                        transaction_index="0x41",
-                        value="0xf3dbb76162000",
-                        v="0x25",
-                        r="0x1b5e176d927f8e9ab405058b2d2457392da3e20f328b16ddabcebc33eaac5fea",
-                        s="0x4ba69724e8f69de52f0125ad8b3c5c2cef33019bac3249e2c0a2192766d1721c",
-                    )
-                ],
-                transactions_root="0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",  # noqa: E501
-                uncles=["uncle hash 1", "uncle hash 2"],
-            )
-        ]
-        actual = await self._rpc_client.get_blocks({1}, True)
         self.assertEqual(expected, actual)
 
 

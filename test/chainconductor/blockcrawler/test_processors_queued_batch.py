@@ -1,26 +1,14 @@
 import time
 import unittest
-from unittest.mock import AsyncMock, call
 from asyncio import QueueEmpty
+from unittest.mock import AsyncMock, call
 from unittest.mock import MagicMock
-
-import ddt
 
 from chainconductor.blockcrawler.processors.queued_batch import (
     QueuedAcquisitionStrategy,
     DevNullDispositionStrategy,
     QueuedDispositionStrategy,
     TypeQueuedDispositionStrategy,
-    MetadataQueuedDispositionStrategy,
-)
-
-
-from chainconductor.blockcrawler.processors import (
-    TokenTransportObject,
-    Token,
-)
-from chainconductor.web3.types import (
-    HexInt,
 )
 
 
@@ -110,51 +98,3 @@ class TypeQueuedDispositionStrategyTestCase(unittest.IsolatedAsyncioTestCase):
         await self.__strategy(None)
         self.__int_queue.put.assert_awaited_once_with(None)
         self.__str_queue.put.assert_awaited_once_with(None)
-
-
-@ddt.ddt
-class MetadataDispositionStrategyTestCase(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self) -> None:
-        self.__storage_queue = AsyncMock()
-        self.__capture_queue = AsyncMock()
-        self.__strategy = MetadataQueuedDispositionStrategy(
-            storage_queue=self.__storage_queue,
-            capture_queue=self.__capture_queue,
-        )
-
-    @ddt.data(None, "")
-    async def test_sends_token_with_no_metadata_uri_only_to_storage(self, uri):
-        tto = TokenTransportObject(
-            token=Token(
-                collection_id="",
-                original_owner="",
-                token_id=HexInt(""),
-                timestamp=HexInt(""),
-                metadata_uri=uri,
-            )
-        )
-        await self.__strategy([tto])
-        self.__storage_queue.put.assert_awaited_once_with(tto)
-        self.__capture_queue.put.assert_not_awaited()
-
-    async def test_sends_token_with_metadata_uri_only_to_capture(self):
-        tto = TokenTransportObject(
-            token=Token(
-                collection_id="",
-                original_owner="",
-                token_id=HexInt(""),
-                timestamp=HexInt(""),
-                metadata_uri="uri",
-            )
-        )
-        await self.__strategy([tto])
-        self.__capture_queue.put.assert_awaited_once_with(tto)
-        self.__storage_queue.put.assert_not_awaited()
-
-    async def test_sends_none_value_to_capture_queue(self):
-        await self.__strategy(None)
-        self.__capture_queue.put.assert_awaited_once_with(None)
-
-    async def test_does_not_send_none_value_to_storage_queue(self):
-        await self.__strategy(None)
-        self.__storage_queue.put.assert_not_called()

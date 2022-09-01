@@ -17,6 +17,7 @@ from chainconductor.blockcrawler.data_clients import (
     HttpDataClient,
     ArweaveDataClient,
     ProtocolTimeoutError,
+    DataClient,
 )
 from chainconductor.blockcrawler.data_clients import ProtocolError
 from chainconductor.blockcrawler.stats import StatsService
@@ -101,6 +102,7 @@ class Token:  # pragma: no cover
         timestamp: HexInt,
         metadata_uri: str = None,
         metadata: str = None,
+        metadata_content_type: str = None,
     ) -> None:
         self.__collection_id = collection_id
         self.__original_owner = original_owner
@@ -108,6 +110,7 @@ class Token:  # pragma: no cover
         self.__timestamp = timestamp
         self.__metadata_uri = metadata_uri
         self.__metadata = metadata
+        self.__metadata_content_type = metadata_content_type
 
     @property
     def collection_id(self) -> str:
@@ -133,6 +136,10 @@ class Token:  # pragma: no cover
     def metadata(self):
         return self.__metadata
 
+    @property
+    def metadata_content_type(self):
+        return self.__metadata_content_type
+
     def __repr__(self):
         return (
             self.__class__.__name__
@@ -143,6 +150,7 @@ class Token:  # pragma: no cover
                 "timestamp": self.timestamp,
                 "metadata_uri": self.metadata_uri,
                 "metadata": self.__metadata,
+                "metadata_content_type": self.__metadata_content_type,
             }.__repr__()
         )
 
@@ -155,6 +163,7 @@ class Token:  # pragma: no cover
             and self.timestamp == other.timestamp
             and self.metadata_uri == other.metadata_uri
             and self.metadata == other.metadata
+            and self.metadata_content_type == other.metadata_content_type
         )
 
 
@@ -216,9 +225,11 @@ class BlockBatchProcessor:
 
     async def __call__(self, batch: List[int]) -> List[Tuple[str, Block]]:
         with self.__stats_service.timer(self.RPC_TIMER_GET_BLOCKS):
-            blocks = await self.__rpc_client.get_blocks(set(batch), full_transactions=False)
+            blocks = await self.__rpc_client.get_blocks(set(batch))
         results = list()
         for block in blocks:
+            if isinstance(block, RPCError):
+                raise block
             for transaction in block.transactions:
                 results.append((transaction, block))
             self.__stats_service.increment(self.PROCESSED_STAT)
@@ -242,8 +253,8 @@ class TransactionBatchProcessor:
         self,
         transport_objects: List[Tuple[str, Block]],
     ) -> List[TransportObject]:
-        results = list()
-        transaction_hashes = list()
+        results: List[TransportObject] = list()
+        transaction_hashes: List[str] = list()
         transactions_hash_map: Dict[str, Block] = dict()
 
         for transaction_hash, block in transport_objects:
@@ -254,8 +265,10 @@ class TransactionBatchProcessor:
             receipts = await self.__rpc_client.get_transaction_receipts(transaction_hashes)
 
         for receipt in receipts:
+            if isinstance(receipt, RPCError):
+                raise receipt
             block = transactions_hash_map[receipt.transaction_hash]
-            out_transport_object = None
+            out_transport_object: Optional[TransportObject] = None
             if receipt.to_ is None:
                 # No to address is indicative of contract creation
                 # If there is no to address,
@@ -271,7 +284,7 @@ class TransactionBatchProcessor:
                     block=block, transaction_receipt=receipt
                 )
 
-            if out_transport_object:
+            if out_transport_object is not None:
                 results.append(out_transport_object)
 
             self.__stats_service.increment(self.PROCESSED_STAT)
@@ -295,11 +308,20 @@ class ContractBatchProcessor:
     ) -> List[ContractTransportObject]:
         results = list()
         for in_transport_object in transport_objects:
+            if in_transport_object.transaction_receipt is None:
+                raise ValueError(
+                    f"TokenTransportObject provided "
+                    f"has no transaction_receipt: {in_transport_object}"
+                )
+
             contract_id = in_transport_object.transaction_receipt.contract_address
             supported_interfaces, name, symbol, total_supply = await self.__get_contract_data(
                 contract_id
             )
-            if ERC165InterfaceID.ERC721 in supported_interfaces:
+            if (
+                ERC165InterfaceID.ERC721 in supported_interfaces
+                and in_transport_object.transaction_receipt.contract_address is not None
+            ):
                 contract = Contract(
                     address=in_transport_object.transaction_receipt.contract_address,
                     creator=in_transport_object.transaction_receipt.from_,
@@ -316,7 +338,7 @@ class ContractBatchProcessor:
                 )
                 results.append(out_transport_object)
             self.__stats_service.increment(self.PROCESSED_STAT)
-            return results
+        return results
 
     async def __get_contract_data(
         self, contract_address
@@ -382,14 +404,15 @@ class ContractBatchProcessor:
         supports_interfaces = [
             ERC165InterfaceID.from_value(key)
             for key, value in responses.items()
-            if not isinstance(value, RPCServerError) and value[0] is True
+            if value is not None and not isinstance(value, RPCServerError) and value[0] is True
         ]
 
         if "name" in responses:
             name = (
                 responses["name"][0]
-                if not isinstance(responses["name"], RPCServerError)
-                else "#ERROR"
+                if responses["name"] is not None
+                and not isinstance(responses["name"], RPCServerError)
+                else None
             )
         else:
             name = None
@@ -397,8 +420,9 @@ class ContractBatchProcessor:
         if "symbol" in responses:
             symbol = (
                 responses["symbol"][0]
-                if not isinstance(responses["symbol"], RPCServerError)
-                else "#ERROR"
+                if responses["symbol"] is not None
+                and not isinstance(responses["symbol"], RPCServerError)
+                else None
             )
         else:
             symbol = None
@@ -406,8 +430,9 @@ class ContractBatchProcessor:
         if "total_supply" in responses:
             total_supply = (
                 responses["total_supply"][0]
-                if not isinstance(responses["total_supply"], RPCServerError)
-                else "#ERROR"
+                if responses["total_supply"] is not None
+                and not isinstance(responses["total_supply"], RPCServerError)
+                else None
             )
         else:
             total_supply = None
@@ -419,30 +444,52 @@ class CollectionPersistenceBatchProcessor:
     PROCESSED_STAT = "collection_persisted"
     DYNAMODB_TIMER_WRITE_CONTRACTS = "dynamodb_write_collections"
 
-    def __init__(self, dynamodb, stats_service: StatsService, blockchain: str) -> None:
+    def __init__(
+        self, dynamodb, stats_service: StatsService, logger: Logger, blockchain: str
+    ) -> None:
         self.__dynamodb = dynamodb
         self.__stats_service: StatsService = stats_service
+        self.__logger: Logger = logger
         self.__blockchain = blockchain
 
     async def __call__(self, transport_objects: List[ContractTransportObject]):
-        collections = await self.__dynamodb.Table(Collections.table_name)
-        with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_CONTRACTS):
-            async with collections.batch_writer() as batch:
-                for transport_object in transport_objects:
-                    collection_id = transport_object.contract.address
-                    block_number = transport_object.transaction_receipt.block_number.int_value
-                    transaction_index = (
-                        transport_object.transaction_receipt.transaction_index.int_value
-                    )
-                    transaction_hash = transport_object.transaction_receipt.transaction_hash
-                    creator = transport_object.contract.creator
-                    timestamp = transport_object.block.timestamp.int_value
-                    name = transport_object.contract.name
-                    symbol = transport_object.contract.symbol
-                    total_supply = transport_object.contract.total_supply
-                    interfaces = [i.value for i in transport_object.contract.interfaces]
-                    await batch.put_item(
-                        Item={
+        try:
+            collections = await self.__dynamodb.Table(Collections.table_name)
+            with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_CONTRACTS):
+                items = list()
+                async with collections.batch_writer() as batch:
+                    for transport_object in transport_objects:
+                        if transport_object.contract is None:
+                            raise ValueError(
+                                f"TokenTransportObject provided has no contract: {transport_object}"
+                            )
+                        if transport_object.block is None:
+                            raise ValueError(
+                                f"TokenTransportObject provided has no block: {transport_object}"
+                            )
+                        if transport_object.transaction_receipt is None:
+                            raise ValueError(
+                                f"TokenTransportObject provided "
+                                f"has no transaction_receipt: {transport_object}"
+                            )
+
+                        collection_id = transport_object.contract.address
+                        block_number = transport_object.transaction_receipt.block_number.int_value
+                        transaction_index = (
+                            transport_object.transaction_receipt.transaction_index.int_value
+                        )
+                        transaction_hash = transport_object.transaction_receipt.transaction_hash
+                        creator = transport_object.contract.creator
+                        timestamp = transport_object.block.timestamp.int_value
+                        name = transport_object.contract.name
+                        symbol = transport_object.contract.symbol
+                        total_supply = (
+                            hex(transport_object.contract.total_supply)
+                            if transport_object.contract.total_supply
+                            else None
+                        )
+                        interfaces = [i.value for i in transport_object.contract.interfaces]
+                        item = {
                             "blockchain": self.__blockchain,
                             "collection_id": collection_id,
                             "block_number": block_number,
@@ -455,8 +502,11 @@ class CollectionPersistenceBatchProcessor:
                             "total_supply": total_supply,
                             "interfaces": interfaces,
                         }
-                    )
-                    self.__stats_service.increment(self.PROCESSED_STAT)
+                        items.append(item)
+                        await batch.put_item(Item=item)
+                        self.__stats_service.increment(self.PROCESSED_STAT)
+        except (ClientError, decimal.Inexact):
+            self.__logger.exception(f"Error writing items to Collections: {items}")
 
 
 class TokenTransferPersistenceBatchProcessor:
@@ -480,23 +530,43 @@ class TokenTransferPersistenceBatchProcessor:
             with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_TOKEN_TRANSFERS):
                 async with transfers.batch_writer() as batch:
                     for transport_object in transport_objects:
+                        if transport_object.transaction_receipt is None:
+                            raise ValueError(
+                                f"TokenTransportObject provided "
+                                f"has no transaction_receipt: {transport_object}"
+                            )
+
                         for log in transport_object.transaction_receipt.logs:
                             if (
                                 len(log.topics) == 4
                                 and log.topics[0] == ERC721Events.TRANSFER.event_hash
+                                and log.address is not None
                             ):
                                 # ERC-20 transfer events only have 3 topics. ERC-721 transfer events
                                 # have 4 topics. Process only logs with 4 topics.
                                 try:
-                                    from_address = decode(["address"], decode_hex(log.topics[1]))[0]
-                                    to_address = decode(["address"], decode_hex(log.topics[2]))[0]
-                                    token_id = decode(["uint256"], decode_hex(log.topics[3]))[0]
-                                    collection_id = log.address
+                                    from_address: str = decode(
+                                        ["address"], decode_hex(log.topics[1])
+                                    )[0]
+                                    to_address: str = decode(
+                                        ["address"], decode_hex(log.topics[2])
+                                    )[0]
+                                    token_id: int = decode(["uint256"], decode_hex(log.topics[3]))[
+                                        0
+                                    ]
+                                    collection_id: str = log.address
                                 except Exception:
                                     # There are occasional bad transactions in the chain,
                                     # it's usually token IDs that are larger than 256 bits
                                     self.__stats_service.increment(self.TOPICS_DECODE_ERRORS)
                                     continue
+
+                                if transport_object.block is None:
+                                    raise ValueError(
+                                        f"TokenTransportObject provided "
+                                        f"has no Block: {transport_object}"
+                                    )
+
                                 timestamp = transport_object.block.timestamp
                                 transaction_log_index_hash = keccak(
                                     (
@@ -542,7 +612,7 @@ class TokenTransferPersistenceBatchProcessor:
                                     results.append(out_transport_object)
 
                                 self.__stats_service.increment(self.PROCESSED_STAT)
-        except (ClientError):
+        except (ClientError, decimal.Inexact):
             self.__logger.exception(f"Error writing items to TokenTransfers: {items}")
         return results
 
@@ -569,6 +639,8 @@ class TokenMetadataUriBatchProcessor:
         results = list()
         requests = list()
         for transport_object in transport_objects:
+            if transport_object.token is None:
+                raise ValueError(f"TokenTransportObject provided has no Token: {transport_object}")
             token_id = transport_object.token.token_id.int_value
             requests.append(
                 EthCall(
@@ -596,9 +668,12 @@ class TokenMetadataUriBatchProcessor:
             metadata_uri = None
             for get_id in [_get_1155_id_for_token, _get_721_id_for_token]:
                 response = responses[get_id(transport_object.token)]
-                if not isinstance(response, RPCServerError):
+                if response is not None and not isinstance(response, RPCServerError):
                     metadata_uri = response[0]
                     break
+
+            if transport_object.token is None:
+                raise ValueError(f"TokenTransportObject provided has no Token: {transport_object}")
 
             out_transport_object = TokenTransportObject(
                 block=transport_object.block,
@@ -619,7 +694,7 @@ class TokenMetadataUriBatchProcessor:
 
 class TokenMetadataRetrievalBatchProcessor:
     PROCESSED_STAT = "token_metadata_retrieves"
-    PROTOCOL_MATCH_REGEX = re.compile("^([^:]+)://.+")
+    PROTOCOL_MATCH_REGEX = re.compile("^(?:([^:]+)://|(data):).+$")
     METADATA_RETRIEVAL_HTTP_TIMER = "metadata_retrieval_http"
     METADATA_RETRIEVAL_HTTP_ERROR_STAT = "metadata_retrieval_http_error"
     METADATA_RETRIEVAL_HTTP_TIMEOUT_STAT = "metadata_retrieval_http_timeout"
@@ -629,6 +704,8 @@ class TokenMetadataRetrievalBatchProcessor:
     METADATA_RETRIEVAL_ARWEAVE_TIMER = "metadata_retrieval_arweave"
     METADATA_RETRIEVAL_ARWEAVE_ERROR_STAT = "metadata_retrieval_arweave_error"
     METADATA_RETRIEVAL_ARWEAVE_TIMEOUT_STAT = "metadata_retrieval_arweave_timeout"
+    METADATA_RETRIEVAL_DATA_URI_TIMER = "metadata_retrieval_data_uri"
+    METADATA_RETRIEVAL_DATA_URI_ERROR_STAT = "metadata_retrieval_data_uri_error"
     METADATA_RETRIEVAL_ENCODING_ERROR_STAT = "metadata_retrieval_encoding_error"
     METADATA_RETRIEVAL_UNSUPPORTED_PROTOCOL_STAT = "metadata_retrieval_unsupported_protocol"
 
@@ -638,20 +715,27 @@ class TokenMetadataRetrievalBatchProcessor:
         http_data_client: HttpDataClient,
         ipfs_data_client: IpfsDataClient,
         arweave_data_client: ArweaveDataClient,
+        data_uri_data_client,
     ) -> None:
         self.__stats_service = stats_service
         self.__http_data_client = http_data_client
         self.__ipfs_data_client = ipfs_data_client
         self.__arweave_data_client = arweave_data_client
+        self.__data_uri_data_client = data_uri_data_client
 
     async def __call__(self, transport_objects: List[TokenTransportObject]):
-        results = list()
-        coroutines = list()
-        uri_tto_map = dict()
+        results: List[TokenTransportObject] = list()
+        coroutines: List[Coroutine] = list()
+        uri_tto_map: Dict[str, List[TokenTransportObject]] = dict()
         for transport_object in transport_objects:
+            if transport_object.token is None:
+                raise ValueError(f"TokenTransportObject provided has no Token: {transport_object}")
             uri = transport_object.token.metadata_uri
-            stat, data_client = self.__get_stat_and_data_client_for_uri(uri)
-            if stat:
+            if uri:  # TODO: Filter our non metadata URI tokens before the batch
+                stat, data_client = self.__get_stat_and_data_client_for_uri(uri)
+            else:
+                stat, data_client = None, None
+            if stat and data_client:
                 if uri not in uri_tto_map:  # Don't get the same URI multiple times
                     uri_tto_map[uri] = list()
                     coroutines.append(
@@ -661,17 +745,25 @@ class TokenMetadataRetrievalBatchProcessor:
                     )
                 uri_tto_map[uri].append(transport_object)
             else:
-                results.append(transport_object)
-                self.__stats_service.increment(self.PROCESSED_STAT)
+                self.__stats_service.increment(self.METADATA_RETRIEVAL_UNSUPPORTED_PROTOCOL_STAT)
 
         if coroutines:
             responses = await asyncio.gather(*coroutines)
-            for uri, response in responses:
+            for uri, response_content_type, response in responses:
                 for transport_object in uri_tto_map[uri]:
                     if isinstance(response, (ProtocolError, UnicodeDecodeError)):
-                        out_transport_object = transport_object
                         await self.__process_error(response, uri)
+                        continue
                     else:
+                        if transport_object.token is None:
+                            raise ValueError(
+                                f"TokenTransportObject provided has no Token: {transport_object}"
+                            )
+                        if self.__get_protocol_from_uri(uri) == "data":
+                            # Data URIs are too large to store
+                            metadata_uri = "data"
+                        else:
+                            metadata_uri = transport_object.token.metadata_uri
                         out_transport_object = TokenTransportObject(
                             block=transport_object.block,
                             transaction_receipt=transport_object.transaction_receipt,
@@ -680,51 +772,62 @@ class TokenMetadataRetrievalBatchProcessor:
                                 collection_id=transport_object.token.collection_id,
                                 original_owner=transport_object.token.original_owner,
                                 timestamp=transport_object.token.timestamp,
-                                metadata_uri=transport_object.token.metadata_uri,
+                                metadata_uri=metadata_uri,
                                 metadata=response,
+                                metadata_content_type=response_content_type,
                             ),
                         )
                     results.append(out_transport_object)
                     self.__stats_service.increment(self.PROCESSED_STAT)
         return results
 
-    async def __process_error(self, response, uri):
+    async def __process_error(self, error: Exception, uri: str) -> None:
         proto = self.__get_protocol_from_uri(uri)
-        if isinstance(response, UnicodeDecodeError):
+        if isinstance(error, UnicodeDecodeError):
             self.__stats_service.increment(self.METADATA_RETRIEVAL_ENCODING_ERROR_STAT)
         elif proto in ("http", "https"):
-            if isinstance(response, ProtocolTimeoutError):
+            if isinstance(error, ProtocolTimeoutError):
                 self.__stats_service.increment(self.METADATA_RETRIEVAL_HTTP_TIMEOUT_STAT)
             else:
                 self.__stats_service.increment(self.METADATA_RETRIEVAL_HTTP_ERROR_STAT)
         elif proto == "ipfs":
-            if isinstance(response, ProtocolTimeoutError):
+            if isinstance(error, ProtocolTimeoutError):
                 self.__stats_service.increment(self.METADATA_RETRIEVAL_IPFS_TIMEOUT_STAT)
             else:
                 self.__stats_service.increment(self.METADATA_RETRIEVAL_IPFS_ERROR_STAT)
         elif proto == "ar":
-            if isinstance(response, ProtocolTimeoutError):
+            if isinstance(error, ProtocolTimeoutError):
                 self.__stats_service.increment(self.METADATA_RETRIEVAL_ARWEAVE_TIMEOUT_STAT)
             else:
                 self.__stats_service.increment(self.METADATA_RETRIEVAL_ARWEAVE_ERROR_STAT)
+        elif proto == "data":
+            self.__stats_service.increment(self.METADATA_RETRIEVAL_DATA_URI_ERROR_STAT)
 
-    def __get_protocol_from_uri(self, uri):
+    def __get_protocol_from_uri(self, uri: str) -> Optional[str]:
         match = self.PROTOCOL_MATCH_REGEX.fullmatch(uri)
-        return match.group(1).lower() if match else None
+        if match and match.group(1):
+            protocol = match.group(1)
+        elif match and match.group(2):
+            protocol = match.group(2)
+        else:
+            protocol = None
+        return protocol
 
-    async def __timed_coroutine(self, timer: str, coroutine: Coroutine):
+    async def __timed_coroutine(self, timer: str, coroutine: Coroutine) -> str:
         with self.__stats_service.timer(timer):
             return await coroutine
 
     @staticmethod
-    async def __uri_indexed_coroutine(uri, coroutine):
+    async def __uri_indexed_coroutine(uri, coroutine) -> Tuple[str, str, str]:
         try:
-            result = await coroutine
+            result_content_type, result = await coroutine
         except (ProtocolError, UnicodeDecodeError) as e:
-            result = e
-        return uri, result
+            result_content_type, result = None, e
+        return uri, result_content_type, result
 
-    def __get_stat_and_data_client_for_uri(self, uri):
+    def __get_stat_and_data_client_for_uri(
+        self, uri: str
+    ) -> Tuple[Optional[str], Optional[DataClient]]:
         proto = self.__get_protocol_from_uri(uri)
         if proto in ("https", "http"):
             stat = self.METADATA_RETRIEVAL_HTTP_TIMER
@@ -735,10 +838,12 @@ class TokenMetadataRetrievalBatchProcessor:
         elif proto == "ar":
             stat = self.METADATA_RETRIEVAL_ARWEAVE_TIMER
             data_client = self.__arweave_data_client
+        elif proto == "data":
+            stat = self.METADATA_RETRIEVAL_DATA_URI_TIMER
+            data_client = self.__data_uri_data_client
         else:
             stat = None
             data_client = None
-            self.__stats_service.increment(self.METADATA_RETRIEVAL_UNSUPPORTED_PROTOCOL_STAT)
         return stat, data_client
 
 
@@ -758,22 +863,31 @@ class TokenPersistenceBatchProcessor:
         self.__logger = logger
         self.__blockchain = blockchain
 
-    async def __call__(self, transport_objects: List[TokenTransportObject]):
+    async def __call__(
+        self, transport_objects: List[TokenTransportObject]
+    ) -> List[TokenTransportObject]:
+        result = transport_objects[:]
         table = await self.__dynamodb.Table(Tokens.table_name)
         items = list()
         try:
             with self.__stats_service.timer(self.DYNAMODB_TIMER_WRITE_TOKENS):
                 async with table.batch_writer() as batch_writer:
                     for transport_object in transport_objects:
+                        if transport_object.token is None:
+                            raise ValueError(
+                                f"TokenTransportObject provided has no Token: {transport_object}"
+                            )
                         collection_id = transport_object.token.collection_id
                         blockchain_collection_id = keccak(
                             (self.__blockchain + collection_id).encode("utf8")
                         ).hex()
                         timestamp = transport_object.token.timestamp.int_value
                         original_owner = transport_object.token.original_owner
-                        token_id = str(transport_object.token.token_id.int_value)
+                        token_id = transport_object.token.token_id.hex_value
                         metadata_uri = transport_object.token.metadata_uri
-                        metadata = transport_object.token.metadata
+                        if metadata_uri and metadata_uri.startswith("data:"):
+                            metadata_uri = "data"
+
                         item = {
                             "blockchain_collection_id": blockchain_collection_id,
                             "token_id": token_id,
@@ -782,13 +896,50 @@ class TokenPersistenceBatchProcessor:
                             "original_owner": original_owner,
                             "mint_timestamp": timestamp,
                             "metadata_uri": metadata_uri,
-                            "metadata": metadata,
                         }
                         items.append(item)
                         await batch_writer.put_item(Item=item)
                         self.__stats_service.increment(self.PROCESSED_STAT)
         except (ClientError, decimal.Inexact):
             self.__logger.exception(f"Error writing items to Tokens: {items}")
+        return result
+
+
+class TokenMetadataPersistenceBatchProcessor:
+    PROCESSED_STAT = "token_metadata_files_persisted"
+    S3_TIMER_WRITE_METADATA_FILES = "s3_write_metadata_files"
+
+    def __init__(
+        self,
+        s3_bucket,
+        s3_batch_size: int,
+        stats_service: StatsService,
+        logger: Logger,
+        blockchain: str,
+    ) -> None:
+        self.__stats_service = stats_service
+        self.__s3_bucket = s3_bucket
+        self.__s3_batch_size = s3_batch_size
+        self.__logger = logger
+        self.__blockchain = blockchain
+
+    async def __call__(self, transport_objects: List[TokenTransportObject]):
+        coroutines: List[Coroutine] = list()
+        for transport_object in transport_objects:
+            if transport_object.token is None:
+                raise ValueError(f"TokenTransportObject provided has no Token: {transport_object}")
+            token: Token = transport_object.token
+            coroutines.append(self.store_metadata(token))
+        await asyncio.gather(*coroutines)
+
+    async def store_metadata(self, token: Token):
+        with self.__stats_service.timer(self.S3_TIMER_WRITE_METADATA_FILES):
+            await self.__s3_bucket.put_object(
+                Key=f"{self.__blockchain}/{token.collection_id}/{token.token_id}",
+                Body=token.metadata.encode("utf8"),
+                ContentType=token.metadata_content_type,
+            )
+        self.__stats_service.increment(self.PROCESSED_STAT)
 
 
 class RPCErrorRetryDecoratingBatchProcessor:

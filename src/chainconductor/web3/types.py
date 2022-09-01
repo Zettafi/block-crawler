@@ -63,140 +63,6 @@ class Type:
     pass
 
 
-class Transaction(Type):  # pragma: no cover
-    def __init__(
-        self,
-        *,
-        hash: str,
-        block_hash: str,
-        block_number: str,
-        from_: str,
-        gas: str,
-        gas_price: str,
-        input: str,
-        nonce: str,
-        to_: Optional[str],
-        transaction_index: str,
-        value: str,
-        v: str,
-        r: str,
-        s: str,
-    ) -> None:
-        self.__block_hash = block_hash
-        self.__block_number = HexInt(block_number)
-        self.__from_ = from_
-        self.__gas = HexInt(gas)
-        self.__gas_price = HexInt(gas_price)
-        self.__hash = hash
-        self.__input = input
-        self.__nonce = HexInt(nonce)
-        self.__to_ = to_
-        self.__transaction_index = HexInt(transaction_index)
-        self.__value = HexInt(value)
-        self.__v = HexInt(v)
-        self.__r = HexInt(r)
-        self.__s = HexInt(s)
-
-    def __eq__(self, o: object) -> bool:
-        return (
-            isinstance(o, self.__class__)
-            and self.hash == o.hash
-            and self.block_hash == o.block_hash
-            and self.block_number == o.block_number
-            and self.from_ == o.from_
-            and self.gas == o.gas
-            and self.gas_price == o.gas_price
-            and self.input == o.input
-            and self.nonce == o.nonce
-            and self.to_ == o.to_
-            and self.transaction_index == o.transaction_index
-            and self.value == o.value
-            and self.v == o.v
-            and self.r == o.r
-            and self.s == o.s
-        )
-
-    def __repr__(self) -> str:
-        return (
-            self.__class__.__name__
-            + ": "
-            + repr(
-                {
-                    "hash": self.hash,
-                    "block_hash": self.block_hash,
-                    "block_number": self.block_number,
-                    "from_": self.from_,
-                    "gas": self.gas,
-                    "gas_price": self.gas_price,
-                    "input": self.input,
-                    "nonce": self.nonce,
-                    "to_": self.to_,
-                    "transaction_index": self.transaction_index,
-                    "value": self.value,
-                    "v": self.v,
-                    "r": self.r,
-                    "s": self.s,
-                }
-            )
-        )
-
-    @property
-    def block_hash(self) -> str:
-        return self.__block_hash
-
-    @property
-    def block_number(self) -> HexInt:
-        return self.__block_number
-
-    @property
-    def from_(self) -> str:
-        return self.__from_
-
-    @property
-    def gas(self) -> HexInt:
-        return self.__gas
-
-    @property
-    def gas_price(self) -> HexInt:
-        return self.__gas_price
-
-    @property
-    def hash(self) -> str:
-        return self.__hash
-
-    @property
-    def input(self) -> str:
-        return self.__input
-
-    @property
-    def nonce(self) -> HexInt:
-        return self.__nonce
-
-    @property
-    def to_(self) -> str:
-        return self.__to_
-
-    @property
-    def transaction_index(self) -> HexInt:
-        return self.__transaction_index
-
-    @property
-    def value(self) -> HexInt:
-        return self.__value
-
-    @property
-    def v(self) -> HexInt:
-        return self.__v
-
-    @property
-    def r(self) -> HexInt:
-        return self.__r
-
-    @property
-    def s(self) -> HexInt:
-        return self.__s
-
-
 class Block(Type):
     def __init__(
         self,
@@ -219,7 +85,7 @@ class Block(Type):
         gas_limit: str,
         gas_used: str,
         timestamp: str,
-        transactions: List[Union[Transaction, str]],
+        transactions: List[str],
         uncles: List[str],
     ):
         self.__number = HexInt(number)
@@ -367,8 +233,8 @@ class Block(Type):
         return self.__gas_used
 
     @property
-    def transactions(self) -> List[Union[Transaction, str]]:
-        return self.__transactions.copy()
+    def transactions(self) -> List[str]:
+        return self.__transactions[:]
 
     @property
     def timestamp(self) -> HexInt:
@@ -392,7 +258,7 @@ class Log(Type):
         address: Optional[str],
         data: str,
         topics: List[str],
-    ) -> object:
+    ) -> None:
         self.__removed = removed
         self.__log_index = HexInt(log_index)
         self.__transaction_index = HexInt(transaction_index)
@@ -458,7 +324,7 @@ class Log(Type):
         return self.__block_number
 
     @property
-    def address(self) -> str:
+    def address(self) -> Optional[str]:
         return self.__address
 
     @property
@@ -479,13 +345,13 @@ class TransactionReceipt(Type):
         block_hash: str,
         block_number: str,
         from_: str,
-        to_: Union[str, None],
+        to_: Optional[str],
         cumulative_gas_used: str,
         gas_used: str,
-        contract_address: Union[str, None],
+        contract_address: Optional[str],
         logs: List[Log],
         logs_bloom: str,
-        root: Union[str, None],
+        root: Optional[str],
         status: str,
     ) -> None:
         self.__transaction_hash = transaction_hash
@@ -562,7 +428,7 @@ class TransactionReceipt(Type):
         return self.__from_
 
     @property
-    def to_(self) -> str:
+    def to_(self) -> Optional[str]:
         return self.__to_
 
     @property
@@ -574,11 +440,11 @@ class TransactionReceipt(Type):
         return self.__gas_used
 
     @property
-    def contract_address(self) -> str:
+    def contract_address(self) -> Optional[str]:
         return self.__contract_address
 
     @property
-    def logs(self):
+    def logs(self) -> List[Log]:
         return self.__logs.copy()
 
     @property
@@ -586,7 +452,7 @@ class TransactionReceipt(Type):
         return self.__logs_bloom
 
     @property
-    def root(self) -> str:
+    def root(self) -> Optional[str]:
         return self.__root
 
     @property
@@ -649,16 +515,16 @@ class Contract:  # pragma: no cover
         address: str,
         creator: str,
         interfaces: List[ERC165InterfaceID],
-        name: str,
-        symbol: str,
-        total_supply: int,
+        name: Union[str, None],
+        symbol: Union[str, None],
+        total_supply: Union[int, None],  # TODO: Needs to be HexInt
     ) -> None:
         self.__address: str = address
         self.__creator: str = creator
         self.__interfaces: List[ERC165InterfaceID] = interfaces
-        self.__name: str = name
-        self.__symbol: str = symbol
-        self.__total_supply: int = total_supply
+        self.__name: Optional[str] = name
+        self.__symbol: Optional[str] = symbol
+        self.__total_supply: Optional[int] = total_supply
 
     @property
     def address(self) -> str:
@@ -673,13 +539,13 @@ class Contract:  # pragma: no cover
         return self.__interfaces
 
     @property
-    def name(self) -> str:
+    def name(self) -> Optional[str]:
         return self.__name
 
     @property
-    def symbol(self) -> str:
+    def symbol(self) -> Optional[str]:
         return self.__symbol
 
     @property
-    def total_supply(self) -> int:
+    def total_supply(self) -> Optional[int]:
         return self.__total_supply

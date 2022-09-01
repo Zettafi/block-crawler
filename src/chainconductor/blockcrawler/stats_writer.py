@@ -14,6 +14,7 @@ from chainconductor.blockcrawler.processors import (
     TokenMetadataUriBatchProcessor,
     TokenMetadataRetrievalBatchProcessor,
     TokenPersistenceBatchProcessor,
+    TokenMetadataPersistenceBatchProcessor,
 )
 from chainconductor.blockcrawler.stats import StatsService
 
@@ -31,8 +32,8 @@ class StatsWriter:
         if show_header:
             click.echo(
                 "Total Time  | Blocks      | Transactions | Contracts   | "
-                "Collection Writes | Token Transfer Writes | Token Metadata | "
-                "Metadata Gather | Token Writes"
+                "Collection Writes | Token Transfer Writes | "
+                "Token Writes | Metadata Writes"
             )
             click.echo("", nl=False)
 
@@ -71,17 +72,11 @@ class StatsWriter:
                     )
                 )
                 + " | "
-                + "{:<14,}".format(
-                    self.__stats_service.get_count(TokenMetadataUriBatchProcessor.PROCESSED_STAT)
+                + "{:<12,}".format(
+                    self.__stats_service.get_count(TokenPersistenceBatchProcessor.PROCESSED_STAT)
                 )
                 + " | "
                 + "{:<15,}".format(
-                    self.__stats_service.get_count(
-                        TokenMetadataRetrievalBatchProcessor.PROCESSED_STAT
-                    )
-                )
-                + " | "
-                + "{:<12,}".format(
                     self.__stats_service.get_count(TokenPersistenceBatchProcessor.PROCESSED_STAT)
                 ),
                 nl=False,
@@ -503,6 +498,47 @@ class StatsWriter:
                 else "n/a"
             )
         )
+        metadata_retrieval_data_uri_timers = self.__stats_service.get_timings(
+            TokenMetadataRetrievalBatchProcessor.METADATA_RETRIEVAL_DATA_URI_TIMER
+        )
+        metadata_retrieval_data_uri_timers_count = len(metadata_retrieval_data_uri_timers)
+        metadata_retrieval_data_uri_timeouts = 0
+        metadata_retrieval_data_uri_timeout_rate = 0
+        metadata_retrieval_data_uri_errors = self.__stats_service.get_count(
+            TokenMetadataRetrievalBatchProcessor.METADATA_RETRIEVAL_DATA_URI_ERROR_STAT
+        )
+        metadata_retrieval_data_uri_error_rate = (
+            metadata_retrieval_data_uri_errors / metadata_retrieval_data_uri_timers_count
+            if metadata_retrieval_data_uri_timers_count
+            else 0
+        )
+        click.echo("  Data URI Gather Calls:")
+        click.echo("    Total Calls: {:,}".format(metadata_retrieval_data_uri_timers_count))
+        click.echo("    Total Timeouts: {:,}".format(metadata_retrieval_data_uri_timeouts))
+        click.echo("    Timeout Rate: {:0.2f}".format(metadata_retrieval_data_uri_timeout_rate))
+        click.echo("    Total Errors: {:,}".format(metadata_retrieval_data_uri_errors))
+        click.echo("    Error Rate: {:0.2f}".format(metadata_retrieval_data_uri_error_rate))
+        click.echo(
+            "    Total Processing Time: {}".format(
+                self.__get_time_from_secs(sum(metadata_retrieval_data_uri_timers))
+                if len(metadata_retrieval_data_uri_timers)
+                else "n/a"
+            )
+        )
+        click.echo(
+            "    Median Batch Processing Time: {}".format(
+                self.__get_time_from_secs(median(metadata_retrieval_data_uri_timers))
+                if len(metadata_retrieval_data_uri_timers)
+                else "n/a"
+            )
+        )
+        click.echo(
+            "    Mean Batch Processing Time: {}".format(
+                self.__get_time_from_secs(mean(metadata_retrieval_data_uri_timers))
+                if len(metadata_retrieval_data_uri_timers)
+                else "n/a"
+            )
+        )
         metadata_retrieval_unsupported = self.__stats_service.get_count(
             TokenMetadataRetrievalBatchProcessor.METADATA_RETRIEVAL_UNSUPPORTED_PROTOCOL_STAT
         )
@@ -551,6 +587,49 @@ class StatsWriter:
             "  DynamoDB Tokens Batch Put Mean Processing Time: {}".format(
                 self.__get_time_from_secs(mean(dynamodb_write_tokens_batches))
                 if len(dynamodb_write_tokens_batches)
+                else "n/a"
+            )
+        )
+
+        click.echo()
+        click.echo("Stored Metadata Files:")
+        metadata_files_written = self.__stats_service.get_count(
+            TokenMetadataPersistenceBatchProcessor.PROCESSED_STAT
+        )
+        click.echo("  Total Metadata Files Stored: {:,}".format(metadata_files_written))
+        s3_write_metadata_files_batches = self.__stats_service.get_timings(
+            TokenMetadataPersistenceBatchProcessor.S3_TIMER_WRITE_METADATA_FILES
+        )
+        s3_write_metadata_files_batches_count = len(s3_write_metadata_files_batches)
+        click.echo("  S3 File Write Calls: {:,}".format(s3_write_metadata_files_batches_count))
+        s3_write_metadata_files_batches_average_size = (
+            metadata_files_written / s3_write_metadata_files_batches_count
+            if s3_write_metadata_files_batches_count
+            else 0.0
+        )
+        click.echo(
+            "  S3 File Write Avg Batch Size: {:0.2f}".format(
+                s3_write_metadata_files_batches_average_size
+            )
+        )
+        click.echo(
+            "  S3 File Write Total Processing Time: {}".format(
+                self.__get_time_from_secs(sum(s3_write_metadata_files_batches))
+                if len(s3_write_metadata_files_batches)
+                else "n/a"
+            )
+        )
+        click.echo(
+            "  S3 File Write Median Processing Time: {}".format(
+                self.__get_time_from_secs(median(s3_write_metadata_files_batches))
+                if len(s3_write_metadata_files_batches)
+                else "n/a"
+            )
+        )
+        click.echo(
+            "  S3 File Write Mean Processing Time: {}".format(
+                self.__get_time_from_secs(mean(s3_write_metadata_files_batches))
+                if len(s3_write_metadata_files_batches)
                 else "n/a"
             )
         )

@@ -24,7 +24,9 @@ from chainconductor.blockcrawler.processors import (
     TransactionBatchProcessor,
     ContractBatchProcessor,
     RPCErrorRetryDecoratingBatchProcessor,
+    TokenMetadataPersistenceBatchProcessor,
 )
+from chainconductor.blockcrawler.processors.queued_batch import QueuedBatchProcessor
 from chainconductor.blockcrawler.stats import StatsService
 from chainconductor.web3.rpc import EthCall, RPCServerError, RPCClient
 from chainconductor.web3.types import (
@@ -42,7 +44,6 @@ from chainconductor.web3.util import (
     ERC165Functions,
     ERC721EnumerableFunctions,
 )
-from chainconductor.blockcrawler.processors.queued_batch import QueuedBatchProcessor
 from .. import async_context_manager_mock
 
 
@@ -160,11 +161,7 @@ class BlockBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def test_sends_block_ids_to_rpc_client_get_blocks(self):
         await self.__processor([0, 1])
-        self.__rpc_client.get_blocks.assert_awaited_with({0, 1}, full_transactions=ANY)
-
-    async def test_sends_full_transactions_false_to_rpc_client_get_blocks(self):
-        await self.__processor([0, 1])
-        self.__rpc_client.get_blocks.assert_awaited_with(ANY, full_transactions=False)
+        self.__rpc_client.get_blocks.assert_awaited_with({0, 1})
 
     async def test_returns_items_if_there_are_transactions(
         self,
@@ -1141,13 +1138,13 @@ class ContractBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         actual = await self.__processor(self.__default_batch)
         self.assertEqual(expected, actual[0].contract.name)
 
-    async def test_sets_error_for_name_when_error(self):
+    async def test_sets_none_for_name_when_error(self):
         self.__rpc_client.calls.return_value = {
             "name": RPCServerError("", "", "", ""),
             ERC165InterfaceID.ERC721.value: (True,),
         }
         actual = await self.__processor(self.__default_batch)
-        self.assertEqual("#ERROR", actual[0].contract.name)
+        self.assertIsNone(actual[0].contract.name)
 
     async def test_sets_symbol_when_not_error(self):
         expected = "Expected Symbol"
@@ -1158,13 +1155,13 @@ class ContractBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         actual = await self.__processor(self.__default_batch)
         self.assertEqual(expected, actual[0].contract.symbol)
 
-    async def test_sets_error_for_symbol_when_error(self):
+    async def test_sets_none_for_symbol_when_error(self):
         self.__rpc_client.calls.return_value = {
             "symbol": RPCServerError("", "", "", ""),
             ERC165InterfaceID.ERC721.value: (True,),
         }
         actual = await self.__processor(self.__default_batch)
-        self.assertEqual("#ERROR", actual[0].contract.symbol)
+        self.assertIsNone(actual[0].contract.symbol)
 
     async def test_sets_total_supply_when_not_error(self):
         expected = "Expected Supply"
@@ -1175,13 +1172,13 @@ class ContractBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         actual = await self.__processor(self.__default_batch)
         self.assertEqual(expected, actual[0].contract.total_supply)
 
-    async def test_sets_error_for_total_supply_when_error(self):
+    async def test_sets_none_for_total_supply_when_error(self):
         self.__rpc_client.calls.return_value = {
             "total_supply": RPCServerError("", "", "", ""),
             ERC165InterfaceID.ERC721.value: (True,),
         }
         actual = await self.__processor(self.__default_batch)
-        self.assertEqual("#ERROR", actual[0].contract.total_supply)
+        self.assertIsNone(actual[0].contract.total_supply)
 
     async def test_does_not_return_contract_when_not_721(self):
         actual = await self.__processor(self.__default_batch)
@@ -1243,10 +1240,12 @@ class CollectionPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCa
         self.__dynamodb = AsyncMock()
         self.__dynamodb.Table.return_value.batch_writer = async_context_manager_mock()
         self.__stats_service = MagicMock()
+        self.__logger = MagicMock()
         self.__blockchain = "expected blockchain"
         self.__processor = CollectionPersistenceBatchProcessor(
             dynamodb=self.__dynamodb,
             stats_service=self.__stats_service,
+            logger=self.__logger,
             blockchain=self.__blockchain[:],
         )
 
@@ -1379,7 +1378,7 @@ class CollectionPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCa
                 "timestamp": 15,
                 "name": "name",
                 "symbol": "symbol",
-                "total_supply": 99,
+                "total_supply": hex(99),
                 "interfaces": ["0x80ac58cd", "0xd9b67a26"],
             }
         )
@@ -1527,19 +1526,26 @@ class TokenMetadataUriBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(None, actual[0].token.metadata_uri)
 
 
+@ddt.ddt
 class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__rpc_client = AsyncMock()
         self.__stats_service = MagicMock()
         self.__http_data_client = AsyncMock()
+        self.__http_data_client.get.return_value = None, None
         self.__ipfs_data_client = AsyncMock()
+        self.__ipfs_data_client.get.return_value = None, None
         self.__arweave_data_client = AsyncMock()
+        self.__arweave_data_client.get.return_value = None, None
+        self.__data_uri_data_client = AsyncMock()
+        self.__data_uri_data_client.get.return_value = None, None
 
         self.__processor = TokenMetadataRetrievalBatchProcessor(
             stats_service=self.__stats_service,
             http_data_client=self.__http_data_client,
             ipfs_data_client=self.__ipfs_data_client,
             arweave_data_client=self.__arweave_data_client,
+            data_uri_data_client=self.__data_uri_data_client,
         )
 
     async def test_increments_stats_for_each_token(self):
@@ -1553,7 +1559,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                         original_owner="0x20",
                         token_id=HexInt("0x30"),
                         timestamp=HexInt("0x40"),
-                        metadata_uri="metadata URI",
+                        metadata_uri="data:,metadata",
                     )
                 )
             )
@@ -1630,6 +1636,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                 timestamp=HexInt("0x40"),
                 metadata_uri="http://metadata.uri",
                 metadata="expected metadata",
+                metadata_content_type="expected content type",
             ),
         )
         tto2 = TokenTransportObject(
@@ -1640,10 +1647,11 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                 timestamp=HexInt("0x40"),
                 metadata_uri="http://metadata.uri",
                 metadata="expected metadata",
+                metadata_content_type="expected content type",
             ),
         )
         expected = [tto1, tto2]
-        self.__http_data_client.get.return_value = "expected metadata"
+        self.__http_data_client.get.return_value = ("expected content type", "expected metadata")
         actual = await self.__processor(batch_items)
         self.assertEqual(expected, actual)
 
@@ -1704,7 +1712,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
         await self.__processor(batch_items)
         self.__stats_service.increment.assert_any_call("metadata_retrieval_http_error")
 
-    async def test_no_change_to_token_when_http_errors(self):
+    async def test_not_added_to_result_when_http_errors(self):
         self.__http_data_client.get.side_effect = ProtocolError()
         tto = TokenTransportObject(
             token=Token(
@@ -1716,7 +1724,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
             )
         )
         actual = await self.__processor([tto])
-        self.assertEqual([tto], actual)
+        self.assertEqual([], actual)
 
     async def test_places_http_response_in_result_token(self):
         batch_items = [
@@ -1739,7 +1747,10 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                 )
             ),
         ]
-        self.__http_data_client.get.side_effect = ["0x30 metadata", "0x31 metadata"]
+        self.__http_data_client.get.side_effect = [
+            ("0x30 content type", "0x30 metadata"),
+            ("0x31 content type", "0x31 metadata"),
+        ]
 
         actual = await self.__processor(batch_items)
         expected = [
@@ -1751,6 +1762,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                     timestamp=HexInt("0x40"),
                     metadata_uri="http://meadata.uri/0x30",
                     metadata="0x30 metadata",
+                    metadata_content_type="0x30 content type",
                 )
             ),
             TokenTransportObject(
@@ -1761,6 +1773,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                     timestamp=HexInt("0x40"),
                     metadata_uri="http://meadata.uri/0x31",
                     metadata="0x31 metadata",
+                    metadata_content_type="0x31 content type",
                 )
             ),
         ]
@@ -1823,7 +1836,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
         await self.__processor(batch_items)
         self.__stats_service.increment.assert_any_call("metadata_retrieval_ipfs_error")
 
-    async def test_no_change_to_token_when_ipfs_errors(self):
+    async def test_not_added_to_result_when_ipfs_errors(self):
         self.__ipfs_data_client.get.side_effect = ProtocolError()
         tto = TokenTransportObject(
             token=Token(
@@ -1835,7 +1848,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
             )
         )
         actual = await self.__processor([tto])
-        self.assertEqual([tto], actual)
+        self.assertEqual([], actual)
 
     async def test_places_ipfs_response_in_response(self):
         batch_items = [
@@ -1858,7 +1871,10 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                 )
             ),
         ]
-        self.__ipfs_data_client.get.side_effect = ["0x30 metadata", "0x31 metadata"]
+        self.__ipfs_data_client.get.side_effect = [
+            ("0x30 content type", "0x30 metadata"),
+            ("0x31 content type", "0x31 metadata"),
+        ]
 
         actual = await self.__processor(batch_items)
         expected = [
@@ -1870,6 +1886,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                     timestamp=HexInt("0x40"),
                     metadata_uri="ipfs://meadata.uri/0x30",
                     metadata="0x30 metadata",
+                    metadata_content_type="0x30 content type",
                 )
             ),
             TokenTransportObject(
@@ -1880,6 +1897,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                     timestamp=HexInt("0x40"),
                     metadata_uri="ipfs://meadata.uri/0x31",
                     metadata="0x31 metadata",
+                    metadata_content_type="0x31 content type",
                 )
             ),
         ]
@@ -1942,7 +1960,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
         await self.__processor(batch_items)
         self.__stats_service.increment.assert_any_call("metadata_retrieval_arweave_error")
 
-    async def test_no_change_to_token_when_arweave_errors(self):
+    async def test_not_added_to_result_when_arweave_errors(self):
         self.__arweave_data_client.get.side_effect = ProtocolError()
         tto = TokenTransportObject(
             token=Token(
@@ -1954,7 +1972,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
             )
         )
         actual = await self.__processor([tto])
-        self.assertEqual([tto], actual)
+        self.assertEqual([], actual)
 
     async def test_places_arweave_response_in_result_token(self):
         batch_items = [
@@ -1964,7 +1982,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                     original_owner="0x20",
                     token_id=HexInt("0x30"),
                     timestamp=HexInt("0x40"),
-                    metadata_uri="ar://meadata.uri/0x30",
+                    metadata_uri="ar://metadata.uri/0x30",
                 )
             ),
             TokenTransportObject(
@@ -1973,11 +1991,14 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                     original_owner="0x20",
                     token_id=HexInt("0x31"),
                     timestamp=HexInt("0x40"),
-                    metadata_uri="ar://meadata.uri/0x31",
+                    metadata_uri="ar://metadata.uri/0x31",
                 )
             ),
         ]
-        self.__arweave_data_client.get.side_effect = ["0x30 metadata", "0x31 metadata"]
+        self.__arweave_data_client.get.side_effect = [
+            ("0x30 content type", "0x30 metadata"),
+            ("0x31 content type", "0x31 metadata"),
+        ]
 
         actual = await self.__processor(batch_items)
         expected = [
@@ -1987,8 +2008,9 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                     original_owner="0x20",
                     token_id=HexInt("0x30"),
                     timestamp=HexInt("0x40"),
-                    metadata_uri="ar://meadata.uri/0x30",
+                    metadata_uri="ar://metadata.uri/0x30",
                     metadata="0x30 metadata",
+                    metadata_content_type="0x30 content type",
                 )
             ),
             TokenTransportObject(
@@ -1997,14 +2019,89 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
                     original_owner="0x20",
                     token_id=HexInt("0x31"),
                     timestamp=HexInt("0x40"),
-                    metadata_uri="ar://meadata.uri/0x31",
+                    metadata_uri="ar://metadata.uri/0x31",
                     metadata="0x31 metadata",
+                    metadata_content_type="0x31 content type",
                 )
             ),
         ]
         self.assertEqual(expected, actual)
 
-    async def test_token_transaction_with_invalid_uri_from_input_to_output(self):
+    async def test_adds_data_client_timing_when_uri_is_data(self):
+        batch_items = [
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x30"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="data:,metadata",
+                ),
+            ),
+        ]
+        await self.__processor(batch_items)
+        self.__stats_service.timer.assert_called_once_with("metadata_retrieval_data_uri")
+
+    async def test_adds_error_stats_when_error(self):
+        self.__data_uri_data_client.get.side_effect = ProtocolError()
+        batch_items = [
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x30"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="data:metadata uri",
+                )
+            )
+        ]
+        await self.__processor(batch_items)
+        self.__stats_service.increment.assert_any_call("metadata_retrieval_data_uri_error")
+
+    async def test_not_added_to_result_when_data_decode_errors(self):
+        self.__data_uri_data_client.get.side_effect = ProtocolError()
+        tto = TokenTransportObject(
+            token=Token(
+                collection_id="0x10",
+                original_owner="0x20",
+                token_id=HexInt("0x30"),
+                timestamp=HexInt("0x40"),
+                metadata_uri="data:invalid",
+            )
+        )
+        actual = await self.__processor([tto])
+        self.assertEqual([], actual)
+
+    async def test_places_decoded_data_in_result_token(self):
+        batch_items = [
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x30"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="data:metadata",
+                )
+            ),
+        ]
+        self.__data_uri_data_client.get.return_value = "metadata content type", "metadata"
+        actual = await self.__processor(batch_items)
+        expected = [
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x30"),
+                    timestamp=HexInt("0x40"),
+                    metadata_uri="data",
+                    metadata="metadata",
+                    metadata_content_type="metadata content type",
+                )
+            ),
+        ]
+        self.assertEqual(expected, actual)
+
+    async def test_token_with_invalid_uri_not_added_to_result(self):
         tto = TokenTransportObject(
             block=Block(
                 number="0x00",
@@ -2037,7 +2134,7 @@ class TokenMetadataRetrievalBatchProcessorTestCase(unittest.IsolatedAsyncioTestC
             ),
         )
         actual = await self.__processor([tto])
-        self.assertEqual([tto], actual)
+        self.assertEqual([], actual)
 
 
 class TokenPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
@@ -2117,7 +2214,7 @@ class TokenPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(b"keccak hash".hex(), actual)
 
     @patch("chainconductor.blockcrawler.processors.keccak")
-    async def test_writes_appropriate_data_when_no_metadata_to_dynamo_db(self, keccak_patch):
+    async def test_writes_appropriate_data_to_dynamo_db(self, keccak_patch):
         keccak_patch.return_value = b"keccak_hash"
         tto = TokenTransportObject(
             token=Token(
@@ -2125,24 +2222,24 @@ class TokenPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 original_owner="0x20",
                 token_id=HexInt("0x30"),
                 timestamp=HexInt("0x40"),
+                metadata_uri="metadata uri",
             )
         )
         await self.__processor([tto])
         self.__dynamodb_batch_writer_context.put_item.assert_awaited_once_with(
             Item={
                 "blockchain_collection_id": b"keccak_hash".hex(),
-                "token_id": "48",
+                "token_id": "0x30",
                 "blockchain": self.__blockchain,
                 "collection_id": "0x10",
                 "original_owner": "0x20",
                 "mint_timestamp": 64,
-                "metadata_uri": None,
-                "metadata": None,
+                "metadata_uri": "metadata uri",
             }
         )
 
     @patch("chainconductor.blockcrawler.processors.keccak")
-    async def test_writes_appropriate_data_when_metadata_to_dynamo_db(self, keccak_patch):
+    async def test_writes_metadata_uri_as_data_when_data_uri(self, keccak_patch):
         keccak_patch.return_value = b"keccak_hash"
         tto = TokenTransportObject(
             token=Token(
@@ -2150,21 +2247,19 @@ class TokenPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
                 original_owner="0x20",
                 token_id=HexInt("0x30"),
                 timestamp=HexInt("0x40"),
-                metadata_uri="Metadata URI",
-                metadata="the metadata",
+                metadata_uri="data:,metadata",
             )
         )
         await self.__processor([tto])
         self.__dynamodb_batch_writer_context.put_item.assert_awaited_once_with(
             Item={
                 "blockchain_collection_id": b"keccak_hash".hex(),
-                "token_id": "48",
+                "token_id": "0x30",
                 "blockchain": self.__blockchain,
                 "collection_id": "0x10",
                 "original_owner": "0x20",
                 "mint_timestamp": 64,
-                "metadata_uri": "Metadata URI",
-                "metadata": "the metadata",
+                "metadata_uri": "data",
             }
         )
 
@@ -2534,7 +2629,7 @@ class RPCErrorRetryDecoratingBatchProcessorTestCase(unittest.IsolatedAsyncioTest
             await processor([])
         self.__decorated_processor.assert_called_once()
 
-    async def test_retries_max_retries_amount_with_RPCError_and_reraises(self):
+    async def test_retries_max_retries_amount_with_RPCError_and_re_raises(self):
         retries = random.randint(1, 20)
         processor = RPCErrorRetryDecoratingBatchProcessor(
             self.__decorated_processor, max_retries=retries
@@ -2543,3 +2638,89 @@ class RPCErrorRetryDecoratingBatchProcessorTestCase(unittest.IsolatedAsyncioTest
         with self.assertRaisesRegex(RPCServerError, "Argh"):
             await processor([])
         self.__decorated_processor.assert_has_awaits([call([])] * retries)
+
+
+class TokenMetadataPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__s3_bucket = AsyncMock()
+        self.__stats_service = MagicMock()
+        self.__logger = MagicMock()
+        self.__processor = TokenMetadataPersistenceBatchProcessor(
+            s3_bucket=self.__s3_bucket,
+            s3_batch_size=99,
+            stats_service=self.__stats_service,
+            logger=self.__logger,
+            blockchain="blockchain",
+        )
+        self.__default_batch = [
+            TokenTransportObject(
+                token=Token(
+                    collection_id="0x10",
+                    original_owner="0x20",
+                    token_id=HexInt("0x30"),
+                    timestamp=HexInt("0x40"),
+                    metadata="metadata",
+                    metadata_content_type="content type",
+                )
+            )
+        ]
+
+    async def test_increments_stats_for_each_token_mint(self):
+        tokens = random.randint(1, 99)
+        batch_items = list()
+        for _ in range(tokens):
+            batch_items.append(
+                TokenTransportObject(
+                    token=Token(
+                        collection_id="0x10",
+                        original_owner="0x20",
+                        token_id=HexInt("0x30"),
+                        timestamp=HexInt("0x40"),
+                        metadata="metadata",
+                        metadata_content_type="content/type",
+                    )
+                )
+            )
+        await self.__processor(batch_items)
+        self.assertEqual(
+            tokens,
+            self.__stats_service.increment.call_count,
+            "Expected as many increment calls as there were transactions",
+        )
+        self.__stats_service.increment.assert_called_with("token_metadata_files_persisted")
+
+    async def test_records_dynamodb_timer_in_stats(self):
+        await self.__processor(self.__default_batch)
+        assert_timer_run(self.__stats_service, "s3_write_metadata_files")
+
+    async def test_creates_s3_object_with_correct_bucket(self):
+        await self.__processor(self.__default_batch)
+        self.__s3_bucket.put_object.assert_awaited_once_with(
+            Body=ANY,
+            ContentType=ANY,
+            Key=ANY,
+        )
+
+    async def test_creates_s3_object_with_correct_data(self):
+        await self.__processor(self.__default_batch)
+        self.__s3_bucket.put_object.assert_awaited_once_with(
+            Body=b"metadata",
+            ContentType=ANY,
+            Key=ANY,
+        )
+
+    async def test_creates_s3_object_with_correct_content_type(self):
+        await self.__processor(self.__default_batch)
+        self.__s3_bucket.put_object.assert_awaited_once_with(
+            Body=ANY,
+            ContentType="content type",
+            Key=ANY,
+        )
+
+    async def test_creates_s3_object_with_correct_key(self):
+        await self.__processor(self.__default_batch)
+        self.__s3_bucket.put_object.assert_awaited_once_with(
+            Body=ANY,
+            ContentType=ANY,
+            Key="blockchain/0x10/0x30",
+        )

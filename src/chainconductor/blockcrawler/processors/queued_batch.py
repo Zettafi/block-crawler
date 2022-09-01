@@ -4,9 +4,8 @@ from datetime import timedelta, datetime
 from logging import Logger
 from typing import List, Tuple, Union, Callable, Coroutine, Any, Type
 
-from chainconductor.blockcrawler.processors import TokenTransportObject
-
-END_OF_RUN_MARKER = None
+END_OF_RUN_MARKER_TYPE = type(None)
+END_OF_RUN_MARKER: END_OF_RUN_MARKER_TYPE = None
 
 
 class QueuedBatchProcessor:
@@ -21,7 +20,8 @@ class QueuedBatchProcessor:
         acquisition_strategy: Callable[[], Coroutine[Any, Any, List]],
         batch_processor: Callable[[List], Coroutine[Any, Any, List]],
         disposition_strategy: Callable[
-            [Union[List, type(END_OF_RUN_MARKER)]], Coroutine[Any, Any, type(END_OF_RUN_MARKER)]
+            [Union[List, END_OF_RUN_MARKER_TYPE]],
+            Coroutine[Any, Any, Union[List, END_OF_RUN_MARKER_TYPE]],
         ],
         logger: Logger,
         max_processors: int,
@@ -31,7 +31,7 @@ class QueuedBatchProcessor:
         self.__batch_processor = batch_processor
         self.__logger = logger
         self.__max_processors: int = max_processors
-        self.__queued_batches = list()
+        self.__queued_batches: List = list()
         self.__running_tasks: List[Task] = list()
         self.__running: bool = False
         self.__stopping = False
@@ -105,15 +105,15 @@ class QueuedBatchProcessor:
 
 
 class DevNullDispositionStrategy:
-    async def __call__(self, batch_results: List):
+    async def __call__(self, batch_results: Union[List, END_OF_RUN_MARKER_TYPE]):
         pass
 
 
 class QueuedDispositionStrategy:
     def __init__(self, *queues: Queue) -> None:
-        self.__queues: Tuple[Queue] = queues
+        self.__queues: Tuple[Queue, ...] = queues
 
-    async def __call__(self, batch_results: Union[List, type(END_OF_RUN_MARKER)]):
+    async def __call__(self, batch_results: Union[List, END_OF_RUN_MARKER_TYPE]) -> None:
         for queue in self.__queues:
             if batch_results is END_OF_RUN_MARKER:
                 batch_results = [END_OF_RUN_MARKER]
@@ -123,10 +123,10 @@ class QueuedDispositionStrategy:
 
 class TypeQueuedDispositionStrategy:
     def __init__(self, *type_queues: Tuple[Type, Queue]) -> None:
-        self.__type_queues: Tuple[Tuple[Type, Queue]] = type_queues[:]
+        self.__type_queues: Tuple[Tuple[Type, Queue], ...] = type_queues[:]
 
-    async def __call__(self, batch_results: Union[List, type(END_OF_RUN_MARKER)]):
-        if batch_results == END_OF_RUN_MARKER:
+    async def __call__(self, batch_results: Union[List, END_OF_RUN_MARKER_TYPE]):
+        if batch_results is END_OF_RUN_MARKER:
             for _, queue in self.__type_queues:
                 await queue.put(END_OF_RUN_MARKER)
         else:
@@ -136,36 +136,13 @@ class TypeQueuedDispositionStrategy:
                         await queue.put(batch_result)
 
 
-class MetadataQueuedDispositionStrategy:
-    def __init__(self, storage_queue: Queue, capture_queue) -> None:
-        self.__storage_queue = storage_queue
-        self.__capture_queue = capture_queue
-
-    async def __call__(
-        self, batch_results: Union[List[TokenTransportObject], type(END_OF_RUN_MARKER)]
-    ):
-        if batch_results == END_OF_RUN_MARKER:
-            await self.__capture_queue.put(END_OF_RUN_MARKER)
-            # We're not sending end of run to the storage queue as it would stop
-            # the storage processor before metadata capture was complete
-        else:
-            for batch_result in batch_results:
-                if (
-                    batch_result.token.metadata_uri is not None
-                    and len(batch_result.token.metadata_uri) > 0
-                ):
-                    await self.__capture_queue.put(batch_result)
-                else:
-                    await self.__storage_queue.put(batch_result)
-
-
 class QueuedAcquisitionStrategy:
     def __init__(self, queue: Queue, max_batch_size: int, max_batch_wait: int) -> None:
         self.__inbound_queue = queue
         self.__max_batch_size = max_batch_size
         self.__max_batch_wait = timedelta(seconds=max_batch_wait)
 
-    async def __call__(self):
+    async def __call__(self) -> Union[List]:
         last_batch_time = datetime.now()
         items = list()
         while True:

@@ -32,6 +32,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         right = Token(
             collection_id="str",
@@ -40,6 +41,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         self.assertEqual(left, right)
 
@@ -51,6 +53,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         right = Token(
             collection_id="c2",
@@ -59,6 +62,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         self.assertNotEqual(left, right)
 
@@ -70,6 +74,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         right = Token(
             collection_id="str",
@@ -78,6 +83,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         self.assertNotEqual(left, right)
 
@@ -89,6 +95,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         right = Token(
             collection_id="str",
@@ -97,6 +104,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         self.assertNotEqual(left, right)
 
@@ -108,6 +116,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         right = Token(
             collection_id="str",
@@ -116,6 +125,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x01"),
             metadata_uri="metadata_uri",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         self.assertNotEqual(left, right)
 
@@ -127,6 +137,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri1",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         right = Token(
             collection_id="str",
@@ -135,6 +146,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri2",
             metadata="metadata",
+            metadata_content_type="metadata content type",
         )
         self.assertNotEqual(left, right)
 
@@ -146,6 +158,7 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata1",
+            metadata_content_type="metadata content type",
         )
         right = Token(
             collection_id="str",
@@ -154,6 +167,28 @@ class TokenTestCase(TestCase):
             timestamp=HexInt("0x00"),
             metadata_uri="metadata_uri",
             metadata="metadata2",
+            metadata_content_type="metadata content type",
+        )
+        self.assertNotEqual(left, right)
+
+    def test_different_metadata_content_type_is_not_equal(self):
+        left = Token(
+            collection_id="str",
+            original_owner="str",
+            token_id=HexInt("0x12"),
+            timestamp=HexInt("0x00"),
+            metadata_uri="metadata_uri",
+            metadata="metadata",
+            metadata_content_type="metadata content type 1",
+        )
+        right = Token(
+            collection_id="str",
+            original_owner="str",
+            token_id=HexInt("0x12"),
+            timestamp=HexInt("0x00"),
+            metadata_uri="metadata_uri",
+            metadata="metadata",
+            metadata_content_type="metadata content type 2",
         )
         self.assertNotEqual(left, right)
 

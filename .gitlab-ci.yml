@@ -20,6 +20,7 @@ autotest:
         - flake8 --exit-zero src test bin
         - flake8 --format=gl-codeclimate --output-file=code-quality.json src test bin
         - black --check .
+        - mypy src bin
     coverage: "/TOTAL\\s+\\d+\\s+\\d+\\s+(\\d+.?\\d*)\\%/"
     artifacts:
         when: always

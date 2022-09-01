@@ -1,10 +1,16 @@
 import asyncio
+import base64
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch, AsyncMock, MagicMock
 
+import ddt
 from aiohttp import ClientError
 
-from chainconductor.blockcrawler.data_clients import ProtocolError, ProtocolTimeoutError
+from chainconductor.blockcrawler.data_clients import (
+    ProtocolError,
+    ProtocolTimeoutError,
+    DataUriDataClient,
+)
 from chainconductor.blockcrawler.data_clients import (
     HttpDataClient,
     IpfsDataClient,
@@ -51,10 +57,16 @@ class TestHttpDataClient(DataClientBaseTestCase):
         await self.__client.get(expected[:])
         self._aiohttp_session.get.assert_called_once_with(expected)
 
-    async def test_returns_expected_results(self):
+    async def test_returns_expected_content_type(self):
+        expected = "conten/type"
+        self._aiohttp_session_get_response.content_type = expected[:]
+        actual, _ = await self.__client.get("ar://hash/1")
+        self.assertEqual(expected, actual)
+
+    async def test_returns_expected_data(self):
         expected = "response"
         self._aiohttp_session_get_response.text.return_value = expected[:]
-        actual = await self.__client.get("uri")
+        _, actual = await self.__client.get("uri")
         self.assertEqual(expected, actual)
 
     async def test_raises_expected_exception_when_request_has_error_status(self):
@@ -101,10 +113,16 @@ class TestIpfsDataClient(DataClientBaseTestCase):
         await self.__client.get(uri[:])
         self._aiohttp_session.get.assert_called_once_with(expected)
 
-    async def test_returns_expected_results(self):
+    async def test_returns_expected_content_type(self):
+        expected = "conten/type"
+        self._aiohttp_session_get_response.content_type = expected[:]
+        actual, _ = await self.__client.get("ipfs://hash/1")
+        self.assertEqual(expected, actual)
+
+    async def test_returns_expected_data(self):
         expected = "response"
         self._aiohttp_session_get_response.text.return_value = expected[:]
-        actual = await self.__client.get("ipfs://hash/1")
+        _, actual = await self.__client.get("ipfs://hash/1")
         self.assertEqual(expected, actual)
 
     async def test_raises_expected_exception_when_request_has_error_status(self):
@@ -148,10 +166,16 @@ class TestArweaveDataClient(DataClientBaseTestCase):
         await self.__client.get(uri)
         self._aiohttp_session.get.assert_called_once_with(f"{self.__gateway_uri}/hash/1")
 
-    async def test_returns_expected_result(self):
+    async def test_returns_expected_data(self):
         expected = "response"
         self._aiohttp_session_get_response.text.return_value = expected[:]
-        actual = await self.__client.get("ar://hash/1")
+        _, actual = await self.__client.get("ar://hash/1")
+        self.assertEqual(expected, actual)
+
+    async def test_returns_expected_content_type(self):
+        expected = "conten/type"
+        self._aiohttp_session_get_response.content_type = expected[:]
+        actual, _ = await self.__client.get("ar://hash/1")
         self.assertEqual(expected, actual)
 
     async def test_raises_expected_exception_when_request_has_error_status(self):
@@ -172,3 +196,42 @@ class TestArweaveDataClient(DataClientBaseTestCase):
     async def test_raises_value_error_for_non_arweave_uri(self):
         with self.assertRaises(ValueError):
             await self.__client.get("invalid URI")
+
+
+@ddt.ddt
+class TestDataUriDataClient(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__data_client = DataUriDataClient()
+
+    @ddt.data(
+        "data:missing comma will fail",  # Missing comma to mark data start
+        "data:;base65,data",  # Invalid encoding
+        "data:test/text;base64,!!!!!",  # Base64 encoding enabled but data not base 64 encoded
+    )
+    async def test_invalid_uri_raises_protocol_error(self, uri):
+        with self.assertRaises(ProtocolError):
+            await self.__data_client.get(uri)
+
+    async def test_response_content_type_is_returned_when_present(self):
+        actual, _ = await self.__data_client.get("data:content/type,content")
+        self.assertEqual("content/type", actual)
+
+    async def test_response_content_type_is_text_text_when_not_present(self):
+        actual, _ = await self.__data_client.get("data:,content")
+        self.assertEqual("text/plain", actual)
+
+    @ddt.data(
+        "data:mime-type;base64," + base64.b64encode(b"Hello, World!").decode("utf8"),
+        "data:;base64," + base64.b64encode(b"Hello, World!").decode("utf8"),
+    )
+    async def test_base64_encoded_data_is_decoded(self, uri):
+        _, actual = await self.__data_client.get(uri)
+        self.assertEqual("Hello, World!", actual)
+
+    @ddt.data(
+        "data:mime-type,Hello, World!",
+        "data:,Hello, World!",
+    )
+    async def test_non_encoded_data_is_returned_as_is(self, uri):
+        _, actual = await self.__data_client.get(uri)
+        self.assertEqual("Hello, World!", actual)

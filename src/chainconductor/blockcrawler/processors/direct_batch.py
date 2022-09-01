@@ -2,8 +2,6 @@ import asyncio
 from asyncio import Task
 from typing import List, Callable, Coroutine, Any, Tuple, Type
 
-from chainconductor.blockcrawler.processors import TokenTransportObject
-
 
 class DirectBatchProcessor:
     def __init__(
@@ -26,7 +24,7 @@ class DirectBatchProcessor:
 
     async def __call__(self, items: List):
         batch_processor_instances: List[Task] = list()
-        results = list()
+        results: List = list()
         while items:
             items_list = list()
             for i in range(self.__batch_size):
@@ -66,11 +64,11 @@ class DirectBatchProcessor:
 
 class DirectDispositionStrategy:
     def __init__(self, *processors: Callable[[List], Coroutine[Any, Any, None]]) -> None:
-        self.__processors = processors
+        self.__processors = processors[:]
 
     async def __call__(self, batch_results: List):
         for processor in self.__processors:
-            await processor(batch_results)
+            await processor(batch_results[:])
 
 
 class TypedDirectDispositionStrategy:
@@ -86,31 +84,3 @@ class TypedDirectDispositionStrategy:
                 if isinstance(batch_result, type_):
                     items.append(batch_result)
             await processor(items)
-
-
-class MetadataDirectDispositionStrategy:
-    def __init__(
-        self,
-        persistence_processor: Callable[[List], Coroutine[Any, Any, Any]],
-        capture_processor: Callable[[List], Coroutine[Any, Any, Any]],
-    ) -> None:
-        self.__persistence_processor = persistence_processor
-        self.__capture_processor = capture_processor
-
-    async def __call__(self, batch_results: List[TokenTransportObject]):
-        capture_items = list()
-        persistence_items = list()
-        for batch_result in batch_results:
-            if (
-                batch_result.token.metadata_uri is not None
-                and len(batch_result.token.metadata_uri) > 0
-            ):
-                capture_items.append(batch_result)
-            else:
-                persistence_items.append(batch_result)
-
-        if capture_items:
-            await self.__capture_processor(capture_items)
-
-        if persistence_items:
-            await self.__persistence_processor(persistence_items)

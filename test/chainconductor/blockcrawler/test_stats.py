@@ -43,3 +43,25 @@ class TestStats(unittest.TestCase):
             with self.__stats_service.timer("stat"):
                 raise Exception("Argh")
         self.assertEqual(1, len(self.__stats_service.get_timings("stat")))
+
+    def test_reset_timings(self):
+        with self.__stats_service.timer("stat"):
+            pass
+        self.__stats_service.reset()
+        self.assertEqual(0, len(self.__stats_service.get_timings("stat")))
+
+    def test_reset_allows_for_new_timings(self):
+        self.__stats_service.reset()
+        with self.__stats_service.timer("stat"):
+            pass
+        self.assertEqual(1, len(self.__stats_service.get_timings("stat")))
+
+    def test_reset_count(self):
+        self.__stats_service.increment("stat")
+        self.__stats_service.reset()
+        self.assertEqual(0, self.__stats_service.get_count("stat"))
+
+    def test_reset_allows_new_increment(self):
+        self.__stats_service.reset()
+        self.__stats_service.increment("stat")
+        self.assertEqual(1, self.__stats_service.get_count("stat"))

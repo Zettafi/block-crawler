@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 
 class Function:
@@ -209,7 +209,7 @@ class ERC721Events:  # pragma: no cover
     )
 
 
-OPCODE_MAP: Dict[str, int] = {
+OPCODE_MAP: Dict[str, Tuple[str, int]] = {
     "00": ("STOP", 0),
     "01": ("ADD", 0),
     "02": ("MUL", 0),
@@ -476,7 +476,7 @@ def contract_data_to_opcodes(contract_data: str):
         chunk = code[i : i + 2]
         chunks.append(chunk)
 
-    opcodes = list()
+    opcodes: List[str] = list()
     while len(chunks) > 0:
         opcode_code = chunks.pop(0)
         opcode, instr_chunks = OPCODE_MAP[opcode_code]

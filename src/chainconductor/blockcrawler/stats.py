@@ -40,8 +40,6 @@ class StatsService:
             timings = list()
         return timings
 
-    def dump(self):
-        pass
-
-    def load(self, stats_data):
-        pass
+    def reset(self):
+        self.__counters.clear()
+        self.__timers.clear()
