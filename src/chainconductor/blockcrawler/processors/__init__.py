@@ -40,6 +40,8 @@ from chainconductor.web3.util import (
     ERC1155MetadataURIFunctions,
 )
 
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
 
 class ProcessorException(Exception):  # pragma: no cover
     pass
@@ -536,6 +538,12 @@ class TokenTransferPersistenceBatchProcessor:
                                 f"has no transaction_receipt: {transport_object}"
                             )
 
+                        if transport_object.block is None:
+                            raise ValueError(
+                                f"TokenTransportObject provided "
+                                f"has no Block: {transport_object}"
+                            )
+
                         for log in transport_object.transaction_receipt.logs:
                             if (
                                 len(log.topics) == 4
@@ -544,29 +552,12 @@ class TokenTransferPersistenceBatchProcessor:
                             ):
                                 # ERC-20 transfer events only have 3 topics. ERC-721 transfer events
                                 # have 4 topics. Process only logs with 4 topics.
-                                try:
-                                    from_address: str = decode(
-                                        ["address"], decode_hex(log.topics[1])
-                                    )[0]
-                                    to_address: str = decode(
-                                        ["address"], decode_hex(log.topics[2])
-                                    )[0]
-                                    token_id: int = decode(["uint256"], decode_hex(log.topics[3]))[
-                                        0
-                                    ]
-                                    collection_id: str = log.address
-                                except Exception:
-                                    # There are occasional bad transactions in the chain,
-                                    # it's usually token IDs that are larger than 256 bits
-                                    self.__stats_service.increment(self.TOPICS_DECODE_ERRORS)
-                                    continue
-
-                                if transport_object.block is None:
-                                    raise ValueError(
-                                        f"TokenTransportObject provided "
-                                        f"has no Block: {transport_object}"
-                                    )
-
+                                from_address: str = decode(["address"], decode_hex(log.topics[1]))[
+                                    0
+                                ]
+                                to_address: str = decode(["address"], decode_hex(log.topics[2]))[0]
+                                token_id: int = decode(["uint256"], decode_hex(log.topics[3]))[0]
+                                collection_id: str = log.address
                                 timestamp = transport_object.block.timestamp
                                 transaction_log_index_hash = keccak(
                                     (
@@ -575,6 +566,17 @@ class TokenTransferPersistenceBatchProcessor:
                                         + log.log_index.hex_value
                                     ).encode("utf8")
                                 ).hex()
+
+                                if to_address == ZERO_ADDRESS:
+                                    transfer_type = "burn"
+                                elif from_address in (
+                                    collection_id,
+                                    ZERO_ADDRESS,
+                                ) and to_address not in (collection_id, ZERO_ADDRESS):
+                                    transfer_type = "mint"
+                                else:
+                                    transfer_type = "transfer"
+
                                 item = {
                                     "blockchain": self.__blockchain,
                                     "transaction_log_index_hash": transaction_log_index_hash,
@@ -586,18 +588,11 @@ class TokenTransferPersistenceBatchProcessor:
                                     "transaction_index": log.transaction_index.int_value,
                                     "log_index": log.log_index.int_value,
                                     "timestamp": timestamp.int_value,
+                                    "type": transfer_type,
                                 }
                                 items.append(item)
                                 await batch.put_item(Item=item)
-                                if (
-                                    # Transferring from the 0 or collection address
-                                    (from_address == collection_id or int(from_address, 16) == 0)
-                                    # and not to the collection address
-                                    and to_address != collection_id
-                                    # and not to the 0 address
-                                    and int(to_address, 16) != 0
-                                    # this is a minting transfer
-                                ):
+                                if transfer_type == "mint":
                                     token_mint = Token(
                                         collection_id=collection_id,
                                         original_owner=to_address,

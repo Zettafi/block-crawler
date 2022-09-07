@@ -656,11 +656,68 @@ class TokenTransferPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTes
         await self.__processor(self.__default_batch)
         assert_timer_run(self.__stats_service, "dynamodb_write_token_transfers")
 
-    async def test_stores_correct_data(self):
+    @ddt.data(
+        # 0 address to non-contract address is mint
+        (
+            "0x0000000000000000000000000000000000000000",
+            "0x0000000000000000000000000000000000000001",
+            "mint",
+        ),
+        # Contract address to non-contract address is mint
+        (
+            "0x0000000000000000000000000000000000000099",
+            "0x0000000000000000000000000000000000000001",
+            "mint",
+        ),
+        # Contract address to 0 address is burn
+        (
+            "0x0000000000000000000000000000000000000099",
+            "0x0000000000000000000000000000000000000000",
+            "burn",
+        ),
+        # 0 address to 0 address is burn
+        (
+            "0x0000000000000000000000000000000000000000",
+            "0x0000000000000000000000000000000000000000",
+            "burn",
+        ),
+        # Con-contract address to 0 address is burn
+        (
+            "0x0000000000000000000000000000000000000001",
+            "0x0000000000000000000000000000000000000000",
+            "burn",
+        ),
+        # Contract address to contract address is transfer
+        (
+            "0x0000000000000000000000000000000000000099",
+            "0x0000000000000000000000000000000000000099",
+            "transfer",
+        ),
+        # 0 address to contract address is transfer
+        (
+            "0x0000000000000000000000000000000000000000",
+            "0x0000000000000000000000000000000000000099",
+            "transfer",
+        ),
+        # Non-contract address to Non-contract address is transfer
+        (
+            "0x0000000000000000000000000000000000000001",
+            "0x0000000000000000000000000000000000000002",
+            "transfer",
+        ),
+        # Non-contract address to contract address is transfer
+        (
+            "0x0000000000000000000000000000000000000001",
+            "0x0000000000000000000000000000000000000099",
+            "transfer",
+        ),
+    )
+    @ddt.unpack
+    async def test_stores_correct_data(self, from_, to_, expected_type):
         log_topics = [
             ERC721Events.TRANSFER.event_hash,
-            encode(["address"], ["0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d"]).hex(),
-            encode(["address"], ["0x759a401a287ffad0fa2deae15fe3b6169506d657"]).hex(),
+            encode(["address"], [from_]).hex(),
+            encode(["address"], [to_]).hex(),
             encode(["uint256"], [1]).hex(),
         ]
         tto = TokenTransportObject(
@@ -670,7 +727,7 @@ class TokenTransferPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTes
                 block_hash="",
                 block_number="",
                 from_="0x50",
-                to_="to address",
+                to_="0x0000000000000000000000000000000000000099",
                 cumulative_gas_used="",
                 gas_used="",
                 contract_address="expected contract",
@@ -682,7 +739,7 @@ class TokenTransferPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTes
                         transaction_hash="transaction hash",
                         block_number="0x20",
                         block_hash="",
-                        address="to address",
+                        address="0x0000000000000000000000000000000000000099",
                         data="0x00",
                         topics=log_topics,
                     )
@@ -721,14 +778,15 @@ class TokenTransferPersistenceBatchProcessorTestCase(unittest.IsolatedAsyncioTes
             Item={
                 "blockchain": self.__blockchain,
                 "transaction_log_index_hash": keccak("0x200x100x30".encode("utf8")).hex(),
-                "collection_id": "to address",
+                "collection_id": "0x0000000000000000000000000000000000000099",
                 "token_id": "1",
-                "from": "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d",
-                "to": "0x759a401a287ffad0fa2deae15fe3b6169506d657",
+                "from": from_,
+                "to": to_,
                 "block": 32,
                 "transaction_index": 16,
                 "log_index": 48,
                 "timestamp": 15,
+                "type": expected_type,
             }
         )
 
