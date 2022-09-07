@@ -7,3 +7,4 @@ __pycache__
 /coverage.xml
 /code-quality.json
 /.mypy_cache/
+/bin/test_*
