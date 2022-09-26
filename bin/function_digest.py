@@ -4,7 +4,7 @@ from eth_hash.auto import keccak
 
 @click.command()
 @click.argument("FUNCTION_ABI")
-@click.option("--log-topic", default=False)
+@click.option("--log-topic", default=False, is_flag=True)
 def main(function_abi, log_topic: bool):
     """
     Helper function to return the hash value needed to identify the contract
@@ -17,7 +17,7 @@ def main(function_abi, log_topic: bool):
 
     """
     sig = "0x" + keccak(function_abi.encode()).hex()
-    retval = sig if log_topic else sig[:10]
+    retval = sig if log_topic else sig[:8]
     click.echo(retval)
 
 

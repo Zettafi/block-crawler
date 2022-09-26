@@ -1,19 +1,19 @@
 import asyncio
+import logging
 import sys
-from datetime import datetime
 from logging import Logger
 from logging import StreamHandler
 
 import click
 
-from chainconductor.blockcrawler.commands import (
+from blockrail.blockcrawler.core.click import BlockChainParamType
+from blockrail.blockcrawler.core.entities import BlockChain
+from blockrail.blockcrawler.nft.commands import (
     crawl_evm_blocks,
     listen_for_and_process_new_evm_blocks,
     set_last_block_id_for_block_chain,
     get_block,
 )
-from chainconductor.blockcrawler.stats import StatsService
-from chainconductor.blockcrawler.stats_writer import StatsWriter
 
 try:  # If dotenv in installed, use it load env vars
     from dotenv import load_dotenv
@@ -32,49 +32,11 @@ def block_crawler():
 @click.argument("STARTING_BLOCK", type=int)
 @click.argument("ENDING_BLOCK", type=int)
 @click.option(
-    "--blockchain", envvar="BLOCKCHAIN", help="Blockchain that will be processed", required=True
-)
-@click.option(
-    "--rpc-batch-size",
-    envvar="RPC_BATCH_SIZE",
-    default=100,
-    show_default=True,
-    help="Batch size for JSON-RPC calls",
-)
-@click.option(
-    "--rpc-error-retries",
-    envvar="RPC_ERROR_RETRIES",
-    default=5,
-    show_default=True,
-    help="Number of times to retry a batch that fails for an RPC error",
-)
-@click.option(
-    "--dynamodb-batch-size",
-    envvar="DYNAMODB_BATCH_SIZE",
-    default=25,
-    show_default=True,
-    help="Batch size DynamoDB calls",
-)
-@click.option(
-    "--s3-batch-size",
-    envvar="S3_BATCH_SIZE",
-    default=25,
-    show_default=True,
-    help="Maximum concurrent S3 calls per batch processor",
-)
-@click.option(
-    "--http-batch-size",
-    envvar="HTTP_BATCH_SIZE",
-    default=10,
-    show_default=True,
-    help="Maximum concurrent HTTP calls per batch processor",
-)
-@click.option(
-    "--max-batch-wait-time",
-    envvar="MAX_BATCH_WAIT_TIME",
-    default=30,
-    show_default=True,
-    help="Maximum time in seconds to wait for batch size to be reached before processing batch",
+    "--blockchain",
+    envvar="BLOCKCHAIN",
+    help="Blockchain that will be processed",
+    required=True,
+    type=BlockChainParamType(),
 )
 @click.option(
     "--evm-archive-node-uri",
@@ -82,9 +44,14 @@ def block_crawler():
     help="URI to access the archive node EVM RPC HTTP server",
 )
 @click.option(
-    "--aws-endpoint-url",
-    envvar="AWS_ENDPOINT_URL",
-    help="Override URL for connecting to Amazon Web Services",
+    "--dynamodb-endpoint-url",
+    envvar="AWS_DYNAMODB_ENDPOINT_URL",
+    help="Override URL for connecting to Amazon DynamoDB",
+)
+@click.option(
+    "--s3-endpoint-url",
+    envvar="AWS_S3_ENDPOINT_URL",
+    help="Override URL for connecting to Amazon S3",
 )
 @click.option(
     "--dynamodb-timeout",
@@ -93,10 +60,21 @@ def block_crawler():
     help="Maximum time in seconds to wait for connect or response from DynamoDB",
 )
 @click.option(
+    "--dynamodb-region",
+    envvar="AWS_DYNAMODB_REGION",
+    help="AWS region for DynamoDB",
+)
+@click.option("--table-prefix", envvar="TABLE_PREFIX", help="Prefix for table names", default="")
+@click.option(
+    "--s3-region",
+    envvar="AWS_S3_REGION",
+    help="AWS region for S3",
+)
+@click.option(
     "--s3-metadata-bucket",
-    envvar="S3_METADATA_BUCKET",
+    envvar="AWS_S3_METADATA_BUCKET",
     default="chain-conductor-metadata",
-    help="S# bucket to store metadata files",
+    help="S3 bucket to store metadata files",
 )
 @click.option(
     "--http-metadata-timeout",
@@ -130,96 +108,41 @@ def block_crawler():
     help="Maximum time in seconds to wait for response from Arweave node when collecting metadata",
 )
 @click.option(
-    "--block-processors",
-    envvar="BLOCK_PROCESSORS",
-    default=5,
+    "--increment-data-version",
+    envvar="INCREMENT_DATA_VERSION",
+    default=True,
     show_default=True,
-    help="Maximum number of parallel block processors to run",
+    help="Increment the data version being processed. This ensures data integrity when "
+    "reprocessing the blockchain. If you are running multiple crawlers, set the first "
+    'to "True" to increment the version and the rest to "False" to use the version '
+    "set by the first crawler.",
 )
 @click.option(
-    "--transaction-processors",
-    envvar="TRANSACTION_PROCESSORS",
-    default=20,
+    "--debug/--no-debug",
+    envvar="DEBUG",
+    default=False,
     show_default=True,
-    help="Maximum number of parallel transaction processors to run",
-)
-@click.option(
-    "--contract-processors",
-    envvar="TOKEN_PERSISTENCE_PROCESSORS",
-    default=2,
-    show_default=True,
-    help="Maximum number of parallel contract processors to run",
-)
-@click.option(
-    "--collection-persistence-processors",
-    envvar="COLLECTION_PERSISTENCE_PROCESSORS",
-    default=2,
-    show_default=True,
-    help="Maximum number of parallel collection persistence processors to run",
-)
-@click.option(
-    "--token-transfer-persistence-processors",
-    envvar="TOKEN_TRANSFER_PERSISTENCE_PROCESSORS",
-    default=8,
-    show_default=True,
-    help="Maximum number of parallel token transfer persistence processors to run",
-)
-@click.option(
-    "--token-metadata-uri-processors",
-    envvar="TOKEN_METADATA_URI_PROCESSORS",
-    default=5,
-    show_default=True,
-    help="Maximum number of parallel token metadata URI processors to run",
-)
-@click.option(
-    "--token-metadata-retrieving-processors",
-    envvar="TOKEN_METADATA_RETRIEVING_PROCESSORS",
-    default=20,
-    show_default=True,
-    help="Maximum number of parallel token metadata retrieving processors to run",
-)
-@click.option(
-    "--token-persistence-processors",
-    envvar="TOKEN_PERSISTENCE_PROCESSORS",
-    default=2,
-    show_default=True,
-    help="Maximum number of parallel token persistence processors to run",
-)
-@click.option(
-    "--token-metadata-persistence-processors",
-    envvar="TOKEN_METADATA_PERSISTENCE_PROCESSORS",
-    default=2,
-    show_default=True,
-    help="Maximum number of parallel token metadata persistence processors to run",
+    help="Show debug messages in the console.",
 )
 def crawl(
     starting_block: int,
     ending_block: int,
-    blockchain: str,
+    blockchain: BlockChain,
     evm_archive_node_uri: str,
-    aws_endpoint_url: str,
     dynamodb_timeout: float,
+    dynamodb_endpoint_url: str,
+    dynamodb_region: str,
+    table_prefix: str,
+    s3_endpoint_url: str,
+    s3_region: str,
     s3_metadata_bucket: str,
     http_metadata_timeout: float,
     ipfs_node_uri: str,
     ipfs_metadata_timeout: float,
     arweave_node_uri: str,
     arweave_metadata_timeout: float,
-    rpc_batch_size: int,
-    rpc_error_retries: int,
-    dynamodb_batch_size: int,
-    s3_batch_size: int,
-    http_batch_size: int,
-    max_batch_wait_time: int,
-    block_processors: int,
-    transaction_processors: int,
-    contract_processors: int,
-    collection_persistence_processors: int,
-    token_transfer_persistence_processors: int,
-    token_metadata_uri_processors: int,
-    token_metadata_retrieving_processors: int,
-    token_persistence_processors: int,
-    token_metadata_persistence_processors: int,
+    increment_data_version: bool,
+    debug: bool,
 ):
     """
     Crawl blocks and store the data.
@@ -227,24 +150,24 @@ def crawl(
     Crawl the block in the BLOCKCHAIN from the STARTING_BLOCK to the
     ENDING_BLOCK , parse the data we want to collect and put that data in the database
     """
-    start = datetime.utcnow()
-    stats_service = StatsService()
-    stats_writer = StatsWriter(stats_service)
     log_handler = StreamHandler(sys.stdout)
     logger = Logger("block_crawler")
     logger.addHandler(log_handler)
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    stats_writer_task = loop.create_task(stats_writer.status_writer(start, True, True))
     try:
         loop.run_until_complete(
             crawl_evm_blocks(
-                stats_service=stats_service,
                 logger=logger,
                 archive_node_uri=evm_archive_node_uri,
                 blockchain=blockchain,
-                aws_endpoint_url=aws_endpoint_url,
+                dynamodb_endpoint_url=dynamodb_endpoint_url,
+                dynamodb_region=dynamodb_region,
+                s3_endpoint_url=s3_endpoint_url,
+                s3_region=s3_region,
                 dynamodb_timeout=dynamodb_timeout,
+                table_prefix=table_prefix,
                 s3_metadata_bucket=s3_metadata_bucket,
                 http_metadata_timeout=http_metadata_timeout,
                 ipfs_node_uri=ipfs_node_uri,
@@ -253,92 +176,58 @@ def crawl(
                 arweave_metadata_timeout=arweave_metadata_timeout,
                 starting_block=starting_block,
                 ending_block=ending_block,
-                rpc_batch_size=rpc_batch_size,
-                rpc_error_retries=rpc_error_retries,
-                dynamodb_batch_size=dynamodb_batch_size,
-                s3_batch_size=s3_batch_size,
-                http_batch_size=http_batch_size,
-                max_batch_wait_time=max_batch_wait_time,
-                block_processors=block_processors,
-                transaction_processors=transaction_processors,
-                contract_processors=contract_processors,
-                collection_persistence_processors=collection_persistence_processors,
-                token_transfer_persistence_processors=token_transfer_persistence_processors,
-                token_metadata_uri_processors=token_metadata_uri_processors,
-                token_metadata_retrieval_processors=token_metadata_retrieving_processors,
-                token_persistence_processors=token_persistence_processors,
-                token_metadata_persistence_processors=token_metadata_persistence_processors,
+                increment_data_version=increment_data_version,
             )
         )
-        asyncio.gather(stats_writer_task)
     except KeyboardInterrupt:
         pass
-
-    loop.run_until_complete(stats_writer.status_writer(start, False, False))
-    loop.run_until_complete(stats_writer.print_statistics())
-    loop.stop()
 
 
 @block_crawler.command()
 @click.option(
-    "--blockchain", envvar="BLOCKCHAIN", help="Blockchain that will be processed", required=True
-)
-@click.option(
-    "--rpc-batch-size",
-    envvar="RPC_BATCH_SIZE",
-    default=100,
-    show_default=True,
-    help="Batch size for JSON-RPC calls",
-)
-@click.option(
-    "--rpc-error-retries",
-    envvar="RPC_ERROR_RETRIES",
-    default=5,
-    show_default=True,
-    help="Number of times to retry a batch that fails for an RPC error",
-)
-@click.option(
-    "--dynamodb-batch-size",
-    envvar="DYNAMODB_BATCH_SIZE",
-    default=25,
-    show_default=True,
-    help="Batch size DynamoDB calls",
-)
-@click.option(
-    "--s3-metadata-bucket",
-    envvar="S3_METADATA_BUCKET",
-    default="chain-conductor-metadata",
-    help="S3 bucket to store metadata files",
-)
-@click.option(
-    "--s3-batch-size",
-    envvar="S3_BATCH_SIZE",
-    default=25,
-    show_default=True,
-    help="Maximum concurrent S3 calls per batch processor",
-)
-@click.option(
-    "--http-batch-size",
-    envvar="HTTP_BATCH_SIZE",
-    default=10,
-    show_default=True,
-    help="Maximum concurrent HTTP calls per batch processor",
+    "--blockchain",
+    envvar="BLOCKCHAIN",
+    help="Blockchain that will be processed",
+    required=True,
+    type=BlockChainParamType(),
 )
 @click.option(
     "--evm-archive-node-uri",
     envvar="EVM_ARCHIVE_NODE_URI",
-    help="URI to access the archive node RPC HTTP server",
+    help="URI to access the archive node EVM RPC HTTP server",
 )
 @click.option(
-    "--aws-endpoint-url",
-    envvar="AWS_ENDPOINT_URL",
-    help="Override URL for connecting to Amazon Web Services",
+    "--dynamodb-endpoint-url",
+    envvar="AWS_DYNAMODB_ENDPOINT_URL",
+    help="Override URL for connecting to Amazon DYnamoDB",
+)
+@click.option(
+    "--s3-endpoint-url",
+    envvar="AWS_S3_ENDPOINT_URL",
+    help="Override URL for connecting to Amazon S3",
 )
 @click.option(
     "--dynamodb-timeout",
     envvar="DYNAMODB_TIMEOUT",
     default=5.0,
     help="Maximum time in seconds to wait for connect or response from DynamoDB",
+)
+@click.option(
+    "--dynamodb-region",
+    envvar="AWS_DYNAMODB_REGION",
+    help="AWS region for DynamoDB",
+)
+@click.option("--table-prefix", envvar="TABLE_PREFIX", help="Prefix for table names", default="")
+@click.option(
+    "--s3-region",
+    envvar="AWS_S3_REGION",
+    help="AWS region for S3",
+)
+@click.option(
+    "--s3-metadata-bucket",
+    envvar="AWS_S3_METADATA_BUCKET",
+    default="chain-conductor-metadata",
+    help="S3 bucket to store metadata files",
 )
 @click.option(
     "--http-metadata-timeout",
@@ -372,72 +261,9 @@ def crawl(
     help="Maximum time in seconds to wait for response from Arweave node when collecting metadata",
 )
 @click.option(
-    "--block-processors",
-    envvar="BLOCK_PROCESSORS",
-    default=5,
-    show_default=True,
-    help="Maximum number of parallel block processors to run",
-)
-@click.option(
-    "--transaction-processors",
-    envvar="TRANSACTION_PROCESSORS",
-    default=20,
-    show_default=True,
-    help="Maximum number of parallel transaction processors to run",
-)
-@click.option(
-    "--contract-processors",
-    envvar="TOKEN_PERSISTENCE_PROCESSORS",
-    default=2,
-    show_default=True,
-    help="Maximum number of parallel contract processors to run",
-)
-@click.option(
-    "--collection-persistence-processors",
-    envvar="COLLECTION_PERSISTENCE_PROCESSORS",
-    default=2,
-    show_default=True,
-    help="Maximum number of parallel collection persistence processors to run",
-)
-@click.option(
-    "--token-transfer-persistence-processors",
-    envvar="TOKEN_TRANSFER_PERSISTENCE_PROCESSORS",
-    default=8,
-    show_default=True,
-    help="Maximum number of parallel token transfer persistence processors to run",
-)
-@click.option(
-    "--token-metadata-uri-processors",
-    envvar="TOKEN_METADATA_URI_PROCESSORS",
-    default=5,
-    show_default=True,
-    help="Maximum number of parallel token metadata URI processors to run",
-)
-@click.option(
-    "--token-metadata-retrieving-processors",
-    envvar="TOKEN_METADATA_RETRIEVING_PROCESSORS",
-    default=20,
-    show_default=True,
-    help="Maximum number of parallel token metadata retrieving processors to run",
-)
-@click.option(
-    "--token-persistence-processors",
-    envvar="TOKEN_PERSISTENCE_PROCESSORS",
-    default=2,
-    show_default=True,
-    help="Maximum number of parallel token persistence processors to run",
-)
-@click.option(
-    "--token-metadata-persistence-processors",
-    envvar="TOKEN_METADATA_PERSISTENCE_PROCESSORS",
-    default=2,
-    show_default=True,
-    help="Maximum number of parallel token metadata persistence processors to run",
-)
-@click.option(
     "--trail-blocks",
     envvar="TRAIL_BOCKS",
-    default=10,
+    default=1,
     show_default=True,
     help="Trail the last block by this many blocks.",
 )
@@ -448,74 +274,61 @@ def crawl(
     show_default=True,
     help="Minimum interval in seconds between block processing actions.",
 )
+@click.option(
+    "--debug/--no-debug",
+    envvar="DEBUG",
+    default=False,
+    show_default=True,
+    help="Show debug messages in the console.",
+)
 def tail(
-    blockchain: str,
     evm_archive_node_uri: str,
-    aws_endpoint_url: str,
+    blockchain: BlockChain,
+    dynamodb_endpoint_url: str,
+    dynamodb_region: str,
+    s3_endpoint_url: str,
+    s3_region: str,
     dynamodb_timeout: float,
+    table_prefix: str,
     s3_metadata_bucket: str,
     http_metadata_timeout: float,
     ipfs_node_uri: str,
     ipfs_metadata_timeout: float,
     arweave_node_uri: str,
     arweave_metadata_timeout: float,
-    rpc_batch_size: int,
-    rpc_error_retries: int,
-    dynamodb_batch_size: int,
-    s3_batch_size: int,
-    http_batch_size: int,
-    block_processors: int,
-    transaction_processors: int,
-    contract_processors: int,
-    collection_persistence_processors: int,
-    token_transfer_persistence_processors: int,
-    token_metadata_uri_processors: int,
-    token_metadata_retrieving_processors: int,
-    token_persistence_processors: int,
-    token_metadata_persistence_processors: int,
     trail_blocks: int,
     process_interval: int,
+    debug: bool,
 ):
     """
     Process new blocks in the blockchain
     Listen for incoming blocks in the blockchain, parse the data we want to collect
     and store that data in the database
     """
-    stats_service = StatsService()
     log_handler = StreamHandler(sys.stdout)
     logger = Logger("block_crawler")
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
     logger.addHandler(log_handler)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(
             listen_for_and_process_new_evm_blocks(
-                stats_service=stats_service,
                 logger=logger,
                 archive_node_uri=evm_archive_node_uri,
                 blockchain=blockchain,
-                aws_endpoint_url=aws_endpoint_url,
+                dynamodb_endpoint_url=dynamodb_endpoint_url,
+                dynamodb_region=dynamodb_region,
                 dynamodb_timeout=dynamodb_timeout,
+                table_prefix=table_prefix,
+                s3_endpoint_url=s3_endpoint_url,
+                s3_region=s3_region,
                 s3_metadata_bucket=s3_metadata_bucket,
                 http_metadata_timeout=http_metadata_timeout,
                 ipfs_node_uri=ipfs_node_uri,
                 ipfs_metadata_timeout=ipfs_metadata_timeout,
                 arweave_node_uri=arweave_node_uri,
                 arweave_metadata_timeout=arweave_metadata_timeout,
-                rpc_batch_size=rpc_batch_size,
-                rpc_error_retries=rpc_error_retries,
-                dynamodb_batch_size=dynamodb_batch_size,
-                s3_batch_size=s3_batch_size,
-                http_batch_size=http_batch_size,
-                block_processors=block_processors,
-                transaction_processors=transaction_processors,
-                contract_processors=contract_processors,
-                collection_persistence_processors=collection_persistence_processors,
-                token_transfer_persistence_processors=token_transfer_persistence_processors,
-                token_metadata_uri_processors=token_metadata_uri_processors,
-                token_metadata_retrieval_processors=token_metadata_retrieving_processors,
-                token_persistence_processors=token_persistence_processors,
-                token_metadata_persistence_processors=token_metadata_persistence_processors,
                 trail_blocks=trail_blocks,
                 process_interval=process_interval,
             )
@@ -527,14 +340,19 @@ def tail(
 @block_crawler.command()
 @click.argument("LAST_BLOCK_ID", type=int)
 @click.option(
-    "--aws-endpoint-url",
-    envvar="AWS_ENDPOINT_URL",
+    "--dynamodb-endpoint-url",
+    envvar="AWS_DYNAMODB_ENDPOINT_URL",
     help="Override URL for connecting to Amazon Web Services",
 )
 @click.option(
-    "--blockchain", envvar="BLOCKCHAIN", help="Blockchain that will be processed", required=True
+    "--blockchain",
+    envvar="BLOCKCHAIN",
+    help="Blockchain that will be processed",
+    required=True,
+    type=BlockChainParamType(),
 )
-def seed(blockchain, last_block_id, aws_endpoint_url):
+@click.option("--table-prefix", envvar="TABLE_PREFIX", help="Prefix for table names", default="")
+def seed(blockchain, last_block_id, dynamodb_endpoint_url, table_prefix):
     """
     Set the LAST_BLOCK_ID processed for the blockchain in the database. The
     listen command will use ths value to process blocks after this bock.
@@ -542,7 +360,9 @@ def seed(blockchain, last_block_id, aws_endpoint_url):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(
-        set_last_block_id_for_block_chain(blockchain, last_block_id, aws_endpoint_url)
+        set_last_block_id_for_block_chain(
+            blockchain.value, last_block_id, dynamodb_endpoint_url, table_prefix
+        )
     )
 
 
