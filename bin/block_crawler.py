@@ -3,6 +3,7 @@ import logging
 import sys
 from logging import Logger
 from logging import StreamHandler
+from typing import Optional
 
 import click
 
@@ -42,6 +43,13 @@ def block_crawler():
     "--evm-archive-node-uri",
     envvar="EVM_ARCHIVE_NODE_URI",
     help="URI to access the archive node EVM RPC HTTP server",
+)
+@click.option(
+    "--rpc-requests-per-second",
+    envvar="RPC_REQUESTS_PER_SECOND",
+    help="The maximum number of requests to process per second",
+    default=None,
+    type=int,
 )
 @click.option(
     "--dynamodb-endpoint-url",
@@ -129,6 +137,7 @@ def crawl(
     ending_block: int,
     blockchain: BlockChain,
     evm_archive_node_uri: str,
+    rpc_requests_per_second: Optional[int],
     dynamodb_timeout: float,
     dynamodb_endpoint_url: str,
     dynamodb_region: str,
@@ -161,6 +170,7 @@ def crawl(
             crawl_evm_blocks(
                 logger=logger,
                 archive_node_uri=evm_archive_node_uri,
+                rpc_requests_per_second=rpc_requests_per_second,
                 blockchain=blockchain,
                 dynamodb_endpoint_url=dynamodb_endpoint_url,
                 dynamodb_region=dynamodb_region,
@@ -195,6 +205,13 @@ def crawl(
     "--evm-archive-node-uri",
     envvar="EVM_ARCHIVE_NODE_URI",
     help="URI to access the archive node EVM RPC HTTP server",
+)
+@click.option(
+    "--rpc-requests-per-second",
+    envvar="RPC_REQUESTS_PER_SECOND",
+    help="The maximum number of requests to process per second",
+    default=None,
+    type=int,
 )
 @click.option(
     "--dynamodb-endpoint-url",
@@ -283,6 +300,7 @@ def crawl(
 )
 def tail(
     evm_archive_node_uri: str,
+    rpc_requests_per_second: Optional[int],
     blockchain: BlockChain,
     dynamodb_endpoint_url: str,
     dynamodb_region: str,
@@ -316,6 +334,7 @@ def tail(
             listen_for_and_process_new_evm_blocks(
                 logger=logger,
                 archive_node_uri=evm_archive_node_uri,
+                rpc_requests_per_second=rpc_requests_per_second,
                 blockchain=blockchain,
                 dynamodb_endpoint_url=dynamodb_endpoint_url,
                 dynamodb_region=dynamodb_region,

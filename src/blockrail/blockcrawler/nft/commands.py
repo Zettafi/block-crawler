@@ -2,7 +2,7 @@ import asyncio
 import datetime
 import time
 from logging import Logger
-from typing import Union, Dict, cast
+from typing import Union, Dict, cast, Optional
 
 import aioboto3
 from botocore.config import Config
@@ -194,6 +194,7 @@ async def get_data_version(
 async def crawl_evm_blocks(
     logger: Logger,
     archive_node_uri: str,
+    rpc_requests_per_second: Optional[int],
     blockchain: BlockChain,
     dynamodb_endpoint_url: str,
     dynamodb_region: str,
@@ -234,7 +235,7 @@ async def crawl_evm_blocks(
         async with session.resource("s3", **s3_resource_kwargs) as s3_resource:  # type: ignore
             s3_bucket = await s3_resource.Bucket(s3_metadata_bucket)
 
-            async with EVMRPCClient(archive_node_uri) as rpc_client:
+            async with EVMRPCClient(archive_node_uri, rpc_requests_per_second) as rpc_client:
                 # TODO: Process chunks and allow for graceful stop
                 # TODO: Report on progress
                 data_bus = await __evm_data_bus_factory(
@@ -265,6 +266,7 @@ async def crawl_evm_blocks(
 async def listen_for_and_process_new_evm_blocks(
     logger: Logger,
     archive_node_uri: str,
+    rpc_requests_per_second: Optional[int],
     blockchain: BlockChain,
     dynamodb_endpoint_url: str,
     dynamodb_region: str,
@@ -303,7 +305,7 @@ async def listen_for_and_process_new_evm_blocks(
         async with session.resource("s3", **s3_resource_kwargs) as s3_resource:  # type: ignore
             s3_bucket = await s3_resource.Bucket(s3_metadata_bucket)
 
-            async with EVMRPCClient(archive_node_uri) as rpc_client:
+            async with EVMRPCClient(archive_node_uri, rpc_requests_per_second) as rpc_client:
                 data_bus = await __evm_data_bus_factory(
                     blockchain=blockchain,
                     logger=logger,

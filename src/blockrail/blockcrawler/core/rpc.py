@@ -1,6 +1,7 @@
 import asyncio
 import warnings
 from asyncio import Future
+from math import floor
 from typing import Dict, List, Optional
 
 import aiohttp
@@ -60,13 +61,16 @@ class RPCResponse:
 
 class RPCClient:
     # TODO: Gracefully handle ConnectionResetError from
-    def __init__(self, provider_url) -> None:
-        self.__provider_url = provider_url
-        self.__nonce = 0
+    def __init__(self, provider_url: str, requests_per_second: Optional[int] = None) -> None:
+        self.__provider_url: str = provider_url
+        self.__nonce: int = 0
         self.__requests: List[Dict] = list()
         self.__ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self.__pending: Dict[str, Future] = dict()
-        self.__context_manager_running = False
+        self.__context_manager_running: bool = False
+        self.__requests_per_second: Optional[int] = requests_per_second
+        self.__this_second: int = 0
+        self.__requests_this_second: int = 0
 
     async def __aenter__(self):
         self.__client = aiohttp.ClientSession()
@@ -91,6 +95,7 @@ class RPCClient:
             if self.__requests:
                 request = self.__requests.pop(0)
                 try:
+                    await self.__wait_for_ready_to_process(request)
                     await wsc.send_json(request)
                 except Exception as e:
                     if isinstance(e, aiohttp.ClientError) or isinstance(e, asyncio.TimeoutError):
@@ -106,7 +111,18 @@ class RPCClient:
         while not wsc.closed:
             try:
                 response = await wsc.receive_json()
-                future = self.__pending.pop(response["id"])
+                if "id" not in response:
+                    continue
+                    # TODO: Log this error
+
+                try:
+                    future = self.__pending.pop(response["id"])
+                except KeyError:
+                    future.set_exception(
+                        RPCError(f'No request with "id" awaiting response: {response}')
+                    )
+                    continue
+
                 if "error" in response:
                     future.set_exception(
                         RPCServerError(
@@ -116,13 +132,12 @@ class RPCClient:
                             response["error"]["message"],
                         )
                     )
+                elif "result" in response:
+                    future.set_result(response["result"])
                 else:
-                    try:
-                        future.set_result(response["result"])
-                    except KeyError:
-                        future.set_exception(RPCError(f"No result in response: {response}"))
+                    future.set_exception(RPCError(f"No result or error in response: {response}"))
 
-            except TypeError:
+            except TypeError:  # This is for an idiosyncracy in the ws client
                 pass
 
     def __get_rpc_request(self, method, params):
@@ -134,6 +149,26 @@ class RPCClient:
             "id": str(self.__nonce),
         }
         return data
+
+    async def __wait_for_ready_to_process(self, request: dict):
+        loop = asyncio.get_running_loop()
+        if self.__requests_per_second:
+
+            time = loop.time()
+            second = floor(time)
+
+            while (
+                second == self.__this_second
+                and self.__requests_this_second >= self.__requests_per_second
+            ):
+                await asyncio.sleep(0)
+                second = floor(loop.time())
+
+            if self.__this_second <= second:
+                self.__this_second = second
+                self.__requests_this_second = 0
+
+            self.__requests_this_second += 1
 
     def send(self, method, *params) -> Future:
         if not self.__context_manager_running:
