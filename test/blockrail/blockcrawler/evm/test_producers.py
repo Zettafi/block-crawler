@@ -3,7 +3,8 @@ from unittest.mock import AsyncMock, call, Mock
 
 from blockrail.blockcrawler.core.entities import BlockChain, HexInt
 from blockrail.blockcrawler.core.bus import DataBus
-from blockrail.blockcrawler.evm.producers import BlockIDProducer, EVMBlockIDDataPackage
+from blockrail.blockcrawler.evm.producers import BlockIDProducer
+from blockrail.blockcrawler.evm.data_packages import EvmBlockIDDataPackage
 
 
 class BlockIDProducerTestCase(IsolatedAsyncioTestCase):
@@ -15,10 +16,10 @@ class BlockIDProducerTestCase(IsolatedAsyncioTestCase):
         await producer(data_bus)
         data_bus.send.assert_has_awaits(
             (
-                call(EVMBlockIDDataPackage(blockchain, HexInt(1))),
-                call(EVMBlockIDDataPackage(blockchain, HexInt(2))),
-                call(EVMBlockIDDataPackage(blockchain, HexInt(3))),
-                call(EVMBlockIDDataPackage(blockchain, HexInt(4))),
-                call(EVMBlockIDDataPackage(blockchain, HexInt(5))),
+                call(EvmBlockIDDataPackage(blockchain, HexInt(1))),
+                call(EvmBlockIDDataPackage(blockchain, HexInt(2))),
+                call(EvmBlockIDDataPackage(blockchain, HexInt(3))),
+                call(EvmBlockIDDataPackage(blockchain, HexInt(4))),
+                call(EvmBlockIDDataPackage(blockchain, HexInt(5))),
             )
         )

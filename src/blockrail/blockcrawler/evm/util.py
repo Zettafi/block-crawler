@@ -21,7 +21,7 @@ class Event:
     non_indexed_param_types: List[str]
 
 
-class ERC165Functions:
+class Erc165Functions:
     SUPPORTS_INTERFACE = Function(
         HexBytes("0x01ffc9a7"),
         "supportsInterface(bytes4)->(bool)",
@@ -31,7 +31,7 @@ class ERC165Functions:
     )
 
 
-class ERC721TokenReceiverFunctions:
+class Erc721TokenReceiverFunctions:
     ON_ERC721_RECEIVED = Function(
         HexBytes("0x01ffc9a7"),
         "onERC721Received(address,address,uint256,bytes)->(bytes4)",
@@ -41,7 +41,7 @@ class ERC721TokenReceiverFunctions:
     )
 
 
-class ERC721Functions:
+class Erc721Functions:
     BALANCE_OF_ADDRESS = Function(
         HexBytes("0x70a08231"),
         "balanceOf(address)->(uint256)",
@@ -93,7 +93,7 @@ class ERC721Functions:
     )
 
 
-class ERC721MetadataFunctions:
+class Erc721MetadataFunctions:
     NAME = Function(
         HexBytes("0x06fdde03"),
         "name()->(string)",
@@ -117,7 +117,7 @@ class ERC721MetadataFunctions:
     )
 
 
-class ERC721EnumerableFunctions:
+class Erc721EnumerableFunctions:
     TOTAL_SUPPLY = Function(
         HexBytes("0x18160ddd"),
         "totalSupply()->(uint256)",
@@ -125,6 +125,7 @@ class ERC721EnumerableFunctions:
         ["uint256"],
         True,
     )
+    # noinspection SpellCheckingInspection
     TOKEN_BY_INDEX = Function(
         HexBytes("0x4f6ccce7"),
         "tokenByIndex(uint256)->uint(256)",
@@ -141,7 +142,7 @@ class ERC721EnumerableFunctions:
     )
 
 
-class ERC1155MetadataURIFunctions:  # pragma: no cover
+class Erc1155MetadataUriFunctions:  # pragma: no cover
     URI = Function(
         HexBytes("0x0e89341c"),
         "uri(uint256)->(string)",
@@ -161,7 +162,7 @@ class AdditionalFunctions:  # pragma: no cover
     )
 
 
-class ERC721Events:  # pragma: no cover
+class Erc721Events:  # pragma: no cover
     TRANSFER = Event(
         HexBytes("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"),
         "Transfer(address, address indexed, uint256 indexed)",
@@ -170,7 +171,8 @@ class ERC721Events:  # pragma: no cover
     )
 
 
-class ERC1155Events:  # pragma: no cover
+class Erc1155Events:  # pragma: no cover
+    # noinspection SpellCheckingInspection
     TRANSFER_SINGLE = Event(
         HexBytes("0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62"),
         "TransferSingle(address indexed, address indexed, address indexed, uint256, uint256)",

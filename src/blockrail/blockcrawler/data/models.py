@@ -41,6 +41,7 @@ Tokens = Model(
     },
 )
 
+# noinspection SpellCheckingInspection
 TokenTransfers = Model(
     {
         "TableName": "tokentransfers",

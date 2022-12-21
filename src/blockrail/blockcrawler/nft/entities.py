@@ -21,13 +21,13 @@ class Collection(Entity):
     collection_id: Address
     creator: Address
     block_created: HexInt
+    specification: CollectionType
+    date_created: HexInt
+    data_version: int
     owner: Optional[Address]
     name: Optional[str]
     symbol: Optional[str]
-    specification: CollectionType
-    date_created: HexInt
     total_supply: Optional[HexInt]
-    data_version: int
 
 
 class TokenTransactionType(Enum):
@@ -41,15 +41,14 @@ class Token(Entity):
     blockchain: BlockChain
     collection_id: Address
     token_id: HexInt
-    quantity: HexInt
     data_version: int
-    original_owner: Optional[Address] = None
-    current_owner: Optional[Address] = None
-    current_owner_version: Optional[str] = None
-    mint_block: Optional[HexInt] = None
-    mint_date: Optional[HexInt] = None
+    mint_block: HexInt
+    mint_date: HexInt
+    quantity: HexInt
+    attribute_version: HexInt
+    original_owner: Optional[Address]
+    current_owner: Optional[Address]
     metadata_url: Optional[str] = None
-    metadata_url_version: Optional[str] = None
 
 
 @dataclass(unsafe_hash=True, frozen=True)
@@ -67,6 +66,7 @@ class TokenTransfer(Entity):
     data_version: int
     collection_id: Address
     token_id: HexInt
+    collection_type: CollectionType
     timestamp: HexInt
     transaction_type: TokenTransactionType
     from_: Address
@@ -83,7 +83,7 @@ class TokenTransfer(Entity):
 class TokenOwner(Entity):
     blockchain: BlockChain
     collection_id: Address
-    token_id = HexInt
-    account = Address
-    quantity = HexInt
-    data_version = int
+    token_id: HexInt
+    account: Address
+    quantity: HexInt
+    data_version: int

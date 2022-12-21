@@ -3,12 +3,13 @@
 ## Commands
 
 At its heart, this app is a command line tool for crawling the blockchain. All commands
-are Click-based, providing full help for parameters and options. Add the option `--help` to any command
-to reveal the help text.
+are Click-based, providing full help for parameters and options. Add the option `--help` 
+to any command to reveal the help text.
 
 ### Block Crawler
 
-The block crawler crawls blocks on the blockchain and writes the data to the Chain Conductor database.
+The block crawler crawls blocks on the blockchain and writes the data to the Chain 
+Conductor database.
 
 ```bash
 python bin/block_crawler.py --help
@@ -24,8 +25,9 @@ python bin/reset_db.py --help
 
 ### Function Digest
 
-This is a helper command to take the ABI specification of function and return the hex-encoded Keccak hash bytes
-used to identify the function in "Call" RPC methods on an EVM 
+This is a helper command to take the ABI specification of function and return the 
+hex-encoded Keccak hash bytes used to identify the function in "Call" RPC methods on an 
+EVM 
 
 ```bash
 python bin/function_digest.py --help
@@ -35,8 +37,9 @@ python bin/function_digest.py --help
 
 ### Setup ENV vars
 
-Copy `.env.local` to `.env` and fill in the `ARCHIVE_NODE_URI` entry with an actual archive node URI. You should be able
-to leave the rest as is if you follow the defaults in this doc.
+Copy `.env.local` to `.env` and fill in the `ARCHIVE_NODE_URI` entry with an actual 
+archive node URI. You should be able  to leave the rest as is if you follow the defaults 
+in this doc.
 
 ### Install the chain-conductor-block-crawler app
 
@@ -52,7 +55,7 @@ python -m pip install -e ".[dev]"
 
 ### Start up the local AWS services
 
-Running the services locally saves money on the Amazon bill and reduces transaction 
+Running the services locally saves money on the Amazon bill and reduces transaction
 times. For simplicity's sake, there is a `docker-compose.yml` for just that purpose. 
 Run `docker-compose up` from the project root directory, and it will launch the services
 on the ports specified in the .env.local and initialize DynamoDB and S3.
@@ -186,8 +189,9 @@ docker build -t chain-conductor-block-crawler-tail:latest .
 
 #### Seeding the Database
 
-Block Crawler stores information in the
-database to know the last processed block number. To do this, you must create a record in the `crawler_config` table for the last processed block ID of the blockchain the Tailer will be processing. Below is an
+Block Crawler stores information in the database to know the last processed block 
+number. To do this, you must create a record in the `crawler_config` table for the 
+last processed block ID of the blockchain the Tailer will be processing. Below is an 
 example for setting the last block ID for the `ethereum-mainnet` blockchain to 
 `123456789` in the `prefix-crawler_config` table.
 
@@ -208,23 +212,31 @@ aws dynamodb update-item \
 The runtime command will require configuration through the environment variables below:
 
 * AWS_ACCESS_KEY_ID -- The key ID for the AWS client to connect for all AWS services
-* AWS_SECRET_ACCESS_KEY -- The secret key for the AWS client to connect to all AWS services
+* AWS_SECRET_ACCESS_KEY -- The secret key for the AWS client to connect to all AWS 
+  services
 * BLOCKCHAIN -- Blockchain that will be processed
 * EVM_ARCHIVE_NODE_URI -- URI to access the archive node EVM RPC HTTP server
-* AWS_DYNAMODB_ENDPOINT_URL -- (optional) Override URL for connecting to Amazon DynamoDB. This setting is generally only used for development.  
-* AWS_S3_ENDPOINT_URL -- (optional) Override URL for connecting to Amazon S3. This setting is generally only used for development.
-* DYNAMODB_TIMEOUT -- (default: 5.0) Maximum time in seconds to wait for connect or response from DynamoDB
+* AWS_DYNAMODB_ENDPOINT_URL -- (optional) Override URL for connecting to Amazon 
+  DynamoDB. This setting is generally only used for development.  
+* AWS_S3_ENDPOINT_URL -- (optional) Override URL for connecting to Amazon S3. This 
+  setting is generally only used for development.
+* DYNAMODB_TIMEOUT -- (default: 5.0) Maximum time in seconds to wait for connect or 
+  response from DynamoDB
 * AWS_DYNAMODB_REGION -- AWS region for DynamoDB
 * TABLE_PREFIX -- Table prefix for the DynamoDB table names
 * AWS_S3_REGION -- AWS region for S3
 * AWS_S3_METADATA_BUCKET -- S3 bucket to store metadata files
-* HTTP_METADATA_TIMEOUT -- (default: 10.0) Maximum time in seconds to wait for a response from an HTTP server when collecting metadata
+* HTTP_METADATA_TIMEOUT -- (default: 10.0) Maximum time in seconds to wait for a 
+  response from an HTTP server when collecting metadata
 * IPFS_NODE_URI -- URI for IPFS requests to obtain token metadata
-* IPFS_METADATA_TIMEOUT -- (default: 60.0) Maximum time in seconds to wait for a response from an IPFS node when collecting metadata
+* IPFS_METADATA_TIMEOUT -- (default: 60.0) Maximum time in seconds to wait for a 
+  response from an IPFS node when collecting metadata
 * ARWEAVE_NODE_URI -- URI for Arweave requests to obtain token metadata
-* ARWEAVE_METADATA_TIMEOUT -- (default: 10.0) Maximum time in seconds to wait for a response from an Arweave node when collecting metadata
+* ARWEAVE_METADATA_TIMEOUT -- (default: 10.0) Maximum time in seconds to wait for a 
+  response from an Arweave node when collecting metadata
 * TRAIL_BOCKS -- (default: 1) Trail the last block by this many blocks.
-* PROCESS_INTERVAL -- (default: 10.0) Minimum interval in seconds between block processing actions.
+* PROCESS_INTERVAL -- (default: 10.0) Minimum interval in seconds between block 
+  processing actions.
 * DEBUG -- (default: False) Show debug messages in the console
 
 #### Running the Image
@@ -232,5 +244,8 @@ The runtime command will require configuration through the environment variables
 The image requires nothing but the environment variables to run. An example is below.
 
 ```bash
-docker run -e BLOCKCHAIN=ethereum-mainnet -e AWS_ACCESS_KEY_ID=MYAWSKEYID ... chain-conductor-block-crawler-tail:latest
+docker run \
+-e BLOCKCHAIN=ethereum-mainnet \
+-e AWS_ACCESS_KEY_ID=MYAWSKEYID \
+... chain-conductor-block-crawler-tail:latest
 ```

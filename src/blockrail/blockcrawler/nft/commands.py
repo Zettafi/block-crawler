@@ -15,38 +15,47 @@ from .consumers import (
     NftTokenQuantityUpdatingConsumer,
     NftMetadataUriUpdatingConsumer,
     NftTokenMetadataPersistingConsumer,
-    CurrentOwnerPersistingConsumer,
 )
+from .data_services.dynamodb import DynamoDbDataService
 from .entities import BlockChain
-from .evm import LogVersionOracle
+from .evm.consumers import (
+    CollectionToEverythingElseErc721CollectionBasedConsumer,
+    CollectionToEverythingElseErc1155CollectionBasedConsumer,
+)
+from .evm.oracles import LogVersionOracle, TokenTransactionTypeOracle
 from .evm.transformers import (
     EvmTransactionReceiptToNftCollectionTransformer,
     EvmLogErc721TransferToNftTokenTransferTransformer,
-    TokenTransactionTypeOracle,
     EvmLogErc1155TransferSingleToNftTokenTransferTransformer,
     EvmLogErc1155TransferToNftTokenTransferTransformer,
     EvmLogErc1155UriEventToNftTokenMetadataUriUpdatedTransformer,
-    EvmLogErc721TransferToNftTokenMetadataUriUpdatedTransformer,
+    Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer,
 )
 from ..core.bus import ParallelDataBus
 from ..core.data_clients import HttpDataClient, IpfsDataClient, ArweaveDataClient, DataUriDataClient
-from ..data.models import BlockCrawlerConfig, Collections, Tokens, TokenTransfers, Owners
+from ..core.entities import HexInt
+from ..core.services import BlockTimeService
+from ..core.stats import StatsService
+from ..core.storage_clients import S3StorageClient, StorageClientContext
+from ..data.models import BlockCrawlerConfig, Tokens
 from ..evm.producers import BlockIDProducer
-from ..evm.rpc import EVMRPCClient
+from ..evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient
 from ..evm.transformers import (
     BlockIdToEvmBlockTransformer,
     EvmBlockToEvmTransactionHashTransformer,
-    EvmTransactionHashToEvmTransactionReceipTransformer,
-    EvmTransactionToLogTransformer,
+    EvmTransactionHashToEvmTransactionReceiptTransformer,
+    EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer,
+    EvmTransactionToContractEvmTransactionReceiptTransformer,
 )
 
 
-async def __evm_data_bus_factory(
+async def __evm_block_crawler_data_bus_factory(
+    stats_service: StatsService,
     dynamodb,
     table_prefix: str,
-    s3_bucket,
+    storage_client_context: StorageClientContext,
     logger: Logger,
-    rpc_client: EVMRPCClient,
+    rpc_client: EvmRpcClient,
     blockchain: BlockChain,
     http_metadata_timeout: float,
     ipfs_node_uri: str,
@@ -56,6 +65,7 @@ async def __evm_data_bus_factory(
     data_version: int,
 ):
     data_bus = ParallelDataBus(logger)
+    data_service = DynamoDbDataService(dynamodb, stats_service, table_prefix)
     await data_bus.register(
         BlockIdToEvmBlockTransformer(
             data_bus=data_bus, blockchain=blockchain, rpc_client=rpc_client
@@ -63,7 +73,7 @@ async def __evm_data_bus_factory(
     )
     await data_bus.register(EvmBlockToEvmTransactionHashTransformer(data_bus))
     await data_bus.register(
-        EvmTransactionHashToEvmTransactionReceipTransformer(
+        EvmTransactionHashToEvmTransactionReceiptTransformer(
             data_bus=data_bus, blockchain=blockchain, rpc_client=rpc_client
         ),
     )
@@ -75,12 +85,7 @@ async def __evm_data_bus_factory(
             data_version=data_version,
         )
     )
-    await data_bus.register(
-        NftCollectionPersistenceConsumer(
-            await dynamodb.Table(table_prefix + Collections.table_name)
-        ),
-    )
-    await data_bus.register(EvmTransactionToLogTransformer(data_bus))
+    await data_bus.register(NftCollectionPersistenceConsumer(data_service))
     token_transaction_type_oracle = TokenTransactionTypeOracle()
     log_version_oracle = LogVersionOracle()
     await data_bus.register(
@@ -114,21 +119,14 @@ async def __evm_data_bus_factory(
             data_version=data_version,
         )
     )
-    await data_bus.register(
-        NftTokenTransferPersistenceConsumer(
-            await dynamodb.Table(table_prefix + TokenTransfers.table_name),
-            log_version_oracle,
-        )
-    )
+    await data_bus.register(NftTokenTransferPersistenceConsumer(data_service))
     tokens_table_resource = await dynamodb.Table(table_prefix + Tokens.table_name)
-    await data_bus.register(NftTokenMintPersistenceConsumer(tokens_table_resource))
+    await data_bus.register(NftTokenMintPersistenceConsumer(data_service))
     await data_bus.register(NftTokenQuantityUpdatingConsumer(tokens_table_resource))
     await data_bus.register(
-        EvmLogErc721TransferToNftTokenMetadataUriUpdatedTransformer(
+        Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(
             data_bus=data_bus,
             rpc_client=rpc_client,
-            log_version_oracle=log_version_oracle,
-            data_version=data_version,
         )
     )
     await data_bus.register(NftMetadataUriUpdatingConsumer(tokens_table_resource))
@@ -139,22 +137,19 @@ async def __evm_data_bus_factory(
             data_version=data_version,
         )
     )
-    http_data_client = HttpDataClient(http_metadata_timeout)
-    ipfs_data_client = IpfsDataClient(ipfs_node_uri, ipfs_metadata_timeout)
-    arweave_data_client = ArweaveDataClient(arweave_node_uri, arweave_metadata_timeout)
-    data_uri_data_client = DataUriDataClient()
+    http_data_client = HttpDataClient(http_metadata_timeout, stats_service)
+    ipfs_data_client = IpfsDataClient(ipfs_node_uri, ipfs_metadata_timeout, stats_service)
+    arweave_data_client = ArweaveDataClient(
+        arweave_node_uri, arweave_metadata_timeout, stats_service
+    )
+    data_uri_data_client = DataUriDataClient(stats_service)
     await data_bus.register(
         NftTokenMetadataPersistingConsumer(
             http_client=http_data_client,
             ipfs_client=ipfs_data_client,
             arweave_client=arweave_data_client,
             data_uri_client=data_uri_data_client,
-            s3_bucket=s3_bucket,
-        )
-    )
-    await data_bus.register(
-        CurrentOwnerPersistingConsumer(
-            await dynamodb.Table(table_prefix + Owners.table_name),
+            storage_client_context=storage_client_context,
         )
     )
     return data_bus
@@ -193,6 +188,7 @@ async def get_data_version(
 
 async def crawl_evm_blocks(
     logger: Logger,
+    stats_service: StatsService,
     archive_node_uri: str,
     rpc_requests_per_second: Optional[int],
     blockchain: BlockChain,
@@ -227,21 +223,22 @@ async def crawl_evm_blocks(
             dynamodb, blockchain, increment_data_version, table_prefix
         )
 
-        s3_resource_kwargs = base_resource_kwargs.copy()
-        if s3_endpoint_url is not None:  # This would only be in non-deployed environments
-            s3_resource_kwargs["endpoint_url"] = s3_endpoint_url
-        if s3_region is not None:
-            s3_resource_kwargs["region_name"] = s3_region
-        async with session.resource("s3", **s3_resource_kwargs) as s3_resource:  # type: ignore
-            s3_bucket = await s3_resource.Bucket(s3_metadata_bucket)
-
-            async with EVMRPCClient(archive_node_uri, rpc_requests_per_second) as rpc_client:
+        async with S3StorageClient(
+            bucket=s3_metadata_bucket,
+            stats_service=stats_service,
+            endpoint_url=s3_endpoint_url,
+            region_name=s3_region,
+        ) as storage_client_context:
+            async with EvmRpcClient(
+                archive_node_uri, stats_service, rpc_requests_per_second
+            ) as rpc_client:
                 # TODO: Process chunks and allow for graceful stop
                 # TODO: Report on progress
-                data_bus = await __evm_data_bus_factory(
+                data_bus = await __evm_block_crawler_data_bus_factory(
+                    stats_service=stats_service,
                     dynamodb=dynamodb,
                     table_prefix=table_prefix,
-                    s3_bucket=s3_bucket,
+                    storage_client_context=storage_client_context,
                     logger=logger,
                     rpc_client=rpc_client,
                     blockchain=blockchain,
@@ -265,6 +262,7 @@ async def crawl_evm_blocks(
 
 async def listen_for_and_process_new_evm_blocks(
     logger: Logger,
+    stats_service: StatsService,
     archive_node_uri: str,
     rpc_requests_per_second: Optional[int],
     blockchain: BlockChain,
@@ -297,22 +295,26 @@ async def listen_for_and_process_new_evm_blocks(
         data_version = await get_data_version(  # noqa: F841
             dynamodb, blockchain, False, table_prefix
         )
-        s3_resource_kwargs = base_resource_kwargs.copy()
-        if s3_endpoint_url is not None:  # This would only be in non-deployed environments
-            s3_resource_kwargs["endpoint_url"] = s3_endpoint_url
-        if s3_region is not None:
-            s3_resource_kwargs["region_name"] = s3_region
-        async with session.resource("s3", **s3_resource_kwargs) as s3_resource:  # type: ignore
-            s3_bucket = await s3_resource.Bucket(s3_metadata_bucket)
+        async with S3StorageClient(
+            bucket=s3_metadata_bucket,
+            stats_service=stats_service,
+            endpoint_url=s3_endpoint_url,
+            region_name=s3_region,
+        ) as storage_client_context:
 
-            async with EVMRPCClient(archive_node_uri, rpc_requests_per_second) as rpc_client:
-                data_bus = await __evm_data_bus_factory(
-                    blockchain=blockchain,
-                    logger=logger,
+            async with EvmRpcClient(
+                provider_url=archive_node_uri,
+                stats_service=stats_service,
+                requests_per_second=rpc_requests_per_second,
+            ) as rpc_client:
+                data_bus = await __evm_block_crawler_data_bus_factory(
+                    stats_service=stats_service,
                     dynamodb=dynamodb,
                     table_prefix=table_prefix,
-                    s3_bucket=s3_bucket,
+                    storage_client_context=storage_client_context,
+                    logger=logger,
                     rpc_client=rpc_client,
+                    blockchain=blockchain,
                     http_metadata_timeout=http_metadata_timeout,
                     ipfs_node_uri=ipfs_node_uri,
                     ipfs_metadata_timeout=ipfs_metadata_timeout,
@@ -387,8 +389,107 @@ async def set_last_block_id_for_block_chain(
         )
 
 
-async def get_block(evm_node_uri):
-    rpc = EVMRPCClient(evm_node_uri)
+async def get_block(evm_node_uri, stats_service: StatsService):
+    rpc = EvmRpcClient(evm_node_uri, stats_service)
     async with rpc:
         block_number = await rpc.get_block_number()
     return block_number.int_value
+
+
+async def load_evm_contracts_by_block(
+    starting_block: int,
+    ending_block: int,
+    block_height: int,
+    increment_data_version: bool,
+    block_chunk_size: int,
+    logger: Logger,
+    stats_service: StatsService,
+    archive_node_uri: str,
+    rpc_requests_per_second: Optional[int],
+    rpc_connection_pool_size: int,
+    blockchain: BlockChain,
+    dynamodb_endpoint_url: str,
+    dynamodb_region: str,
+    dynamodb_timeout: float,
+    table_prefix: str,
+    block_bound_tracker,
+) -> None:
+    session = aioboto3.Session()
+
+    config = Config(connect_timeout=dynamodb_timeout, read_timeout=dynamodb_timeout)
+    base_resource_kwargs: Dict[str, Union[str, Config]] = dict(config=config)
+
+    token_transaction_type_oracle = TokenTransactionTypeOracle()
+    log_version_oracle = LogVersionOracle()
+
+    dynamodb_resource_kwargs = base_resource_kwargs.copy()
+    if dynamodb_endpoint_url is not None:  # This would only be in non-deployed environments
+        dynamodb_resource_kwargs["endpoint_url"] = dynamodb_endpoint_url
+    if dynamodb_region is not None:
+        dynamodb_resource_kwargs["region_name"] = dynamodb_region
+    async with session.resource("dynamodb", **dynamodb_resource_kwargs) as dynamodb:  # type: ignore
+        data_service = DynamoDbDataService(dynamodb, stats_service, table_prefix)
+        data_version = await get_data_version(  # noqa: F841
+            dynamodb, blockchain, increment_data_version, table_prefix
+        )
+
+        async with ConnectionPoolingEvmRpcClient(
+            archive_node_uri, stats_service, rpc_requests_per_second, rpc_connection_pool_size
+        ) as rpc_client:
+            data_bus = ParallelDataBus(logger)
+            block_time_service = BlockTimeService(rpc_client)
+
+            await data_bus.register(
+                EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(
+                    data_bus=data_bus,
+                    rpc_client=rpc_client,
+                    block_time_service=block_time_service,
+                ),
+            )
+            await data_bus.register(
+                EvmTransactionToContractEvmTransactionReceiptTransformer(
+                    data_bus=data_bus,
+                    rpc_client=rpc_client,
+                )
+            )
+            await data_bus.register(
+                EvmTransactionReceiptToNftCollectionTransformer(
+                    data_bus=data_bus,
+                    blockchain=blockchain,
+                    rpc_client=rpc_client,
+                    data_version=data_version,
+                )
+            )
+            await data_bus.register(NftCollectionPersistenceConsumer(data_service))
+            await data_bus.register(
+                CollectionToEverythingElseErc721CollectionBasedConsumer(
+                    data_bus=data_bus,
+                    data_service=data_service,
+                    rpc_client=rpc_client,
+                    block_time_service=block_time_service,
+                    log_version_oracle=log_version_oracle,
+                    token_transaction_type_oracle=token_transaction_type_oracle,
+                    max_block_height=HexInt(block_height),
+                )
+            )
+            await data_bus.register(
+                CollectionToEverythingElseErc1155CollectionBasedConsumer(
+                    data_bus=data_bus,
+                    data_service=data_service,
+                    rpc_client=rpc_client,
+                    block_time_service=block_time_service,
+                    log_version_oracle=log_version_oracle,
+                    token_transaction_type_oracle=token_transaction_type_oracle,
+                    max_block_height=HexInt(block_height),
+                )
+            )
+
+            for block_chunk_start in range(ending_block, starting_block, -1 * block_chunk_size):
+                block_chunk_end = block_chunk_start - block_chunk_size + 1
+                block_bound_tracker.low = block_chunk_end
+                block_bound_tracker.high = block_chunk_start
+                block_id_producer = BlockIDProducer(
+                    blockchain, block_chunk_start, block_chunk_end, -1
+                )
+                async with data_bus:
+                    await block_id_producer(data_bus)

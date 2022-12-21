@@ -15,132 +15,82 @@ from blockrail.blockcrawler.core.data_clients import (
     DataClient,
     UnsupportedProtocolError,
     DataReader,
+    ResourceNotFoundProtocolError,
+    InvalidRequestProtocolError,
+    TooManyRequestsProtocolError,
+    ProtocolTimeoutError,
 )
 from blockrail.blockcrawler.core.entities import HexInt
+from blockrail.blockcrawler.core.storage_clients import StorageClientContext
+from blockrail.blockcrawler.nft.data_services import DataVersionTooOldException, DataService
 from blockrail.blockcrawler.evm.types import Address
 from blockrail.blockcrawler.nft.data_packages import (
-    NftCollectionDataPackage,
-    NftTokenTransferDataPackage,
-    NftTokenMetadataUriUpdatedDataPackage,
+    CollectionDataPackage,
+    TokenTransferDataPackage,
+    TokenMetadataUriUpdatedDataPackage,
 )
-from blockrail.blockcrawler.nft.entities import TokenTransactionType
-from blockrail.blockcrawler.nft.evm import LogVersionOracle
+from blockrail.blockcrawler.nft.entities import TokenTransactionType, Token
 
 
 class NftCollectionPersistenceConsumer(Consumer):
-    def __init__(self, collections_table: TableResource) -> None:
-        self.__collections_table = collections_table
+    def __init__(self, data_service: DataService) -> None:
+        self.__data_service = data_service
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, NftCollectionDataPackage):
+        if not isinstance(data_package, CollectionDataPackage):
             return
 
-        item = {
-            "blockchain": data_package.collection.blockchain.value,
-            "collection_id": data_package.collection.collection_id,
-            "block_created": data_package.collection.block_created.hex_value,
-            "creator": data_package.collection.creator,
-            "date_created": data_package.collection.date_created.hex_value,
-            "specification": data_package.collection.specification,
-            "data_version": data_package.collection.data_version,
-        }
-        if data_package.collection.total_supply is not None:
-            item["total_supply"] = data_package.collection.total_supply.hex_value
-        if data_package.collection.owner is not None:
-            item["owner"] = data_package.collection.owner
-        if data_package.collection.name is not None:
-            item["name"] = data_package.collection.name
-            item["name_lower"] = data_package.collection.name.lower()
-        if data_package.collection.symbol is not None:
-            item["symbol"] = data_package.collection.symbol
-
         try:
-            await self.__collections_table.put_item(
-                Item=item,
-                ConditionExpression=Attr("data_version").not_exists()
-                | Attr("data_version").lte(data_package.collection.data_version),
-            )
-        except self.__collections_table.meta.client.exceptions.ConditionalCheckFailedException:
+            await self.__data_service.write_collection(data_package.collection)
+        except DataVersionTooOldException:
             pass  # It's okay if it doesn't write
 
 
 class NftTokenMintPersistenceConsumer(Consumer):
-    def __init__(self, token_table: TableResource) -> None:
-        self.__token_table = token_table
+    def __init__(self, data_service: DataService) -> None:
+        self.__data_service = data_service
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, NftTokenTransferDataPackage):
+        if not isinstance(data_package, TokenTransferDataPackage):
             return
 
         token_transfer = data_package.token_transfer
         if token_transfer.transaction_type != TokenTransactionType.MINT:
             return
 
+        token = Token(
+            blockchain=token_transfer.blockchain,
+            collection_id=token_transfer.collection_id,
+            token_id=token_transfer.token_id,
+            data_version=token_transfer.data_version,
+            original_owner=token_transfer.to_,
+            current_owner=token_transfer.to_,
+            mint_block=token_transfer.block_id,
+            mint_date=token_transfer.timestamp,
+            quantity=HexInt(0),
+            attribute_version=token_transfer.attribute_version,
+        )
+
         try:
-            await self.__token_table.put_item(
-                Item=dict(
-                    blockchain_collection_id=f"{token_transfer.blockchain.value}"
-                    f"::{token_transfer.collection_id}",
-                    token_id=token_transfer.token_id.hex_value,
-                    mint_date=token_transfer.timestamp.int_value,
-                    mint_block=token_transfer.block_id.hex_value,
-                    original_owner=token_transfer.to_,
-                    current_owner=token_transfer.to_,
-                    current_owner_version=token_transfer.attribute_version.hex_value,
-                    quantity=0,
-                    data_version=token_transfer.data_version,
-                ),
-                ConditionExpression=Attr("data_version").not_exists()
-                | Attr("data_version").lte(token_transfer.data_version),
-            )
-        except self.__token_table.meta.client.exceptions.ConditionalCheckFailedException:
+            await self.__data_service.write_token(token)
+        except DataVersionTooOldException:
             pass  # It's okay if it doesn't write
 
 
 class NftTokenTransferPersistenceConsumer(Consumer):
-    def __init__(
-        self, token_transfers_table: TableResource, log_version_oracle: LogVersionOracle
-    ) -> None:
-        self.__token_transfers_table = token_transfers_table
-        self.__log_version_oracle = log_version_oracle
+    def __init__(self, data_service: DataService) -> None:
+        self.__data_service = data_service
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, NftTokenTransferDataPackage):
+        if not isinstance(data_package, TokenTransferDataPackage):
             return
 
         token_transfer = data_package.token_transfer
 
         try:
-            block_transaction_log_index = self.__log_version_oracle.version(
-                token_transfer.block_id.int_value,
-                token_transfer.transaction_index.int_value,
-                token_transfer.log_index.int_value,
-            )
-            await self.__token_transfers_table.put_item(
-                Item=dict(
-                    blockchain_collection_id=f"{token_transfer.blockchain.value}"
-                    f"::{token_transfer.collection_id}",
-                    transaction_log_index_hash=block_transaction_log_index.hex_value,
-                    collection_id=token_transfer.collection_id,
-                    token_id=token_transfer.token_id.hex_value,
-                    timestamp=token_transfer.timestamp.int_value,
-                    block_id=token_transfer.block_id.hex_value,
-                    transaction_type=token_transfer.transaction_type.value,
-                    from_account=token_transfer.from_,
-                    to_account=token_transfer.to_,
-                    quantity=token_transfer.quantity.hex_value,
-                    transaction_hash=token_transfer.transaction_hash.hex(),
-                    transaction_index=token_transfer.transaction_index.hex_value,
-                    log_index=token_transfer.log_index.hex_value,
-                    data_version=token_transfer.data_version,
-                ),
-                ConditionExpression=Attr("data_version").not_exists()
-                | Attr("data_version").lte(token_transfer.data_version),
-            )
-        except self.__token_transfers_table.meta.client.exceptions.ConditionalCheckFailedException:
+            await self.__data_service.write_token_transfer(token_transfer)
+        except DataVersionTooOldException:
             pass  # It's okay if it doesn't write
-
-        # TODO: Add update to Tokens for current owner as well.
 
 
 class NftTokenQuantityUpdatingConsumer(Consumer):
@@ -148,7 +98,7 @@ class NftTokenQuantityUpdatingConsumer(Consumer):
         self.__tokens_table = tokens_table
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, NftTokenTransferDataPackage):
+        if not isinstance(data_package, TokenTransferDataPackage):
             return
 
         token_transfer = data_package.token_transfer
@@ -189,13 +139,13 @@ class NftMetadataUriUpdatingConsumer(Consumer):
         self.__tokens_table = tokens_table
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, NftTokenMetadataUriUpdatedDataPackage):
+        if not isinstance(data_package, TokenMetadataUriUpdatedDataPackage):
             return
 
         await self.__update_metadata_uri(data_package)
 
-    @backoff.on_exception(backoff.expo, ClientError, max_tries=5)
-    async def __update_metadata_uri(self, data_package: NftTokenMetadataUriUpdatedDataPackage):
+    @backoff.on_exception(backoff.expo, ClientError, max_tries=5)  # TODO: Do not retry 404
+    async def __update_metadata_uri(self, data_package: TokenMetadataUriUpdatedDataPackage):
         blockchain_collection_id = (
             f"{data_package.blockchain.value}" f"::{data_package.collection_id}"
         )
@@ -245,7 +195,7 @@ class NftMetadataUriUpdatingConsumer(Consumer):
 
 class NftTokenMetadataPersistingConsumer(Consumer):
     PROTOCOL_MATCH_REGEX = re.compile("^(?:([^:]+)://|(data):).+$")
-    HTTP_IPFS_MATCH_REGEX = re.compile("^https://.+/ipfs/(.+)$")
+    HTTP_IPFS_MATCH_REGEX = re.compile("^https?://.+/ipfs/(.+)$")
 
     def __init__(
         self,
@@ -253,23 +203,23 @@ class NftTokenMetadataPersistingConsumer(Consumer):
         ipfs_client: IpfsDataClient,
         arweave_client: ArweaveDataClient,
         data_uri_client: DataUriDataClient,
-        s3_bucket,
+        storage_client_context: StorageClientContext,
     ) -> None:
         self.__http_client = http_client
         self.__ipfs_client = ipfs_client
         self.__arweave_client = arweave_client
         self.__data_uri_client = data_uri_client
-        self.__s3_bucket = s3_bucket
+        self.__storage_client_context = storage_client_context
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, NftTokenMetadataUriUpdatedDataPackage):
+        if not isinstance(data_package, TokenMetadataUriUpdatedDataPackage):
             return
 
-        uri = self.__sanitize_uri(data_package.metadata_uri)
-        data_client = self.__get_data_client_for_uri(uri)
-
         try:
-            async with data_client.get(uri) as (content_type, data_reader):
+            uri = self.__sanitize_uri(data_package.metadata_uri)
+            data_client = self.__get_data_client_for_uri(uri)
+
+            async with self.get_metadata(data_client, uri) as (content_type, data_reader):
                 key = (
                     f"{data_package.blockchain.value}"
                     f"/{data_package.collection_id}"
@@ -277,23 +227,42 @@ class NftTokenMetadataPersistingConsumer(Consumer):
                     f"/{data_package.metadata_uri_version.hex_value}"
                 )
                 try:
-                    await self.__s3_bucket.upload_fileobj(
+                    await self.__storage_client_context.store(
+                        key,
                         cast(DataReader, data_reader),
-                        Key=key,
-                        ExtraArgs=dict(
-                            ContentType=cast(str, content_type),
-                        ),
+                        cast(str, content_type),
                     )
                 except Exception as e:
                     raise ConsumerError(
                         f"Failed to store Token metadata " f"{data_package} -- Cause {e}"
                     )
-        except ConsumerError:
+        except (ConsumerError, TooManyRequestsProtocolError):
             raise
+        except (
+            ResourceNotFoundProtocolError,
+            InvalidRequestProtocolError,
+            UnsupportedProtocolError,
+        ):
+            pass
         except Exception as e:
             raise ConsumerError(
                 f"Failed to retrieve metadata for Token URI " f"{data_package} -- Cause {e}"
             )
+
+    @backoff.on_exception(
+        backoff.runtime,
+        TooManyRequestsProtocolError,
+        value=lambda r: r.retry_after,
+        jitter=None,
+    )
+    @backoff.on_exception(
+        backoff.expo,
+        ProtocolTimeoutError,
+        max_value=16,
+        jitter=backoff.full_jitter,
+    )
+    def get_metadata(self, data_client, uri):
+        return data_client.get(uri)
 
     def __get_data_client_for_uri(self, uri: str) -> DataClient:
         proto = self.__get_protocol_from_uri(uri)
@@ -334,7 +303,7 @@ class CurrentOwnerPersistingConsumer(Consumer):
         self.__owners_table = owners_table
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, NftTokenTransferDataPackage):
+        if not isinstance(data_package, TokenTransferDataPackage):
             return
 
         token_transfer = data_package.token_transfer
@@ -365,26 +334,26 @@ class CurrentOwnerPersistingConsumer(Consumer):
                 f" -- Cause: %s"
             )
 
+            update_params = dict(
+                Key=table_key,
+                UpdateExpression="SET collection_id = :cid"
+                ",token_id = :tid"
+                ",account = :a"
+                ",data_version = :dv"
+                " ADD quantity :q",
+                ExpressionAttributeValues={
+                    ":cid": str(token_transfer.collection_id),
+                    ":tid": token_transfer.token_id.hex_value,
+                    ":a": address,
+                    ":q": quantity,
+                    ":dv": token_transfer.data_version,
+                },
+                ConditionExpression=(
+                    Attr("data_version").not_exists()
+                    | Attr("data_version").eq(token_transfer.data_version)
+                ),
+            )
             try:
-                update_params = dict(
-                    Key=table_key,
-                    UpdateExpression="SET collection_id = :cid"
-                    ",token_id = :tid"
-                    ",account = :a"
-                    ",data_version = :dv"
-                    " ADD quantity :q",
-                    ExpressionAttributeValues={
-                        ":cid": str(token_transfer.collection_id),
-                        ":tid": token_transfer.token_id.hex_value,
-                        ":a": address,
-                        ":q": quantity,
-                        ":dv": token_transfer.data_version,
-                    },
-                    ConditionExpression=(
-                        Attr("data_version").not_exists()
-                        | Attr("data_version").eq(token_transfer.data_version)
-                    ),
-                )
                 await self.__owners_table.update_item(**update_params)
 
                 try:

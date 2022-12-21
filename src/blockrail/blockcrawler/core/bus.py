@@ -30,15 +30,15 @@ class DataBus:
 
     async def send(self, data_package: DataPackage):
         """
-        Send data to the data bus. The data will be received from the data bus by all of
-        the consumers.
+        Send data to the data bus. The data will be received from the data bus by
+        consumers.
         """
         raise NotImplementedError
 
     async def register(self, consumer: Consumer):
         """
         Register a consumer with the data bus. The data bus will send data to the
-        consumer that is send to the data bus.
+        consumer that is sent to the data bus.
 
         """
         raise NotImplementedError

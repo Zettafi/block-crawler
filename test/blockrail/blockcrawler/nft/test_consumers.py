@@ -11,9 +11,12 @@ from blockrail.blockcrawler.core.data_clients import (
     IpfsDataClient,
     ArweaveDataClient,
     DataUriDataClient,
-    UnsupportedProtocolError,
+    InvalidRequestProtocolError,
+    TooManyRequestsProtocolError,
 )
 from blockrail.blockcrawler.core.entities import BlockChain, HexInt
+from blockrail.blockcrawler.core.storage_clients import StorageClientContext
+from blockrail.blockcrawler.nft.data_services import DataVersionTooOldException, DataService
 from blockrail.blockcrawler.evm.types import Address
 from blockrail.blockcrawler.nft.consumers import (
     NftCollectionPersistenceConsumer,
@@ -25,9 +28,9 @@ from blockrail.blockcrawler.nft.consumers import (
     CurrentOwnerPersistingConsumer,
 )
 from blockrail.blockcrawler.nft.data_packages import (
-    NftCollectionDataPackage,
-    NftTokenTransferDataPackage,
-    NftTokenMetadataUriUpdatedDataPackage,
+    CollectionDataPackage,
+    TokenTransferDataPackage,
+    TokenMetadataUriUpdatedDataPackage,
 )
 from blockrail.blockcrawler.nft.entities import (
     Collection,
@@ -35,83 +38,44 @@ from blockrail.blockcrawler.nft.entities import (
     TokenTransfer,
     TokenTransactionType,
     EthereumCollectionType,
+    Token,
 )
-from blockrail.blockcrawler.nft.evm import LogVersionOracle
 
 
 @ddt.ddt
 class NftCollectionPersistenceBatchConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__table_resource = AsyncMock()
-        self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException = Exception
-        self.__consumer = NftCollectionPersistenceConsumer(self.__table_resource)
+        self.__data_service = AsyncMock(DataService)
+        self.__consumer = NftCollectionPersistenceConsumer(self.__data_service)
+
+    async def test_does_not_process_non_token_transaction_data_packages(self):
+        await self.__consumer.receive(DataPackage())
+        self.__data_service.write_collection.assert_not_called()
 
     async def test_stores_correct_data(self):
         blockchain = Mock(BlockChain)
         blockchain.value = "Expected Blockchain"
         collection_type = "Expected Collection Type"
-        data_package = NftCollectionDataPackage(
-            Collection(
-                blockchain=blockchain,
-                collection_id=Address("Collection Address"),
-                block_created=HexInt("0x1"),
-                date_created=HexInt("0x1234"),
-                creator=Address("Creator"),
-                owner=Address("Owner"),
-                name="Name",
-                symbol="Symbol",
-                total_supply=HexInt("0x100"),
-                specification=CollectionType(collection_type),
-                data_version=999,
-            )
+        collection = Collection(
+            blockchain=blockchain,
+            collection_id=Address("Collection Address"),
+            block_created=HexInt("0x1"),
+            date_created=HexInt("0x1234"),
+            creator=Address("Creator"),
+            owner=Address("Owner"),
+            name="Name",
+            symbol="Symbol",
+            total_supply=HexInt("0x100"),
+            specification=CollectionType(collection_type),
+            data_version=999,
         )
+        data_package = CollectionDataPackage(collection)
         await self.__consumer.receive(data_package)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
-                "blockchain": "Expected Blockchain",
-                "collection_id": "Collection Address",
-                "block_created": "0x1",
-                "creator": "Creator",
-                "owner": "Owner",
-                "date_created": "0x1234",
-                "name": "Name",
-                "name_lower": "name",
-                "symbol": "Symbol",
-                "total_supply": "0x100",
-                "specification": "Expected Collection Type",
-                "data_version": 999,
-            },
-            ConditionExpression=ANY,
-        )
+        self.__data_service.write_collection.assert_awaited_once_with(collection)
 
-    async def test_uses_the_correct_conditional_expression_and_attrs(self):
-        data_package = NftCollectionDataPackage(
-            Collection(
-                blockchain=BlockChain.ETHEREUM_MAINNET,
-                collection_id=Address("Collection Address"),
-                block_created=HexInt("0x1"),
-                date_created=HexInt("0x1234"),
-                creator=Address("Creator"),
-                owner=Address("Owner"),
-                name="Name",
-                symbol="Symbol",
-                total_supply=HexInt("0x100"),
-                specification=EthereumCollectionType.ERC721,
-                data_version=999,
-            )
-        )
-
-        await self.__consumer.receive(data_package)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item=ANY,
-            ConditionExpression=Attr("data_version").not_exists() | Attr("data_version").lte(999),
-        )
-
-    async def test_does_not_react_to_condition_check_failure_when_saving(self):
-        self.__table_resource.put_item.side_effect = (
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException
-        )
-        data_package = NftCollectionDataPackage(
+    async def test_does_not_react_to_data_version_too_old_when_saving(self):
+        self.__data_service.write_collection.side_effect = DataVersionTooOldException
+        data_package = CollectionDataPackage(
             Collection(
                 blockchain=BlockChain.ETHEREUM_MAINNET,
                 collection_id=Address("Collection Address"),
@@ -127,42 +91,42 @@ class NftCollectionPersistenceBatchConsumerTestCase(IsolatedAsyncioTestCase):
             )
         )
         await self.__consumer.receive(data_package)
-        self.__table_resource.put_item.assert_awaited_once()
+        self.__data_service.write_collection.assert_awaited_once()
 
 
 @ddt.ddt
 class NftTokenMintPersistenceConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__table_resource = AsyncMock()
-        self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException = Exception
-        self.__consumer = NftTokenMintPersistenceConsumer(self.__table_resource)
+        self.__data_service = AsyncMock()
+        self.__consumer = NftTokenMintPersistenceConsumer(self.__data_service)
 
     async def test_does_not_process_non_token_transaction_data_packages(self):
         await self.__consumer.receive(DataPackage())
-        self.__table_resource.put_item.assert_not_called()
+        self.__data_service.write_token.assert_not_called()
 
     @ddt.data(TokenTransactionType.TRANSFER, TokenTransactionType.BURN, Mock(TokenTransactionType))
     async def test_does_not_process_token_transactions_other_than_mint(self, token_transfer_type):
-        token_transfer_data_package = Mock(NftTokenTransferDataPackage)
+        token_transfer_data_package = Mock(TokenTransferDataPackage)
         token_transfer_data_package.token_transfer = Mock(TokenTransfer)
         token_transfer_data_package.token_transfer.transaction_type = token_transfer_type
         await self.__consumer.receive(token_transfer_data_package)
-        self.__table_resource.put_item.assert_not_called()
+        self.__data_service.write_token.assert_not_called()
 
     async def test_stores_correct_data(self):
         blockchain = Mock(BlockChain)
         blockchain.value = "Expected Blockchain"
         transaction_type = TokenTransactionType.MINT
-        data_package = NftTokenTransferDataPackage(
+        data_package = TokenTransferDataPackage(
             TokenTransfer(
                 blockchain=blockchain,
                 data_version=999,
                 collection_id=Address("Collection Address"),
+                collection_type=EthereumCollectionType.ERC721,
                 token_id=HexInt(1),
                 timestamp=HexInt(2),
                 from_=Address("From"),
                 to_=Address("To"),
-                quantity=HexInt(0),
+                quantity=HexInt(1),
                 block_id=HexInt(4),
                 transaction_hash=HexBytes("0xaabbccdd"),
                 transaction_index=HexInt(5),
@@ -173,27 +137,29 @@ class NftTokenMintPersistenceConsumerTestCase(IsolatedAsyncioTestCase):
         )
 
         await self.__consumer.receive(data_package)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
-                "blockchain_collection_id": "Expected Blockchain::Collection Address",
-                "token_id": "0x1",
-                "mint_date": 2,
-                "mint_block": "0x4",
-                "original_owner": "To",
-                "current_owner": "To",
-                "current_owner_version": "0x00000000000000000007",
-                "quantity": 0,
-                "data_version": 999,
-            },
-            ConditionExpression=ANY,
+        self.__data_service.write_token.assert_awaited_once_with(
+            Token(
+                blockchain=blockchain,
+                collection_id=Address("Collection Address"),
+                token_id=HexInt(1),
+                data_version=999,
+                original_owner=Address("To"),
+                current_owner=Address("To"),
+                mint_block=HexInt(4),
+                mint_date=HexInt(2),
+                quantity=HexInt(0),
+                attribute_version=HexInt("0x00000000000000000007"),
+                metadata_url=None,
+            )
         )
 
-    async def test_uses_the_correct_conditional_expression_and_attrs(self):
-        data_package = NftTokenTransferDataPackage(
+    async def test_does_not_react_to_data_version_too_old_when_saving(self):
+        data_package = TokenTransferDataPackage(
             TokenTransfer(
                 blockchain=BlockChain.ETHEREUM_MAINNET,
                 data_version=999,
                 collection_id=Address("Collection Address"),
+                collection_type=EthereumCollectionType.ERC721,
                 token_id=HexInt(1),
                 timestamp=HexInt(2),
                 from_=Address("From"),
@@ -208,94 +174,45 @@ class NftTokenMintPersistenceConsumerTestCase(IsolatedAsyncioTestCase):
             ),
         )
 
+        self.__data_service.write_token.side_effect = DataVersionTooOldException
         await self.__consumer.receive(data_package)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item=ANY,
-            ConditionExpression=Attr("data_version").not_exists() | Attr("data_version").lte(999),
-        )
-
-    async def test_does_not_react_to_condition_check_failure_when_saving(self):
-        data_package = NftTokenTransferDataPackage(
-            TokenTransfer(
-                blockchain=BlockChain.ETHEREUM_MAINNET,
-                data_version=999,
-                collection_id=Address("Collection Address"),
-                token_id=HexInt(1),
-                timestamp=HexInt(2),
-                from_=Address("From"),
-                to_=Address("To"),
-                quantity=HexInt(3),
-                block_id=HexInt(4),
-                transaction_hash=HexBytes("0xaabbccdd"),
-                transaction_index=HexInt(5),
-                log_index=HexInt(6),
-                transaction_type=TokenTransactionType.MINT,
-                attribute_version=HexInt(7),
-            ),
-        )
-
-        self.__table_resource.put_item.side_effect = (
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException
-        )
-        await self.__consumer.receive(data_package)
-        self.__table_resource.put_item.assert_awaited_once()
+        self.__data_service.write_token.assert_awaited_once()
 
 
 class NftTokenTransferPersistenceConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__table_resource = AsyncMock()
-        self.__version_oracle = MagicMock(LogVersionOracle)
-        self.__version_oracle.version.return_value = HexInt("0x0006429ed72aff20b9947825a")
-        self.__consumer = NftTokenTransferPersistenceConsumer(
-            self.__table_resource, self.__version_oracle
-        )
+        self.__data_service = AsyncMock()
+        self.__consumer = NftTokenTransferPersistenceConsumer(self.__data_service)
 
     async def test_stores_correct_data(self):
-        data_package = NftTokenTransferDataPackage(
-            token_transfer=TokenTransfer(
-                blockchain=BlockChain.ETHEREUM_MAINNET,
-                collection_id=Address("Collection ID"),
-                token_id=HexInt("0x10"),
-                timestamp=HexInt("0x12345"),
-                transaction_type=TokenTransactionType.TRANSFER,
-                from_=Address("From"),
-                to_=Address("To"),
-                quantity=HexInt("0x1"),
-                data_version=11,
-                block_id=HexInt("0x80"),
-                transaction_hash=HexBytes("0x9999"),
-                transaction_index=HexInt("0x9"),
-                log_index=HexInt("0x0"),
-                attribute_version=HexInt("0x0"),
-            )
+        token_transfer = TokenTransfer(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("Collection ID"),
+            collection_type=EthereumCollectionType.ERC721,
+            token_id=HexInt("0x10"),
+            timestamp=HexInt("0x12345"),
+            transaction_type=TokenTransactionType.TRANSFER,
+            from_=Address("From"),
+            to_=Address("To"),
+            quantity=HexInt("0x1"),
+            data_version=11,
+            block_id=HexInt("0x80"),
+            transaction_hash=HexBytes("0x9999"),
+            transaction_index=HexInt("0x9"),
+            log_index=HexInt("0x0"),
+            attribute_version=HexInt("0x99"),
         )
+        data_package = TokenTransferDataPackage(token_transfer=token_transfer)
 
         await self.__consumer.receive(data_package)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
-                "blockchain_collection_id": f"{BlockChain.ETHEREUM_MAINNET.value}::Collection ID",
-                "transaction_log_index_hash": "0x0006429ed72aff20b9947825a",
-                "collection_id": "Collection ID",
-                "token_id": "0x10",
-                "timestamp": 74565,
-                "block_id": "0x80",
-                "transaction_type": TokenTransactionType.TRANSFER.value,
-                "from_account": "From",
-                "to_account": "To",
-                "quantity": "0x1",
-                "transaction_hash": "0x9999",
-                "transaction_index": "0x9",
-                "log_index": "0x0",
-                "data_version": 11,
-            },
-            ConditionExpression=ANY,
-        )
+        self.__data_service.write_token_transfer.assert_awaited_once_with(token_transfer)
 
-    async def test_uses_the_correct_conditional_expression_and_attrs(self):
-        data_package = NftTokenTransferDataPackage(
+    async def test_does_not_react_to_data_version_too_old_when_saving(self):
+        data_package = TokenTransferDataPackage(
             TokenTransfer(
                 blockchain=BlockChain.ETHEREUM_MAINNET,
                 data_version=999,
+                collection_type=EthereumCollectionType.ERC721,
                 collection_id=Address("Collection Address"),
                 token_id=HexInt(1),
                 timestamp=HexInt(2),
@@ -311,37 +228,9 @@ class NftTokenTransferPersistenceConsumerTestCase(IsolatedAsyncioTestCase):
             ),
         )
 
+        self.__data_service.write_token_transfer.side_effect = DataVersionTooOldException
         await self.__consumer.receive(data_package)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item=ANY,
-            ConditionExpression=Attr("data_version").not_exists() | Attr("data_version").lte(999),
-        )
-
-    async def test_does_not_react_to_condition_check_failure_when_saving(self):
-        data_package = NftTokenTransferDataPackage(
-            TokenTransfer(
-                blockchain=BlockChain.ETHEREUM_MAINNET,
-                data_version=999,
-                collection_id=Address("Collection Address"),
-                token_id=HexInt(1),
-                timestamp=HexInt(2),
-                from_=Address("From"),
-                to_=Address("To"),
-                quantity=HexInt(3),
-                block_id=HexInt(4),
-                transaction_hash=HexBytes("0xaabbccdd"),
-                transaction_index=HexInt(5),
-                log_index=HexInt(6),
-                transaction_type=TokenTransactionType.MINT,
-                attribute_version=HexInt(7),
-            ),
-        )
-
-        self.__table_resource.put_item.side_effect = (
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException
-        )
-        await self.__consumer.receive(data_package)
-        self.__table_resource.put_item.assert_awaited_once()
+        self.__data_service.write_token_transfer.assert_awaited_once()
 
 
 # noinspection PyDataclass,PyPropertyAccess
@@ -360,13 +249,13 @@ class NftTokenQuantityUpdatingConsumerTestCase(IsolatedAsyncioTestCase):
         transfer.quantity.int_value = 0
         transfer.data_version = 0
 
-        self.__data_package = NftTokenTransferDataPackage(transfer)
+        self.__data_package = TokenTransferDataPackage(transfer)
 
     async def test_transfer_does_nothing(self):
         transfer = Mock(TokenTransfer)
         transfer.transaction_type = TokenTransactionType.TRANSFER
 
-        data_package = NftTokenTransferDataPackage(transfer)
+        data_package = TokenTransferDataPackage(transfer)
         await self.__consumer.receive(data_package)
 
         self.__table_resource.update_item.assert_not_called()
@@ -429,7 +318,7 @@ class NftMetadataUriPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         transfer.quantity.int_value = 0
         transfer.data_version = 0
 
-        self.__data_package = Mock(NftTokenMetadataUriUpdatedDataPackage)
+        self.__data_package = Mock(TokenMetadataUriUpdatedDataPackage)
         self.__data_package.blockchain = Mock(BlockChain)
         self.__data_package.blockchain.value = "blockchain"
         self.__data_package.collection_id = Address("Collection ID")
@@ -444,7 +333,7 @@ class NftMetadataUriPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         transfer = Mock(TokenTransfer)
         transfer.transaction_type = TokenTransactionType.TRANSFER
 
-        data_package = NftTokenTransferDataPackage(transfer)
+        data_package = TokenTransferDataPackage(transfer)
         await self.__consumer.receive(data_package)
 
         self.__table_resource.update_item.assert_not_called()
@@ -540,17 +429,17 @@ class NftTokenMetadataPersistingConsumerTestCase(IsolatedAsyncioTestCase):
             self.return_client_response
         )
         self.data_uri_data_client.get.return_value.__aexit__.return_value = None
-        self.__s3_bucket = AsyncMock()
+        self.storage_client_context = AsyncMock(StorageClientContext)
 
         self.__consumer = NftTokenMetadataPersistingConsumer(
             http_client=self.http_data_client,
             ipfs_client=self.ipfs_data_client,
             arweave_client=self.arweave_data_client,
             data_uri_client=self.data_uri_data_client,
-            s3_bucket=self.__s3_bucket,
+            storage_client_context=self.storage_client_context,
         )
 
-        self.__data_package = Mock(NftTokenMetadataUriUpdatedDataPackage)
+        self.__data_package = Mock(TokenMetadataUriUpdatedDataPackage)
         self.__data_package.blockchain = Mock(BlockChain)
         self.__data_package.blockchain.value = "blockchain"
         self.__data_package.collection_id = Address("Collection ID")
@@ -574,10 +463,10 @@ class NftTokenMetadataPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         self.__data_package.metadata_uri = metadata_uri[:]
         self.__client_response = (None, "Expected")
         await self.__consumer.receive(self.__data_package)
-        self.__s3_bucket.upload_fileobj.assert_awaited_once_with(
+        self.storage_client_context.store.assert_awaited_once_with(
+            ANY,
             "Expected",
-            Key=ANY,
-            ExtraArgs=ANY,
+            ANY,
         )
 
     @ddt.data(*URI_TO_MOCK)
@@ -586,12 +475,10 @@ class NftTokenMetadataPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         self.__data_package.metadata_uri = metadata_uri[:]
         self.__client_response = (b"expected content type", None)
         await self.__consumer.receive(self.__data_package)
-        self.__s3_bucket.upload_fileobj.assert_awaited_once_with(
+        self.storage_client_context.store.assert_awaited_once_with(
             ANY,
-            Key=ANY,
-            ExtraArgs=dict(
-                ContentType=b"expected content type",
-            ),
+            ANY,
+            b"expected content type",
         )
 
     @ddt.data(*URI_TO_MOCK)
@@ -604,22 +491,44 @@ class NftTokenMetadataPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         self.__data_package.metadata_uri_version.hex_value = "0x3"
         expected = "blockchain/0x1/0x2/0x3"
         await self.__consumer.receive(self.__data_package)
-        self.__s3_bucket.upload_fileobj.assert_awaited_once_with(
+        self.storage_client_context.store.assert_awaited_once_with(
+            expected,
             ANY,
-            Key=expected,
-            ExtraArgs=ANY,
+            ANY,
         )
-
-    async def test_raises_when_protocol_not_supported(self):
-        self.__data_package.metadata_uri = "Not Supported"
-        with self.assertRaises(UnsupportedProtocolError):
-            await self.__consumer.receive(self.__data_package)
 
     @ddt.data("https://ipfs.io/ipfs/hash", "https://ipfs.infura.io/ipfs/hash")
     async def test_uses_ipfs_for_http_versions_of_ipfs(self, uri):
         self.__data_package.metadata_uri = uri
         await self.__consumer.receive(self.__data_package)
         self.ipfs_data_client.get.assert_called_once_with("ipfs://hash")
+
+    async def test_does_not_error_but_abandons_for_unsupported_protocol(self):
+        self.__data_package.metadata_uri = "Invalid URI"
+        await self.__consumer.receive(self.__data_package)
+        self.ipfs_data_client.assert_not_called()
+        self.arweave_data_client.assert_not_called()
+        self.http_data_client.assert_not_called()
+        self.data_uri_data_client.assert_not_called()
+        self.storage_client_context.store.assert_not_called()
+
+    async def test_does_not_error_but_abandons_for_invalid_request(self):
+        self.__data_package.metadata_uri = "https://x.y.z"
+        self.http_data_client.get.side_effect = InvalidRequestProtocolError()
+        await self.__consumer.receive(self.__data_package)
+        self.http_data_client.get.assert_called_once()
+        self.storage_client_context.store.assert_not_called()
+
+    async def test_retries_after_retry_after_for_too_many_requests(self):
+        self.__data_package.metadata_uri = "https://x.y.z"
+        self.http_data_client.get.side_effect = (TooManyRequestsProtocolError(retry_after=0),)
+        with self.assertRaises(ConsumerError):
+            await self.__consumer.receive(self.__data_package)
+            self.assertEqual(
+                6,
+                self.http_data_client.get.call_count,
+                'Expected 6 calls to "get" because of 5 expected retries',
+            )
 
 
 @ddt.ddt
@@ -639,7 +548,7 @@ class CurrentOwnerPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         self.__consumer = CurrentOwnerPersistingConsumer(
             self.__table_resource,
         )
-        self.__data_package = MagicMock(NftTokenTransferDataPackage)
+        self.__data_package = MagicMock(TokenTransferDataPackage)
         self.__data_package.token_transfer = MagicMock(TokenTransfer)
         self.__data_package.token_transfer.blockchain = Mock(BlockChain)  #
         self.__data_package.token_transfer.blockchain.value = "blockchain"

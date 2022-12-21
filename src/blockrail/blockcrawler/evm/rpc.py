@@ -1,18 +1,21 @@
-from typing import Optional, Union, List, Any
+import math
+from typing import Optional, Union, List, Any, AsyncIterable
 
 from eth_abi import decode, encode
 from eth_utils import decode_hex
 from hexbytes import HexBytes
 
 from .types import (
-    EVMBlock,
+    EvmBlock,
     HexInt,
-    EVMLog,
-    EVMTransactionReceipt,
+    EvmLog,
+    EvmTransactionReceipt,
     Address,
+    EvmTransaction,
 )
 from .util import Function
-from ..core.rpc import RPCClient, RPCError
+from ..core.rpc import RpcClient, RpcServerError, RpcDecodeError
+from ..core.stats import StatsService
 
 
 class EthCall:
@@ -77,15 +80,45 @@ class CallError(Exception):
     pass
 
 
-class EVMRPCClient(RPCClient):
+class EvmRpcClient(RpcClient):
+    STAT_GET_BLOCK_NUMBER = "rpc.eth.block_number"
+    STAT_GET_BLOCK = "rpc.eth.get_block_by_number"
+    STAT_GET_TRANSACTION_RECEIPT = "rpc.eth.get_transaction_receipt"
+    STAT_CALL = "rpc.eth.call"
+    STAT_GET_LOGS = "rpc.eth.get_logs"
+
     async def get_block_number(self) -> HexInt:
         result = await self.send("eth_blockNumber")
         block_number = HexInt(result)
         return block_number
 
-    async def get_block(self, block_num: HexInt) -> EVMBlock:
-        result = await self.send("eth_getBlockByNumber", block_num.hex_value, False)
-        block = EVMBlock(
+    async def get_block(self, block_num: HexInt, full_transactions: bool = False) -> EvmBlock:
+        result = await self.send("eth_getBlockByNumber", block_num.hex_value, full_transactions)
+        if full_transactions:
+            transactions = [
+                EvmTransaction(
+                    block_hash=HexBytes(tx["blockHash"]),
+                    block_number=HexInt(tx["blockNumber"]),
+                    from_=Address(tx["from"]),
+                    gas=HexInt(tx["gas"]),
+                    gas_price=HexInt(tx["gasPrice"]),
+                    hash=HexBytes(tx["hash"]),
+                    input=HexBytes(tx["input"]),
+                    nonce=HexInt(tx["nonce"]),
+                    transaction_index=HexInt(tx["transactionIndex"]),
+                    v=HexInt(tx["v"]),
+                    r=HexBytes(tx["r"]),
+                    s=HexBytes(tx["s"]),
+                    to_=Address(tx["to"]),
+                    value=HexInt(tx["value"]),
+                )
+                for tx in result["transactions"]
+            ]
+            transaction_hashes = [HexBytes(tx["hash"]) for tx in result["transactions"]]
+        else:
+            transactions = None
+            transaction_hashes = [HexBytes(tx) for tx in result["transactions"]]
+        block = EvmBlock(
             number=HexInt(result["number"]),
             hash=HexBytes(result["hash"]),
             parent_hash=HexBytes(result["parentHash"]),
@@ -104,17 +137,18 @@ class EVMRPCClient(RPCClient):
             gas_limit=HexInt(result["gasLimit"]),
             gas_used=HexInt(result["gasUsed"]),
             timestamp=HexInt(result["timestamp"]),
-            transactions=[HexBytes(tx) for tx in result["transactions"]],
+            transaction_hashes=transaction_hashes,
+            transactions=transactions,
             uncles=[HexBytes(uncle) for uncle in result["uncles"]],
         )
         return block
 
-    async def get_transaction_receipt(self, tx_hash: HexBytes) -> EVMTransactionReceipt:
+    async def get_transaction_receipt(self, tx_hash: HexBytes) -> EvmTransactionReceipt:
         result = await self.send("eth_getTransactionReceipt", tx_hash.hex())
-        logs: List[EVMLog] = list()
+        logs: List[EvmLog] = list()
         for log in result["logs"]:
             logs.append(
-                EVMLog(
+                EvmLog(
                     removed=log["removed"],
                     log_index=HexInt(log["logIndex"]),
                     transaction_index=HexInt(log["transactionIndex"]),
@@ -126,7 +160,7 @@ class EVMRPCClient(RPCClient):
                     topics=[HexBytes(topic) for topic in log["topics"]],
                 )
             )
-        receipt = EVMTransactionReceipt(
+        receipt = EvmTransactionReceipt(
             transaction_hash=HexBytes(result["transactionHash"]),
             transaction_index=HexInt(result["transactionIndex"]),
             block_hash=HexBytes(result["blockHash"]),
@@ -171,8 +205,88 @@ class EVMRPCClient(RPCClient):
                         encoded_response_bytes,
                     )
             except Exception as e:
-                raise RPCError(
+                raise RpcDecodeError(
                     "Response Decode Error",
                     e,
                 )
         return response
+
+    async def get_logs(
+        self, topics: list, from_block: HexInt, to_block: HexInt, address: Address
+    ) -> AsyncIterable[EvmLog]:
+        current_block = from_block
+        while current_block <= to_block:
+            logs = None
+            block_range_size = 100_000
+            while logs is None:
+                end_block = current_block + block_range_size - 1
+                if end_block > to_block:
+                    end_block = to_block
+                    block_range_size = 1 + end_block - current_block
+                try:
+                    logs = await self.send(
+                        "eth_getLogs",
+                        dict(
+                            topics=topics,
+                            fromBlock=current_block.hex_value,
+                            toBlock=end_block.hex_value,
+                            address=str(address),
+                        ),
+                    )
+                    for log in logs:
+                        yield EvmLog(
+                            removed=log["removed"],
+                            log_index=HexInt(log["logIndex"]),
+                            transaction_index=HexInt(log["transactionIndex"]),
+                            transaction_hash=HexBytes(log["transactionHash"]),
+                            block_hash=HexBytes(log["blockHash"]),
+                            block_number=HexInt(log["blockNumber"]),
+                            address=Address(log["address"]),
+                            data=HexBytes(log["data"]),
+                            topics=[HexBytes(topic) for topic in log["topics"]],
+                        )
+                    current_block = end_block + 1
+                except RpcServerError as e:
+                    if e.error_code == -32005:
+                        old_block_range_size = block_range_size
+                        block_range_size = math.floor(block_range_size / 10)
+                        if old_block_range_size <= block_range_size:
+                            raise
+                    else:
+                        raise
+
+
+class ConnectionPoolingEvmRpcClient(EvmRpcClient):
+
+    # noinspection PyMissingConstructor
+    def __init__(
+        self,
+        provider_url: str,
+        stats_service: StatsService,
+        requests_per_second: Optional[int] = None,
+        connection_pool_size=10,
+    ) -> None:
+        self.__pool: List[EvmRpcClient] = list()
+        for _ in range(connection_pool_size):
+            self.__pool.append(EvmRpcClient(provider_url, stats_service, requests_per_second))
+        self.__pool_length = len(self.__pool)
+        self.__pool_index = self.__pool_length
+
+    async def __aenter__(self):
+        for client in self.__pool:
+            await client.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        for client in self.__pool:
+            await client.__aexit__(exc_type, exc_val, exc_tb)
+
+    async def send(self, method, *params) -> Any:
+        self.__pool_index += 1
+        if self.__pool_index >= self.__pool_length:
+            self.__pool_index = 0
+        return await self.__pool[self.__pool_index].send(method, *params)
+
+    @property
+    def in_flight(self):
+        return sum([member.in_flight for member in self.__pool])

@@ -1,10 +1,11 @@
 import asyncio
 import base64
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import patch, AsyncMock, MagicMock, Mock
+from unittest.mock import patch, AsyncMock, MagicMock, Mock, ANY
 
 import ddt
-from aiohttp import ClientError, StreamReader
+from aiohttp import ClientError, StreamReader, ClientResponseError
+from multidict import CIMultiDict
 
 from blockrail.blockcrawler.core.data_clients import (
     HttpDataClient,
@@ -15,8 +16,11 @@ from blockrail.blockcrawler.core.data_clients import (
     DataUriDataClient,
     BytesDataReader,
     StreamReaderDataReader,
+    ResourceNotFoundProtocolError,
+    TooManyRequestsProtocolError,
+    InvalidRequestProtocolError,
 )
-
+from blockrail.blockcrawler.core.stats import StatsService
 from ... import async_context_manager_mock
 
 
@@ -69,6 +73,9 @@ class DataClientBaseTestCase(IsolatedAsyncioTestCase):
         self._aiohttp_patch = patcher.start()
         self.addCleanup(patcher.stop)
         self._aiohttp_patch.ClientTimeout = MagicMock()
+        self._aiohttp_patch.BasicAuth = MagicMock()
+        self._aiohttp_patch.ClientError = ClientError
+        self._aiohttp_patch.ClientResponseError = ClientResponseError
         self._aiohttp_patch.ClientSession = async_context_manager_mock()
         self._aiohttp_session = (
             self._aiohttp_patch.ClientSession.return_value.__aenter__.return_value
@@ -79,22 +86,42 @@ class DataClientBaseTestCase(IsolatedAsyncioTestCase):
         )
         self._aiohttp_session_get_response.raise_for_status = MagicMock()
         self._aiohttp_session_get_response.content = Mock(StreamReader)
+        self._stats_service = MagicMock(StatsService)
 
 
+@ddt.ddt()
 class TestHttpDataClient(DataClientBaseTestCase):
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
-        self.__client = HttpDataClient(60)
+        self.__client = HttpDataClient(60, self._stats_service)
 
     async def test_provides_proper_timeout_to_session_timeout(self):
-        client = HttpDataClient(1.23)
+        client = HttpDataClient(1.23, self._stats_service)
         async with client.get("uri"):
             self._aiohttp_patch.ClientTimeout.assert_called_with(total=1.23)
 
     async def test_provides_session_to_session(self):
         async with self.__client.get("uri"):
             expected = self._aiohttp_patch.ClientTimeout.return_value
-            self._aiohttp_patch.ClientSession.assert_called_with(timeout=expected)
+            self._aiohttp_patch.ClientSession.assert_called_once_with(timeout=expected, auth=ANY)
+
+    async def test_provides_proper_creds_to_session_auth_when_username_password_not_none(self):
+        client = HttpDataClient(1.23, self._stats_service, username="username", password="password")
+        async with client.get("uri"):
+            self._aiohttp_patch.BasicAuth.assert_called_once_with("username", "password")
+
+    async def test_provides_basic_auth_to_session_when_username_password_not_none(self):
+        client = HttpDataClient(0, self._stats_service, username="username", password="password")
+        async with client.get("uri"):
+            expected = self._aiohttp_patch.BasicAuth.return_value
+            self._aiohttp_patch.ClientSession.assert_called_once_with(timeout=ANY, auth=expected)
+
+    @ddt.data(("username", None), (None, "password"))
+    @ddt.unpack
+    async def test_no_basic_auth_when_username_or_password_are_none(self, username, password):
+        client = HttpDataClient(0, self._stats_service, username=username, password=password)
+        async with client.get("uri"):
+            self._aiohttp_patch.BasicAuth.assert_not_called()
 
     async def test_get_passes_uri_to_http_client(self):
         expected = "uri"
@@ -131,22 +158,58 @@ class TestHttpDataClient(DataClientBaseTestCase):
             async with self.__client.get("uri"):
                 pass
 
+    @ddt.data(
+        (400, InvalidRequestProtocolError),
+        (404, ResourceNotFoundProtocolError),
+    )
+    @ddt.unpack
+    async def test_raises_exception_for_client_response_error_statuses(self, status, expected):
+        cre = ClientResponseError(None, None, status=status)
+        self._aiohttp_session.get.return_value.__aenter__.side_effect = cre
+        with self.assertRaises(expected):
+            async with self.__client.get("uri"):
+                pass
+
+    async def test_raises_too_many_requests_with_retry_for_client_response_error_429(self):
+        headers = CIMultiDict()
+        headers.add("Retry-After", 123)
+        cre = ClientResponseError(None, None, status=429, headers=headers)
+        self._aiohttp_session.get.return_value.__aenter__.side_effect = cre
+        with self.assertRaises(TooManyRequestsProtocolError) as e:
+            async with self.__client.get("uri"):
+                pass
+
+        self.assertEqual(123, e.exception.retry_after)
+
 
 class TestIpfsDataClient(DataClientBaseTestCase):
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
         self.__gateway_uri = "https://gateway.uri"
-        self.__client = IpfsDataClient(self.__gateway_uri, 60)
+        self.__client = IpfsDataClient(self.__gateway_uri, 60, self._stats_service)
 
     async def test_provides_proper_timeout_to_session_timeout(self):
-        client = IpfsDataClient(self.__gateway_uri, 1.23)
+        client = IpfsDataClient(self.__gateway_uri, 1.23, self._stats_service)
         async with client.get("ipfs://hash/value"):
             self._aiohttp_patch.ClientTimeout.assert_called_with(total=1.23)
 
     async def test_provides_session_to_session(self):
-        async with self.__client.get("ipfs://hash/value"):
-            expected = self._aiohttp_patch.ClientTimeout.return_value
-            self._aiohttp_patch.ClientSession.assert_called_with(timeout=expected)
+        client = IpfsDataClient(
+            self.__gateway_uri, 1.23, self._stats_service, username="username", password="password"
+        )
+        async with client.get("ipfs://hash/value"):
+            expected_timeout = self._aiohttp_patch.ClientTimeout.return_value
+            expected_auth = self._aiohttp_patch.BasicAuth.return_value
+            self._aiohttp_patch.ClientSession.assert_called_with(
+                timeout=expected_timeout, auth=expected_auth
+            )
+
+    async def test_provides_proper_creds_to_session_auth_when_username_password_not_none(self):
+        client = IpfsDataClient(
+            self.__gateway_uri, 1.23, self._stats_service, username="username", password="password"
+        )
+        async with client.get("ipfs://hash/value"):
+            self._aiohttp_patch.BasicAuth.assert_called_once_with("username", "password")
 
     async def test_get_passes_translated_uri_for_valid_ipfs_uri_to_http_session(self):
         uri = "ipfs://hash/value"
@@ -161,7 +224,7 @@ class TestIpfsDataClient(DataClientBaseTestCase):
             self._aiohttp_session.get.assert_called_once_with(expected)
 
     async def test_returns_expected_content_type(self):
-        expected = "conten/type"
+        expected = "content/type"
         self._aiohttp_session_get_response.content_type = expected[:]
         async with self.__client.get("ipfs://hash/1") as (actual, _):
             self.assertEqual(expected, actual)
@@ -200,17 +263,17 @@ class TestArweaveDataClient(DataClientBaseTestCase):
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
         self.__gateway_uri = "https://gateway.uri"
-        self.__client = ArweaveDataClient(self.__gateway_uri, 60)
+        self.__client = ArweaveDataClient(self.__gateway_uri, 60, self._stats_service)
 
     async def test_provides_proper_timeout_to_session_timeout(self):
-        client = ArweaveDataClient(self.__gateway_uri, 1.23)
+        client = ArweaveDataClient(self.__gateway_uri, 1.23, self._stats_service)
         async with client.get("ar://hash/value"):
             self._aiohttp_patch.ClientTimeout.assert_called_with(total=1.23)
 
     async def test_provides_session_to_session(self):
         async with self.__client.get("ar://hash/value"):
             expected = self._aiohttp_patch.ClientTimeout.return_value
-            self._aiohttp_patch.ClientSession.assert_called_with(timeout=expected)
+            self._aiohttp_patch.ClientSession.assert_called_with(timeout=expected, auth=ANY)
 
     async def test_get_passes_translated_uri_to_http_session(self):
         uri = "ar://hash/1"
@@ -224,7 +287,7 @@ class TestArweaveDataClient(DataClientBaseTestCase):
             self.assertEqual(expected, await actual.read())
 
     async def test_returns_expected_content_type(self):
-        expected = "conten/type"
+        expected = "content/type"
         self._aiohttp_session_get_response.content_type = expected[:]
         async with self.__client.get("ar://hash/1") as (actual, _):
             self.assertEqual(expected, actual)
@@ -256,7 +319,8 @@ class TestArweaveDataClient(DataClientBaseTestCase):
 @ddt.ddt
 class TestDataUriDataClient(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__data_client = DataUriDataClient()
+        self._stats_service = Mock(StatsService)
+        self.__data_client = DataUriDataClient(self._stats_service)
 
     @ddt.data(
         "data:missing comma will fail",  # Missing comma to mark data start

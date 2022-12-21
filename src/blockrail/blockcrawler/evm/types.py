@@ -1,7 +1,7 @@
 from binascii import unhexlify
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Dict, Optional, NewType
+from typing import List, Optional, NewType
 
 from hexbytes import HexBytes
 
@@ -10,7 +10,7 @@ from blockrail.blockcrawler.core.entities import HexInt
 Address = NewType("Address", str)
 
 
-class ERC165InterfaceID(Enum):
+class Erc165InterfaceID(Enum):
     ERC721 = "0x80ac58cd"
     ERC721_TOKEN_RECEIVER = "0x150b7a02"
     ERC721_METADATA = "0x5b5e139f"
@@ -37,8 +37,29 @@ class ERC165InterfaceID(Enum):
                 return item
 
 
-@dataclass(unsafe_hash=True, frozen=True)
-class EVMBlock:
+@dataclass(frozen=True)
+class EvmTransaction:
+    block_hash: HexBytes
+    block_number: HexInt
+    from_: Address
+    gas: HexInt
+    gas_price: HexInt
+    hash: HexBytes
+    input: HexBytes
+    nonce: HexInt
+    transaction_index: HexInt
+    v: HexInt
+    r: HexBytes
+    s: HexBytes
+    to_: Optional[Address] = None
+    value: Optional[HexInt] = None
+
+    def __hash__(self) -> int:
+        return (self.__class__.__name__ + self.hash.hex()).__hash__()
+
+
+@dataclass(frozen=True)
+class EvmBlock:
     number: HexInt
     hash: HexBytes
     parent_hash: HexBytes
@@ -57,12 +78,16 @@ class EVMBlock:
     gas_limit: HexInt
     gas_used: HexInt
     timestamp: HexInt
-    transactions: List[HexBytes]
+    transaction_hashes: List[HexBytes]
     uncles: List[HexBytes]
+    transactions: Optional[List[EvmTransaction]]
+
+    def __hash__(self) -> int:
+        return (self.__class__.__name__ + self.hash.hex()).__hash__()
 
 
-@dataclass(unsafe_hash=True, frozen=True)
-class EVMLog:
+@dataclass(frozen=True)
+class EvmLog:
     removed: bool
     log_index: HexInt
     transaction_index: HexInt
@@ -73,9 +98,17 @@ class EVMLog:
     topics: List[HexBytes]
     address: Optional[Address] = None
 
+    def __hash__(self) -> int:
+        return (
+            self.__class__.__name__
+            + self.block_number.hex_value
+            + self.transaction_index.hex_value
+            + self.log_index.hex_value
+        ).__hash__()
 
-@dataclass(unsafe_hash=True, frozen=True)
-class EVMTransactionReceipt:
+
+@dataclass(frozen=True)
+class EvmTransactionReceipt:
     transaction_hash: HexBytes
     transaction_index: HexInt
     block_hash: HexBytes
@@ -83,20 +116,12 @@ class EVMTransactionReceipt:
     from_: Address
     cumulative_gas_used: HexInt
     gas_used: HexInt
-    logs: List[EVMLog]
+    logs: List[EvmLog]
     logs_bloom: HexInt
     status: Optional[HexInt] = None
     to_: Optional[Address] = None
     contract_address: Optional[Address] = None
     root: Optional[HexBytes] = None
 
-
-class Metadata:  # pragma: no cover
-    pass
-
-
-class ERC1155Metadata(Metadata):  # pragma: no cover
-    def __init__(
-        self, name: str, description: str, image: str, properties: Dict[str, object]
-    ) -> None:
-        pass
+    def __hash__(self) -> int:
+        return (self.__class__.__name__ + self.transaction_hash.hex()).__hash__()

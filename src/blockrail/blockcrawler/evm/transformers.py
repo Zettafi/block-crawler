@@ -2,50 +2,82 @@ from blockrail.blockcrawler.core.bus import (
     Transformer,
     DataPackage,
     DataBus,
+    ConsumerError,
 )
 from blockrail.blockcrawler.core.entities import BlockChain
+from blockrail.blockcrawler.core.services import BlockTimeService
 from blockrail.blockcrawler.evm.data_packages import (
-    EVMBlockDataPackage,
-    EVMTransactionHashDataPackage,
+    EvmBlockDataPackage,
+    EvmTransactionHashDataPackage,
     EvmTransactionReceiptDataPackage,
     EvmLogDataPackage,
+    EvmBlockIDDataPackage,
+    EvmTransactionDataPackage,
 )
-from blockrail.blockcrawler.evm.producers import EVMBlockIDDataPackage
-from blockrail.blockcrawler.evm.rpc import EVMRPCClient
+from blockrail.blockcrawler.evm.rpc import EvmRpcClient
+from blockrail.blockcrawler.evm.util import Erc165Functions
 
 
 class BlockIdToEvmBlockTransformer(Transformer):
-    def __init__(self, data_bus: DataBus, blockchain: BlockChain, rpc_client: EVMRPCClient) -> None:
+    def __init__(self, data_bus: DataBus, blockchain: BlockChain, rpc_client: EvmRpcClient) -> None:
         super().__init__(data_bus)
         self.__blockchain = blockchain
         self.__rpc_client = rpc_client
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, EVMBlockIDDataPackage):
+        if not isinstance(data_package, EvmBlockIDDataPackage):
             return
         block = await self.__rpc_client.get_block(data_package.block_id)
-        data_package = EVMBlockDataPackage(self.__blockchain, block)
+        data_package = EvmBlockDataPackage(self.__blockchain, block)
         await self._get_data_bus().send(data_package)
 
 
 class EvmBlockToEvmTransactionHashTransformer(Transformer):
     async def receive(self, data_package: DataPackage):
-        if isinstance(data_package, EVMBlockDataPackage):
-            for transaction in data_package.block.transactions:
-                hash_package = EVMTransactionHashDataPackage(
+        if isinstance(data_package, EvmBlockDataPackage):
+            for transaction in data_package.block.transaction_hashes:
+                hash_package = EvmTransactionHashDataPackage(
                     data_package.blockchain, transaction, data_package.block
                 )
                 await self._get_data_bus().send(hash_package)
 
 
-class EvmTransactionHashToEvmTransactionReceipTransformer(Transformer):
-    def __init__(self, data_bus: DataBus, blockchain: BlockChain, rpc_client: EVMRPCClient) -> None:
+class EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(Transformer):
+    def __init__(
+        self, data_bus: DataBus, block_time_service: BlockTimeService, rpc_client: EvmRpcClient
+    ) -> None:
+        super().__init__(data_bus)
+        self.__block_time_service = block_time_service
+        self.__rpc_client = rpc_client
+
+    async def receive(self, data_package: DataPackage):
+        if not isinstance(data_package, EvmBlockIDDataPackage):
+            return
+
+        block = await self.__rpc_client.get_block(data_package.block_id, True)
+        await self.__block_time_service.set_block_timestamp(data_package.block_id, block.timestamp)
+        await self._get_data_bus().send(EvmBlockDataPackage(data_package.blockchain, block))
+        for transaction_hash in block.transaction_hashes:
+            await self._get_data_bus().send(
+                EvmTransactionHashDataPackage(data_package.blockchain, transaction_hash, block)
+            )
+
+        if block.transactions is None:
+            raise ConsumerError("Block returned did not have full transactions!")
+        for transaction in block.transactions:
+            await self._get_data_bus().send(
+                EvmTransactionDataPackage(data_package.blockchain, transaction, block)
+            )
+
+
+class EvmTransactionHashToEvmTransactionReceiptTransformer(Transformer):
+    def __init__(self, data_bus: DataBus, blockchain: BlockChain, rpc_client: EvmRpcClient) -> None:
         super().__init__(data_bus)
         self.__blockchain = blockchain
         self.__rpc_client = rpc_client
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, EVMTransactionHashDataPackage):
+        if not isinstance(data_package, EvmTransactionHashDataPackage):
             return
 
         transaction_receipt = await self.__rpc_client.get_transaction_receipt(data_package.hash)
@@ -55,7 +87,7 @@ class EvmTransactionHashToEvmTransactionReceipTransformer(Transformer):
         await self._get_data_bus().send(receipt_data_package)
 
 
-class EvmTransactionToLogTransformer(Transformer):
+class EvmTransactionReceiptToLogTransformer(Transformer):
     async def receive(self, data_package: DataPackage):
         if not isinstance(data_package, EvmTransactionReceiptDataPackage):
             return
@@ -68,3 +100,30 @@ class EvmTransactionToLogTransformer(Transformer):
                 data_package.block,
             )
             await self._get_data_bus().send(log_data_package)
+
+
+class EvmTransactionToContractEvmTransactionReceiptTransformer(Transformer):
+    def __init__(self, data_bus: DataBus, rpc_client: EvmRpcClient) -> None:
+        super().__init__(data_bus)
+        self.__rpc_client = rpc_client
+
+    async def receive(self, data_package: DataPackage):
+        if (
+            not isinstance(data_package, EvmTransactionDataPackage)
+            or data_package.transaction.to_ is not None
+            # If there is a "to" address, it's not contrat creation
+            or Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash
+            not in data_package.transaction.input
+            # If it's ERC-721 or ERC-1165, it will have the ERC-165 function signature hash in it
+        ):
+            return
+
+        receipt = await self.__rpc_client.get_transaction_receipt(data_package.transaction.hash)
+        if receipt.contract_address is not None:
+            await self._get_data_bus().send(
+                EvmTransactionReceiptDataPackage(
+                    blockchain=data_package.blockchain,
+                    transaction_receipt=receipt,
+                    block=data_package.block,
+                )
+            )

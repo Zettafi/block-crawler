@@ -3,31 +3,38 @@ name = "block-rail-block-crawler"
 version = "0.1.0"
 description = "Crawls blocks from a blockchain node, parses the blocks for data, and populates the NFT database"
 dependencies = [
-    "ujson~=5.4",
     "aioboto3~=9.6",
+    "botocore~=1.24",
     "aiohttp~=3.8",
     "aiodns~=3.0",
     "requests~=2.28",
     "click~=8.1",
+    "colorama~=0.4",
     "pycryptodome~=3.15",
     "eth-abi~=3.0",
     "eth_bloom~=1.0",
     "hexbytes~=0.3",
     "backoff~=2.2",
+    "psutil~=5.9",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "types-ujson~=5.4",
+    # static analysis
     "black~=22.6",
-    "python-dotenv~=0.20",
-    "ddt~=1.5",
-    "coverage[toml]~=6.4",
-    "unittest-xml-reporting~=3.2",
     "flake8~=4.0",
     "flake8-gl-codeclimate~=0.1",
     "mypy~=0.971",
     "types-aioboto3~=9.6",
+    "types-psutil~=5.9",
+
+    # unit testing and coverage
+    "ddt~=1.5",
+    "coverage[toml]~=6.4",
+    "unittest-xml-reporting~=3.2",
+
+    # configuration
+    "python-dotenv~=0.20",
 ]
 
 [build-system]
