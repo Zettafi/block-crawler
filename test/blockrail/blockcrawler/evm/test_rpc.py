@@ -394,7 +394,11 @@ class GetTransactionReceiptTestCase(BaseRPCClientTestCase):
         self.assertEqual(expected, actual)
 
 
-class CallsTestCase(BaseRPCClientTestCase):
+class CallTestCase(BaseRPCClientTestCase):
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        self._rpc_response = dict(result="0x")
+
     async def test_eth_call_is_sent_as_method(self):
         call = EthCall("from", "to", ERC721MetadataFunctions.NAME)
         await self._rpc_client.call(call)
@@ -434,6 +438,12 @@ class CallsTestCase(BaseRPCClientTestCase):
         call = EthCall("from", "to", ERC721MetadataFunctions.NAME)
         actual = await self._rpc_client.call(call)
         self.assertEqual(expected, actual)
+
+    async def test_decode_null_returns_null(self):
+        self._rpc_response = dict(result="0x")
+        call = EthCall("from", "to", ERC721MetadataFunctions.NAME)
+        actual = await self._rpc_client.call(call)
+        self.assertEqual((None,), actual)
 
 
 @ddt.ddt

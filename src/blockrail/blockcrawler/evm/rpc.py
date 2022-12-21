@@ -163,12 +163,15 @@ class EVMRPCClient(RPCClient):
         else:
             try:
                 encoded_response_bytes = decode_hex(encoded_response)
-                response = decode(
-                    request.function.return_types,
-                    encoded_response_bytes,
-                )
+                if encoded_response_bytes == b"":
+                    response = (None,)
+                else:
+                    response = decode(
+                        request.function.return_types,
+                        encoded_response_bytes,
+                    )
             except Exception as e:
-                response = RPCError(
+                raise RPCError(
                     "Response Decode Error",
                     e,
                 )

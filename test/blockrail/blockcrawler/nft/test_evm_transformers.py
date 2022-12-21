@@ -5,7 +5,7 @@ import ddt
 from eth_abi import encode
 from hexbytes import HexBytes
 
-from blockrail.blockcrawler.core.bus import DataBus, DataPackage
+from blockrail.blockcrawler.core.bus import DataBus, DataPackage, ConsumerError
 from blockrail.blockcrawler.core.entities import HexInt, BlockChain
 from blockrail.blockcrawler.core.rpc import RPCServerError
 from blockrail.blockcrawler.evm.data_packages import EvmLogDataPackage
@@ -60,6 +60,8 @@ class EvmTransactionReceiptToNftCollectionTransformerTestCase(IsolatedAsyncioTes
                     result = result[request.parameters[0]]
                 else:
                     raise RPCServerError(None, None, None, None)
+            if isinstance(result, Exception):
+                raise result
         else:
             raise RPCServerError(None, None, None, None)
 
@@ -496,6 +498,13 @@ class EvmTransactionReceiptToNftCollectionTransformerTestCase(IsolatedAsyncioTes
                 )
             )
         )
+
+    async def test_raises_consumer_error_for_rpc_client_error(self):
+        self.__call_function_results[ERC165Functions.SUPPORTS_INTERFACE.function_signature_hash] = {
+            ERC165InterfaceID.ERC721.bytes: Exception("x")
+        }
+        with self.assertRaises(ConsumerError):
+            await self.__transformer.receive(self.__default_data_package)
 
 
 @ddt.ddt

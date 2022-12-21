@@ -10,6 +10,7 @@ from blockrail.blockcrawler.core.bus import (
     Transformer,
     DataPackage,
     DataBus,
+    ConsumerError,
 )
 from blockrail.blockcrawler.core.entities import BlockChain, HexInt
 from blockrail.blockcrawler.core.rpc import RPCServerError
@@ -179,7 +180,10 @@ class EvmTransactionReceiptToNftCollectionTransformer(Transformer):
             if isinstance(result, RPCServerError):
                 sanitized_result = None
             elif isinstance(result, Exception):
-                raise result
+                raise ConsumerError(
+                    f"Failed to process contract data for for contract "
+                    f"{contract_address} -- Cause {result}"
+                )
             else:
                 (sanitized_result,) = result
             sanitized_results.append(sanitized_result)
