@@ -25,7 +25,7 @@ from blockrail.blockcrawler.nft.entities import (
 class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__dynamodb = AsyncMock()
-        self.__dynamodb.exceptions.ConditionalCheckFailedException = Exception
+        self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException = Exception
         self.__table_resource = self.__dynamodb.Table.return_value
         self.__table_resource.batch_writer = Mock(return_value=AsyncMock())
         self.__batch_writer = (
@@ -116,7 +116,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
         self,
     ):
         self.__table_resource.put_item.side_effect = (
-            self.__dynamodb.exceptions.ConditionalCheckFailedException
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
         )
         collection = Collection(
             blockchain=BlockChain.ETHEREUM_MAINNET,
@@ -261,7 +261,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
         self.__table_resource.put_item.side_effect = (
-            self.__dynamodb.exceptions.ConditionalCheckFailedException
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
         )
         with self.assertRaises(DataVersionTooOldException):
             await self.__data_service.write_token(token)
@@ -427,7 +427,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
         self.__table_resource.put_item.side_effect = (
-            self.__dynamodb.exceptions.ConditionalCheckFailedException
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
         )
         with self.assertRaises(DataVersionTooOldException):
             await self.__data_service.write_token_transfer(token_transfer)
@@ -560,7 +560,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
         self.__table_resource.put_item.side_effect = (
-            self.__dynamodb.exceptions.ConditionalCheckFailedException
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
         )
         with self.assertRaises(DataVersionTooOldException):
             await self.__data_service.write_token_owner(token_owner)

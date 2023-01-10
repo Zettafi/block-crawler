@@ -64,7 +64,7 @@ class DynamoDbDataService(DataService):
                     | Attr("data_version").lte(collection.data_version),
                 )
                 self.__stats_service.increment(STAT_COLLECTION_WRITE, 1)
-            except self.__dynamodb.exceptions.ConditionalCheckFailedException:
+            except self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
                 self.__stats_service.increment(STAT_COLLECTION_WRITE_DATA_TOO_OLD, 1)
                 raise DataVersionTooOldException()
 
@@ -78,7 +78,7 @@ class DynamoDbDataService(DataService):
                     | Attr("data_version").lte(token.data_version),
                 )
                 self.__stats_service.increment(STAT_TOKEN_WRITE, 1)
-            except self.__dynamodb.exceptions.ConditionalCheckFailedException:
+            except self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
                 self.__stats_service.increment(STAT_TOKEN_WRITE_DATA_TOO_OLD, 1)
                 raise DataVersionTooOldException()
 
@@ -102,7 +102,7 @@ class DynamoDbDataService(DataService):
                     | Attr("data_version").lte(token_transfer.data_version),
                 )
                 self.__stats_service.increment(STAT_TOKEN_TRANSFER_WRITE, 1)
-            except self.__dynamodb.exceptions.ConditionalCheckFailedException:
+            except self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
                 self.__stats_service.increment(STAT_TOKEN_TRANSFER_WRITE_DATA_TOO_OLD, 1)
                 raise DataVersionTooOldException()
 
@@ -124,7 +124,7 @@ class DynamoDbDataService(DataService):
                     | Attr("data_version").lte(token_owner.data_version),
                 )
                 self.__stats_service.increment(STAT_TOKEN_OWNER_WRITE, 1)
-            except self.__dynamodb.exceptions.ConditionalCheckFailedException:
+            except self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
                 self.__stats_service.increment(STAT_TOKEN_OWNER_WRITE_DATA_TOO_OLD, 1)
                 raise DataVersionTooOldException()
 
