@@ -6,7 +6,7 @@ from eth_abi import decode
 
 from blockrail.blockcrawler.core.bus import DataPackage, Transformer, DataBus
 from blockrail.blockcrawler.core.entities import HexInt
-from blockrail.blockcrawler.core.rpc import RpcServerError
+from blockrail.blockcrawler.core.rpc import RpcServerError, RpcDecodeError
 from blockrail.blockcrawler.core.services import BlockTimeService
 from blockrail.blockcrawler.evm.rpc import EvmRpcClient, EthCall
 from blockrail.blockcrawler.evm.types import Address, EvmLog
@@ -247,9 +247,13 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
 
         results = await asyncio.gather(*calls, return_exceptions=True)
         for (token_id, token), result in zip(tokens.items(), results):
-            if isinstance(result, RpcServerError) and result.error_code in (-32000, 3):
+            if (
+                isinstance(result, RpcServerError)
+                and result.error_code in (-32000, 3)
                 # -32000 is generic catch-all for execution reverted
                 # 3 is query for non-existent token
+                or isinstance(result, RpcDecodeError)
+            ):
                 continue
             elif isinstance(result, Exception):
                 raise result

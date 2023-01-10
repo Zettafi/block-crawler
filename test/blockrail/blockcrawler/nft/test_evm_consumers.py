@@ -7,7 +7,7 @@ from hexbytes import HexBytes
 
 from blockrail.blockcrawler.core.bus import DataBus, DataPackage
 from blockrail.blockcrawler.core.entities import HexInt, BlockChain
-from blockrail.blockcrawler.core.rpc import RpcServerError
+from blockrail.blockcrawler.core.rpc import RpcServerError, RpcDecodeError
 from blockrail.blockcrawler.core.services import BlockTimeService
 from blockrail.blockcrawler.evm.rpc import EvmRpcClient, EthCall
 from blockrail.blockcrawler.evm.types import Address, EvmLog
@@ -277,6 +277,30 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         self.__logs.pop()
         self.__token_transaction_type_oracle.type_from_log.return_value = TokenTransactionType.MINT
         self.__rpc_client.call.side_effect = RpcServerError(None, None, error_code, None)
+        await self.__transformer.receive(self.__data_package)
+        self.__rpc_client.call.assert_awaited_once()
+        self.__data_service.write_token_batch.assert_awaited_once_with(
+            [
+                Token(
+                    blockchain=ANY,
+                    collection_id=ANY,
+                    token_id=ANY,
+                    data_version=ANY,
+                    original_owner=ANY,
+                    current_owner=ANY,
+                    mint_block=ANY,
+                    mint_date=ANY,
+                    quantity=ANY,
+                    attribute_version=ANY,
+                    metadata_url=None,
+                )
+            ]
+        )
+
+    async def test_does_not_error_when_token_uri_response_from_contract_wont_decode(self):
+        self.__logs.pop()
+        self.__token_transaction_type_oracle.type_from_log.return_value = TokenTransactionType.MINT
+        self.__rpc_client.call.side_effect = RpcDecodeError
         await self.__transformer.receive(self.__data_package)
         self.__rpc_client.call.assert_awaited_once()
         self.__data_service.write_token_batch.assert_awaited_once_with(
