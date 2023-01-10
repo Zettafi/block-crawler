@@ -172,19 +172,18 @@ class EvmTransactionReceiptToNftCollectionTransformer(Transformer):
             symbol_result, name_result, total_supply_result, owner_result = await asyncio.gather(
                 symbol_coro, name_coro, total_supply_coro, owner_coro, return_exceptions=True
             )
+            for result in symbol_result, name_result, total_supply_result, owner_result:
+                if isinstance(result, Exception) and not isinstance(
+                    result, (RpcServerError, DecodingError)
+                ):
+                    raise result
         else:
             try:
-                owner_result = await asyncio.gather(owner_coro, return_exceptions=True)
-            except BaseException as e:
-                owner_result = e
-
-            symbol_result, name_result, total_supply_result = (None,), (None,), (None,)
-
-        for result in symbol_result, name_result, total_supply_result, owner_result:
-            if isinstance(result, Exception) and not isinstance(
-                result, (RpcServerError, DecodingError)
-            ):
-                raise result
+                owner_result = await owner_coro
+            except (RpcServerError, DecodingError):
+                owner_result = (None,)
+            finally:
+                symbol_result, name_result, total_supply_result = (None,), (None,), (None,)
 
         return (
             None if isinstance(symbol_result, Exception) else symbol_result[0],

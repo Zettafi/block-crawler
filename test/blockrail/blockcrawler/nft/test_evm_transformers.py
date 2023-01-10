@@ -256,15 +256,143 @@ class EvmTransactionReceiptToNftCollectionTransformerTestCase(IsolatedAsyncioTes
             Erc165InterfaceID.ERC721.bytes: (is_721,),
             Erc165InterfaceID.ERC1155.bytes: (is_1155,),
         }
-        self.__call_function_results[AdditionalFunctions.OWNER.function_signature_hash] = (
-            "symbol",
-        )
+        self.__call_function_results[AdditionalFunctions.OWNER.function_signature_hash] = ("owner",)
         await self.__transformer.receive(self.__default_data_package)
         self.__rpc_client.call.assert_any_await(
             EthCall(
                 None,
                 self.__default_data_package.transaction_receipt.contract_address,
                 AdditionalFunctions.OWNER,
+            )
+        )
+
+    async def test_owner_is_none_when_get_owner_errors_in_1155(self):
+        self.__call_function_results[Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash] = {
+            Erc165InterfaceID.ERC1155.bytes: (True,),
+        }
+        self.__call_function_results[
+            AdditionalFunctions.OWNER.function_signature_hash
+        ] = RpcServerError(None, None, None, None)
+        await self.__transformer.receive(self.__default_data_package)
+        self.__data_bus.send.assert_awaited_once_with(
+            CollectionDataPackage(
+                Collection(
+                    blockchain=ANY,
+                    collection_id=ANY,
+                    creator=ANY,
+                    owner=None,
+                    block_created=ANY,
+                    name=ANY,
+                    symbol=ANY,
+                    specification=ANY,
+                    date_created=ANY,
+                    total_supply=ANY,
+                    data_version=ANY,
+                )
+            )
+        )
+
+    async def test_owner_is_none_when_get_owner_errors_in_721(self):
+        self.__call_function_results[Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash] = {
+            Erc165InterfaceID.ERC721.bytes: (True,),
+        }
+        self.__call_function_results[
+            AdditionalFunctions.OWNER.function_signature_hash
+        ] = RpcServerError(None, None, None, None)
+        await self.__transformer.receive(self.__default_data_package)
+        self.__data_bus.send.assert_awaited_once_with(
+            CollectionDataPackage(
+                Collection(
+                    blockchain=ANY,
+                    collection_id=ANY,
+                    creator=ANY,
+                    owner=None,
+                    block_created=ANY,
+                    name=ANY,
+                    symbol=ANY,
+                    specification=ANY,
+                    date_created=ANY,
+                    total_supply=ANY,
+                    data_version=ANY,
+                )
+            )
+        )
+
+    async def test_symbol_is_none_when_get_symbol_errors_in_721(self):
+        self.__call_function_results[Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash] = {
+            Erc165InterfaceID.ERC721.bytes: (True,),
+        }
+        self.__call_function_results[
+            Erc721MetadataFunctions.SYMBOL.function_signature_hash
+        ] = RpcServerError(None, None, None, None)
+        await self.__transformer.receive(self.__default_data_package)
+        self.__data_bus.send.assert_awaited_once_with(
+            CollectionDataPackage(
+                Collection(
+                    blockchain=ANY,
+                    collection_id=ANY,
+                    creator=ANY,
+                    owner=ANY,
+                    block_created=ANY,
+                    name=ANY,
+                    symbol=None,
+                    specification=ANY,
+                    date_created=ANY,
+                    total_supply=ANY,
+                    data_version=ANY,
+                )
+            )
+        )
+
+    async def test_name_is_none_when_get_name_errors_in_721(self):
+        self.__call_function_results[Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash] = {
+            Erc165InterfaceID.ERC721.bytes: (True,),
+        }
+        self.__call_function_results[
+            Erc721MetadataFunctions.NAME.function_signature_hash
+        ] = RpcServerError(None, None, None, None)
+        await self.__transformer.receive(self.__default_data_package)
+        self.__data_bus.send.assert_awaited_once_with(
+            CollectionDataPackage(
+                Collection(
+                    blockchain=ANY,
+                    collection_id=ANY,
+                    creator=ANY,
+                    owner=ANY,
+                    block_created=ANY,
+                    name=None,
+                    symbol=ANY,
+                    specification=ANY,
+                    date_created=ANY,
+                    total_supply=ANY,
+                    data_version=ANY,
+                )
+            )
+        )
+
+    async def test_total_supply_is_none_when_get_total_supply_errors_in_721(self):
+        self.__call_function_results[Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash] = {
+            Erc165InterfaceID.ERC721.bytes: (True,),
+        }
+        self.__call_function_results[
+            Erc721EnumerableFunctions.TOTAL_SUPPLY.function_signature_hash
+        ] = RpcServerError(None, None, None, None)
+        await self.__transformer.receive(self.__default_data_package)
+        self.__data_bus.send.assert_awaited_once_with(
+            CollectionDataPackage(
+                Collection(
+                    blockchain=ANY,
+                    collection_id=ANY,
+                    creator=ANY,
+                    owner=ANY,
+                    block_created=ANY,
+                    name=ANY,
+                    symbol=ANY,
+                    specification=ANY,
+                    date_created=ANY,
+                    total_supply=None,
+                    data_version=ANY,
+                )
             )
         )
 
