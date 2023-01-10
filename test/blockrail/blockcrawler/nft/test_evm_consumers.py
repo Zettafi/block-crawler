@@ -1,6 +1,7 @@
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, MagicMock, call, ANY
 
+import ddt
 from eth_abi import encode
 from hexbytes import HexBytes
 
@@ -32,6 +33,7 @@ from blockrail.blockcrawler.nft.evm.oracles import TokenTransactionTypeOracle, L
 
 
 # noinspection PyDataclass
+@ddt.ddt
 class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__data_bus = AsyncMock(DataBus)
@@ -265,10 +267,16 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
             )
         )
 
-    async def test_does_not_error_when_getting_token_uri_from_contract_and_not_supported(self):
+    @ddt.data(
+        -32000,  # Infura catch-all
+        3,  # Infura token does not exist
+    )
+    async def test_does_not_error_when_getting_token_uri_from_contract_and_not_supported(
+        self, error_code
+    ):  # noqa: E501
         self.__logs.pop()
         self.__token_transaction_type_oracle.type_from_log.return_value = TokenTransactionType.MINT
-        self.__rpc_client.call.side_effect = RpcServerError(None, None, -32000, None)
+        self.__rpc_client.call.side_effect = RpcServerError(None, None, error_code, None)
         await self.__transformer.receive(self.__data_package)
         self.__rpc_client.call.assert_awaited_once()
         self.__data_service.write_token_batch.assert_awaited_once_with(
