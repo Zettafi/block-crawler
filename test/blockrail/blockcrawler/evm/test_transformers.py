@@ -28,6 +28,7 @@ from blockrail.blockcrawler.evm.types import (
     EvmLog,
     EvmTransaction,
     Address,
+    Erc165InterfaceID,
 )
 from blockrail.blockcrawler.evm.transformers import (
     EvmTransactionToContractEvmTransactionReceiptTransformer,
@@ -277,7 +278,14 @@ class EvmTransactionToContractEvmTransactionTransformerTestCaste(IsolatedAsyncio
         self.__transaction = MagicMock(EvmTransaction)
         self.__transaction.to_ = None
         self.__transaction.hash = HexBytes(b"hash")
-        self.__transaction.input = Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash
+        self.__transaction.input = (
+            HexBytes("0x63")
+            + Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash
+            + HexBytes("0x63")
+            + Erc165InterfaceID.ERC721.bytes
+            + HexBytes("0x63")
+            + Erc165InterfaceID.ERC1155.bytes
+        )
 
     async def test_ignores_other_data_packages(self):
         await self.__transformer.receive(DataPackage())
@@ -291,8 +299,10 @@ class EvmTransactionToContractEvmTransactionTransformerTestCaste(IsolatedAsyncio
         )
         self.__rpc_client.get_transaction_receipt.assert_not_called()
 
-    async def test_does_not_get_transaction_receipt_when_erc165_func_hash_not_in_input(self):
-        self.__transaction.input = HexBytes(b"other")
+    async def test_does_not_get_transaction_receipt_when_push4_erc165_func_hash_not_in_input(self):
+        self.__transaction.input = HexBytes(
+            Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash
+        )
         await self.__transformer.receive(
             EvmTransactionDataPackage(
                 MagicMock(BlockChain), self.__transaction, MagicMock(EvmBlock)

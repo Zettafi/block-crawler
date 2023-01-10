@@ -1,5 +1,5 @@
 [project]
-name = "block-rail-block-crawler"
+name = "block-crawler"
 version = "0.1.0"
 description = "Crawls blocks from a blockchain node, parses the blocks for data, and populates the NFT database"
 dependencies = [

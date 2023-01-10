@@ -15,6 +15,7 @@ from blockrail.blockcrawler.evm.data_packages import (
     EvmTransactionDataPackage,
 )
 from blockrail.blockcrawler.evm.rpc import EvmRpcClient
+from blockrail.blockcrawler.evm.types import Erc165InterfaceID
 from blockrail.blockcrawler.evm.util import Erc165Functions
 
 
@@ -108,13 +109,18 @@ class EvmTransactionToContractEvmTransactionReceiptTransformer(Transformer):
         self.__rpc_client = rpc_client
 
     async def receive(self, data_package: DataPackage):
+
         if (
             not isinstance(data_package, EvmTransactionDataPackage)
             or data_package.transaction.to_ is not None
             # If there is a "to" address, it's not contrat creation
             or Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash
             not in data_package.transaction.input
-            # If it's ERC-721 or ERC-1165, it will have the ERC-165 function signature hash in it
+            # If it's ERC-721 or ERC-1165, it will have the ERC-165 function signature hash stored
+            or not (
+                Erc165InterfaceID.ERC721.bytes in data_package.transaction.input
+                or Erc165InterfaceID.ERC1155.bytes in data_package.transaction.input
+            )
         ):
             return
 

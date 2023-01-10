@@ -13,7 +13,7 @@ from blockrail.blockcrawler.core.stats import StatsService
 
 TOO_MANY_REQUESTS_ERROR_CODES: Dict[int, Pattern] = {
     429: re.compile(r"."),  # Alchemy
-    -32005: re.compile(r".*request rate"),  # Infura fuses their code...sigh!
+    -32005: re.compile(r".*rate"),  # Infura reuses their code...sigh!
 }
 
 
@@ -102,6 +102,7 @@ class RpcClient:
         self.__pending: Dict[str, Tuple[Future, Dict[str, Any], int]] = dict()
         self.__context_manager_running: bool = False
         self.__requests_per_second: Optional[int] = requests_per_second
+        self.__paused_for_too_many_requests: bool = False
         self.__this_second: int = 0
         self.__requests_this_second: int = 0
 
@@ -173,7 +174,9 @@ class RpcClient:
                                     f"Retrying in {backoff_seconds} seconds."
                                 )
                                 self._stats_service.increment(self.STAT_RESPONSE_TOO_MANY_REQUESTS)
+                                self.__paused_for_too_many_requests = True
                                 await asyncio.sleep(backoff_seconds)
+                                self.__paused_for_too_many_requests = False
 
                                 start_time = await self.__send_json(request)
                                 self.__pending[response["id"]] = (future, request, start_time)
@@ -263,12 +266,12 @@ class RpcClient:
 
     async def __wait_for_ready_to_process(self):
         loop = asyncio.get_running_loop()
-        if self.__requests_per_second:
 
+        delayed = False
+        if self.__requests_per_second:
             time = loop.time()
             second = floor(time)
 
-            delayed = False
             while (
                 second == self.__this_second
                 and self.__requests_this_second >= self.__requests_per_second
@@ -282,8 +285,13 @@ class RpcClient:
                 self.__requests_this_second = 0
 
             self.__requests_this_second += 1
-            if delayed:
-                self._stats_service.increment(self.STAT_REQUEST_DELAYED)
+
+        while self.__paused_for_too_many_requests:
+            delayed = True
+            await asyncio.sleep(0)
+
+        if delayed:
+            self._stats_service.increment(self.STAT_REQUEST_DELAYED)
 
     async def send(self, method, *params) -> Any:
         if not self.__context_manager_running or not self.__ws:
@@ -296,7 +304,3 @@ class RpcClient:
         future = asyncio.get_running_loop().create_future()
         self.__pending[request["id"]] = (future, request, start_time)
         return await future
-
-    @property
-    def in_flight(self):
-        return len(self.__pending)

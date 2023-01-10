@@ -1,15 +1,18 @@
 import asyncio
+import csv
 import dataclasses
 import gc
 import logging
 import math
+import os
+import pathlib
 import sys
 import time
 from asyncio import CancelledError
 from datetime import datetime
 from logging import Logger
 from logging import StreamHandler
-from typing import Optional
+from typing import Optional, List, Tuple
 
 import click
 
@@ -430,6 +433,14 @@ def tail(
 )
 @click.option("--table-prefix", envvar="TABLE_PREFIX", help="Prefix for table names", default="")
 @click.option(
+    "--block-time-cache-filename",
+    envvar="BLOCK_TIME_CACHE_FILENAME",
+    default=f"{os.getcwd()}{os.sep}block-time-cache.csv",
+    type=click.Path(file_okay=True, dir_okay=False, allow_dash=False, path_type=pathlib.Path),
+    help="Location and filename for the block time cache. Defaults location is the directory"
+    "from which the command was run.",
+)
+@click.option(
     "--debug/--no-debug",
     envvar="DEBUG",
     default=False,
@@ -450,6 +461,7 @@ def load(
     dynamodb_endpoint_url: str,
     dynamodb_region: str,
     table_prefix: str,
+    block_time_cache_filename: pathlib.Path,
     debug: bool,
 ):
     """
@@ -469,22 +481,31 @@ def load(
         except CancelledError:
             pass
 
+    block_times: List[Tuple[int, int]] = list()
+    try:
+        with open(block_time_cache_filename, "r") as file:
+            for block_id, timestamp in csv.reader(file):
+                block_times.append((int(block_id), int(timestamp)))
+    except FileNotFoundError:
+        pass
+
     log_handler = StreamHandler(sys.stdout)
     logger = Logger("block_crawler")
     logger.addHandler(log_handler)
     logger.setLevel(logging.DEBUG if debug else logging.INFO)
     stats_service = StatsService()
+    block_bound_tracker = BlockBoundTracker()
+    stats_writer = StatsWriter(stats_service, block_bound_tracker)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     start = time.perf_counter()
     fg = "red"
     try:
         gc_task = loop.create_task(garbage_collector())
-        block_bound_tracker = BlockBoundTracker()
-        stats_task = loop.create_task(stats_writer(stats_service, block_bound_tracker, interval=60))
+        stats_task = loop.create_task(stats_writer.write_at_interval(60))
         # tracemalloc_task = loop.create_task(print_tracemalloc(60))
         # tracemalloc_task.add_done_callback(lambda task: print(task.exception()))
-        loop.run_until_complete(
+        block_timestamps = loop.run_until_complete(
             load_evm_contracts_by_block(
                 blockchain=blockchain,
                 starting_block=starting_block,
@@ -494,6 +515,7 @@ def load(
                 block_chunk_size=block_chunk_size,
                 logger=logger,
                 stats_service=stats_service,
+                block_times=block_times,
                 archive_node_uri=evm_archive_node_uri,
                 rpc_requests_per_second=rpc_requests_per_second,
                 rpc_connection_pool_size=rpc_connection_pool_size,
@@ -505,11 +527,11 @@ def load(
             )
         )
         fg = "green"
-        click.secho(
-            f"Processed contracts from {starting_block:,} to {ending_block:,}"
-            f" at block height {block_height:,}",
-            fg=fg,
-        )
+        with open(block_time_cache_filename, "w+") as file:
+            csv_writer = csv.writer(file)
+            for row in block_timestamps:
+                csv_writer.writerow(row)
+
     except KeyboardInterrupt:
         fg = "yellow"
     finally:
@@ -524,7 +546,12 @@ def load(
         all_mins = math.floor(runtime / 60)
         mins = all_mins % 60
         hours = math.floor(all_mins / 60)
+        stats_writer.write_line()
         click.secho(f"Total Time: {hours}:{mins:02}:{secs:05.2F}", fg=fg)
+        click.secho(
+            f"Blocks {starting_block:,} to {ending_block:,}" f" at block height {block_height:,}",
+            fg=fg,
+        )
 
 
 @block_crawler.command()
@@ -579,37 +606,44 @@ class BlockBoundTracker:
     high: Optional[int] = 0
 
 
-async def stats_writer(
-    stats_service_: StatsService, block_bound_tracker: BlockBoundTracker, interval: int = 60
-):
-    def _safe_average(count, total):
+class StatsWriter:
+    def __init__(self, stats_service: StatsService, block_bound_tracker: BlockBoundTracker) -> None:
+        self.__stats_service = stats_service
+        self.__block_bound_tracker = block_bound_tracker
+
+    @staticmethod
+    def __safe_average(count, total):
         return 0.0 if count == 0 else total / count
 
-    def _write():
-        rpc_connect = stats_service_.get_count(RpcClient.STAT_CONNECT)
-        rpc_reconnect = stats_service_.get_count(RpcClient.STAT_RECONNECT)
-        rpc_connection_reset = stats_service_.get_count(RpcClient.STAT_CONNECTION_RESET)
-        rpc_throttled = stats_service_.get_count(RpcClient.STAT_RESPONSE_TOO_MANY_REQUESTS)
-        rpc_sent = stats_service_.get_count(RpcClient.STAT_REQUEST_SENT)
-        rpc_delayed = stats_service_.get_count(RpcClient.STAT_REQUEST_DELAYED)
-        rpc_received = stats_service_.get_count(RpcClient.STAT_RESPONSE_RECEIVED)
-        rpc_request_ms = stats_service_.get_count(RpcClient.STAT_REQUEST_MS)
-        rpc_request_ms_avg = _safe_average(rpc_received, rpc_request_ms)
-        collection_count = stats_service_.get_count(data_services.STAT_COLLECTION_WRITE)
-        collection_ms = stats_service_.get_count(data_services.STAT_COLLECTION_WRITE_MS)
-        collection_ms_avg = _safe_average(collection_count, collection_ms)
-        token_count = stats_service_.get_count(data_services.STAT_TOKEN_WRITE_BATCH)
-        token_ms = stats_service_.get_count(data_services.STAT_TOKEN_WRITE_BATCH_MS)
-        token_ms_avg = _safe_average(token_count, token_ms)
-        transfer_count = stats_service_.get_count(data_services.STAT_TOKEN_TRANSFER_WRITE_BATCH)
-        transfer_ms = stats_service_.get_count(data_services.STAT_TOKEN_TRANSFER_WRITE_BATCH_MS)
-        transfer_ms_avg = _safe_average(transfer_count, transfer_ms)
-        owner_count = stats_service_.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH)
-        owner_ms = stats_service_.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH_MS)
-        owner_ms_avg = _safe_average(owner_count, owner_ms)
+    def write_line(self):
+        rpc_connect = self.__stats_service.get_count(RpcClient.STAT_CONNECT)
+        rpc_reconnect = self.__stats_service.get_count(RpcClient.STAT_RECONNECT)
+        rpc_connection_reset = self.__stats_service.get_count(RpcClient.STAT_CONNECTION_RESET)
+        rpc_throttled = self.__stats_service.get_count(RpcClient.STAT_RESPONSE_TOO_MANY_REQUESTS)
+        rpc_sent = self.__stats_service.get_count(RpcClient.STAT_REQUEST_SENT)
+        rpc_delayed = self.__stats_service.get_count(RpcClient.STAT_REQUEST_DELAYED)
+        rpc_received = self.__stats_service.get_count(RpcClient.STAT_RESPONSE_RECEIVED)
+        rpc_request_ms = self.__stats_service.get_count(RpcClient.STAT_REQUEST_MS)
+        rpc_request_ms_avg = self.__safe_average(rpc_received, rpc_request_ms)
+        collection_count = self.__stats_service.get_count(data_services.STAT_COLLECTION_WRITE)
+        collection_ms = self.__stats_service.get_count(data_services.STAT_COLLECTION_WRITE_MS)
+        collection_ms_avg = self.__safe_average(collection_count, collection_ms)
+        token_count = self.__stats_service.get_count(data_services.STAT_TOKEN_WRITE_BATCH)
+        token_ms = self.__stats_service.get_count(data_services.STAT_TOKEN_WRITE_BATCH_MS)
+        token_ms_avg = self.__safe_average(token_count, token_ms)
+        transfer_count = self.__stats_service.get_count(
+            data_services.STAT_TOKEN_TRANSFER_WRITE_BATCH
+        )
+        transfer_ms = self.__stats_service.get_count(
+            data_services.STAT_TOKEN_TRANSFER_WRITE_BATCH_MS
+        )
+        transfer_ms_avg = self.__safe_average(transfer_count, transfer_ms)
+        owner_count = self.__stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH)
+        owner_ms = self.__stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH_MS)
+        owner_ms_avg = self.__safe_average(owner_count, owner_ms)
         print(
             f"{datetime.utcnow():%Y-%m-%dT%H:%M:%S}",
-            f"Blocks [{block_bound_tracker.low:,}:{block_bound_tracker.high:,}]",
+            f"Blocks [{self.__block_bound_tracker.low:,}:{self.__block_bound_tracker.high:,}]",
             "--",
             f"RPC Conn ["
             f"C:{rpc_connect:,} "
@@ -631,15 +665,13 @@ async def stats_writer(
             f"]",
         )
 
-    try:
-        if interval > 0:
+    async def write_at_interval(self, interval: int):
+        try:
             while True:
-                _write()
                 await asyncio.sleep(interval)
-    except CancelledError:
-        pass
-    finally:
-        _write()
+                self.write_line()
+        except CancelledError:
+            pass
 
 
 if __name__ == "__main__":

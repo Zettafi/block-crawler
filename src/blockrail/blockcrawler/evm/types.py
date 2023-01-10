@@ -1,4 +1,3 @@
-from binascii import unhexlify
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional, NewType
@@ -28,7 +27,7 @@ class Erc165InterfaceID(Enum):
 
     @property
     def bytes(self) -> bytes:
-        return unhexlify(self.value[2:])
+        return HexBytes(self.value)
 
     @classmethod
     def from_value(cls, value: str):

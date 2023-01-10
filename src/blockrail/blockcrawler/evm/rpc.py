@@ -216,9 +216,9 @@ class EvmRpcClient(RpcClient):
     ) -> AsyncIterable[EvmLog]:
         current_block = from_block
         while current_block <= to_block:
-            logs = None
             block_range_size = 100_000
-            while logs is None:
+            processed = False
+            while not processed:
                 end_block = current_block + block_range_size - 1
                 if end_block > to_block:
                     end_block = to_block
@@ -233,19 +233,21 @@ class EvmRpcClient(RpcClient):
                             address=str(address),
                         ),
                     )
-                    for log in logs:
-                        yield EvmLog(
-                            removed=log["removed"],
-                            log_index=HexInt(log["logIndex"]),
-                            transaction_index=HexInt(log["transactionIndex"]),
-                            transaction_hash=HexBytes(log["transactionHash"]),
-                            block_hash=HexBytes(log["blockHash"]),
-                            block_number=HexInt(log["blockNumber"]),
-                            address=Address(log["address"]),
-                            data=HexBytes(log["data"]),
-                            topics=[HexBytes(topic) for topic in log["topics"]],
-                        )
+                    if logs:
+                        for log in logs:
+                            yield EvmLog(
+                                removed=log["removed"],
+                                log_index=HexInt(log["logIndex"]),
+                                transaction_index=HexInt(log["transactionIndex"]),
+                                transaction_hash=HexBytes(log["transactionHash"]),
+                                block_hash=HexBytes(log["blockHash"]),
+                                block_number=HexInt(log["blockNumber"]),
+                                address=Address(log["address"]),
+                                data=HexBytes(log["data"]),
+                                topics=[HexBytes(topic) for topic in log["topics"]],
+                            )
                     current_block = end_block + 1
+                    processed = True
                 except RpcServerError as e:
                     if e.error_code == -32005:
                         old_block_range_size = block_range_size
@@ -286,7 +288,3 @@ class ConnectionPoolingEvmRpcClient(EvmRpcClient):
         if self.__pool_index >= self.__pool_length:
             self.__pool_index = 0
         return await self.__pool[self.__pool_index].send(method, *params)
-
-    @property
-    def in_flight(self):
-        return sum([member.in_flight for member in self.__pool])

@@ -2,7 +2,7 @@ import asyncio
 import datetime
 import time
 from logging import Logger
-from typing import Union, Dict, cast, Optional
+from typing import Union, Dict, cast, Optional, List, Tuple
 
 import aioboto3
 from botocore.config import Config
@@ -404,6 +404,7 @@ async def load_evm_contracts_by_block(
     block_chunk_size: int,
     logger: Logger,
     stats_service: StatsService,
+    block_times: List[Tuple[int, int]],
     archive_node_uri: str,
     rpc_requests_per_second: Optional[int],
     rpc_connection_pool_size: int,
@@ -413,7 +414,7 @@ async def load_evm_contracts_by_block(
     dynamodb_timeout: float,
     table_prefix: str,
     block_bound_tracker,
-) -> None:
+) -> BlockTimeService:
     session = aioboto3.Session()
 
     config = Config(connect_timeout=dynamodb_timeout, read_timeout=dynamodb_timeout)
@@ -438,6 +439,13 @@ async def load_evm_contracts_by_block(
         ) as rpc_client:
             data_bus = ParallelDataBus(logger)
             block_time_service = BlockTimeService(rpc_client)
+
+            try:
+                while True:
+                    block_id, timestamp = block_times.pop()
+                    await block_time_service.set_block_timestamp(block_id, timestamp)
+            except IndexError:
+                pass
 
             await data_bus.register(
                 EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(
@@ -486,6 +494,9 @@ async def load_evm_contracts_by_block(
 
             for block_chunk_start in range(ending_block, starting_block, -1 * block_chunk_size):
                 block_chunk_end = block_chunk_start - block_chunk_size + 1
+                if block_chunk_end < starting_block:
+                    block_chunk_end = starting_block
+
                 block_bound_tracker.low = block_chunk_end
                 block_bound_tracker.high = block_chunk_start
                 block_id_producer = BlockIDProducer(
@@ -493,3 +504,5 @@ async def load_evm_contracts_by_block(
                 )
                 async with data_bus:
                     await block_id_producer(data_bus)
+
+            return block_time_service
