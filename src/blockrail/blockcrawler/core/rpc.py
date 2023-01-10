@@ -102,7 +102,7 @@ class RpcClient:
         self.__pending: Dict[str, Tuple[Future, Dict[str, Any], int]] = dict()
         self.__context_manager_running: bool = False
         self.__requests_per_second: Optional[int] = requests_per_second
-        self.__paused_for_too_many_requests: bool = False
+        self.__paused_for_too_many_requests: Optional[str] = None
         self.__this_second: int = 0
         self.__requests_this_second: int = 0
 
@@ -126,6 +126,7 @@ class RpcClient:
 
     async def __inbound_loop(self):
         running = True
+        loop = asyncio.get_running_loop()
         self.__reconnected = False
         while running:
             while not self.__ws.closed:
@@ -174,12 +175,12 @@ class RpcClient:
                                     f"Retrying in {backoff_seconds} seconds."
                                 )
                                 self._stats_service.increment(self.STAT_RESPONSE_TOO_MANY_REQUESTS)
-                                self.__paused_for_too_many_requests = True
-                                await asyncio.sleep(backoff_seconds)
-                                self.__paused_for_too_many_requests = False
-
-                                start_time = await self.__send_json(request)
-                                self.__pending[response["id"]] = (future, request, start_time)
+                                self.__paused_for_too_many_requests = request["id"]
+                                loop.create_task(
+                                    self.__replay_to_many_requests_request(
+                                        backoff_seconds, future, request
+                                    )
+                                )
 
                             else:
                                 future.set_exception(
@@ -223,9 +224,17 @@ class RpcClient:
                 self._stats_service.increment(self.STAT_ORPHANED_REQUESTS)
                 future.set_exception(RpcError("Transport closed before response received"))
 
+    async def __replay_to_many_requests_request(self, backoff_seconds, future, request):
+        await asyncio.sleep(backoff_seconds)
+        if self.__paused_for_too_many_requests == request["id"]:
+            self.__paused_for_too_many_requests = None
+        start_time = await self.__send_json(request)
+        self.__pending[request["id"]] = (future, request, start_time)
+
     async def __send_json(self, request):
         start_time = None
         while not start_time:
+            await self.__wait_for_ready_to_send_json()
             try:
                 await self.__ws.send_json(request)
                 start_time = time.perf_counter_ns()
@@ -252,6 +261,7 @@ class RpcClient:
         for future, request, _old_start_time in replays:
             start_time = await self.__send_json(request)
             self.__pending[request["id"]] = (future, request, start_time)
+            await asyncio.sleep(0)  # Ensure replaying doesn't stop all other processing
         self.__reconnected = True
 
     def __get_rpc_request(self, method, params) -> Dict[str, Any]:
@@ -264,13 +274,12 @@ class RpcClient:
         }
         return data
 
-    async def __wait_for_ready_to_process(self):
+    async def __wait_for_ready_to_send_json(self):
         loop = asyncio.get_running_loop()
 
         delayed = False
         if self.__requests_per_second:
-            time = loop.time()
-            second = floor(time)
+            second = floor(loop.time())
 
             while (
                 second == self.__this_second
@@ -298,7 +307,6 @@ class RpcClient:
             raise RpcError("Requests must be sent using a context manager instance!")
 
         request = self.__get_rpc_request(method, params)
-        await self.__wait_for_ready_to_process()
         start_time = await self.__send_json(request)
         self._stats_service.increment(f"{self.STAT_REQUEST_SENT}.{method}")
         future = asyncio.get_running_loop().create_future()

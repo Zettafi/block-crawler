@@ -298,6 +298,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
         errored = False
 
         async def side_effect():
+            await asyncio.sleep(0)  # Allow for processing to happen
             nonlocal errored
             if not errored and "id" in self._ws_response:
                 errored = True
