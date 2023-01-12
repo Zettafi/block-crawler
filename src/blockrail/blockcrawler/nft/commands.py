@@ -39,7 +39,7 @@ from ..core.stats import StatsService
 from ..core.storage_clients import S3StorageClient, StorageClientContext
 from ..data.models import BlockCrawlerConfig, Tokens
 from ..evm.producers import BlockIDProducer
-from ..evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient
+from ..evm.rpc import EvmRpcClient, MultiProviderEvmRpcClient
 from ..evm.transformers import (
     BlockIdToEvmBlockTransformer,
     EvmBlockToEvmTransactionHashTransformer,
@@ -405,7 +405,7 @@ async def load_evm_contracts_by_block(
     logger: Logger,
     stats_service: StatsService,
     block_times: List[Tuple[int, int]],
-    archive_node_uri: str,
+    archive_nodes: List[str],
     rpc_requests_per_second: Optional[int],
     rpc_connection_pool_size: int,
     blockchain: BlockChain,
@@ -434,8 +434,8 @@ async def load_evm_contracts_by_block(
             dynamodb, blockchain, increment_data_version, table_prefix
         )
 
-        async with ConnectionPoolingEvmRpcClient(
-            archive_node_uri, stats_service, rpc_requests_per_second, rpc_connection_pool_size
+        async with MultiProviderEvmRpcClient(
+            archive_nodes, stats_service, rpc_requests_per_second
         ) as rpc_client:
             data_bus = ParallelDataBus(logger)
             block_time_service = BlockTimeService(rpc_client)
@@ -504,5 +504,7 @@ async def load_evm_contracts_by_block(
                 )
                 async with data_bus:
                     await block_id_producer(data_bus)
+
+                # TODO: Update block times cache
 
             return block_time_service

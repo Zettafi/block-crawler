@@ -11,7 +11,12 @@ from hexbytes import HexBytes
 
 from blockrail.blockcrawler.core.rpc import RpcError, RpcServerError
 from blockrail.blockcrawler.core.stats import StatsService
-from blockrail.blockcrawler.evm.rpc import EthCall, EvmRpcClient, ConnectionPoolingEvmRpcClient
+from blockrail.blockcrawler.evm.rpc import (
+    EthCall,
+    EvmRpcClient,
+    ConnectionPoolingEvmRpcClient,
+    MultiProviderEvmRpcClient,
+)
 from blockrail.blockcrawler.evm.types import (
     EvmTransactionReceipt,
     EvmLog,
@@ -710,6 +715,7 @@ class GetBlockNumberTestCase(BaseRPCClientTestCase):
                 raise e
 
 
+@ddt.ddt
 class GetLogsTestCase(BaseRPCClientTestCase):
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
@@ -865,11 +871,16 @@ class GetLogsTestCase(BaseRPCClientTestCase):
             )
         )
 
+    @ddt.data(
+        -32005,  # Infura
+        -32602,  # Alchemy
+    )
     async def test_halves_block_range_until_one_and_errors_when_to_many_records_error_returned(
         self,
+        error_code,
     ):
         self._rpc_response = dict(
-            jsonrpc="2.0", error=dict(code=-32005, message="Too many records")
+            jsonrpc="2.0", error=dict(code=error_code, message="Too many records")
         )
 
         with self.assertRaises(RpcServerError) as actual:
@@ -878,7 +889,7 @@ class GetLogsTestCase(BaseRPCClientTestCase):
             ):
                 pass
 
-        self.assertEqual(-32005, actual.exception.error_code)
+        self.assertEqual(error_code, actual.exception.error_code)
         self.assertEqual("Too many records", actual.exception.error_message)
 
         self._ws_connect_patch.return_value.send_json.assert_has_awaits(
@@ -1097,6 +1108,71 @@ class TestConnectionPoolingEvmRpcClientTestCase(IsolatedAsyncioTestCase):
         async with ConnectionPoolingEvmRpcClient(
             "", self.__stats_service, connection_pool_size=1
         ) as client:
+            actual = await client.get_block_number()
+            self.assertEqual(HexInt(0x1), actual)
+
+
+class TestMultiProviderEvmRpcClientTestCase(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__uris = ["Some URI", "Some other URI", "Yet another URI"]
+        self.__client_1 = AsyncMock(EvmRpcClient)
+        self.__client_2 = AsyncMock(EvmRpcClient)
+        self.__client_3 = AsyncMock(EvmRpcClient)
+        patcher = patch("blockrail.blockcrawler.evm.rpc.EvmRpcClient")
+        self.__evm_rpc_client_patch = patcher.start()
+        self.__evm_rpc_client_patch.side_effect = [
+            self.__client_1,
+            self.__client_2,
+            self.__client_3,
+        ]
+        self.addAsyncCleanup(patcher.stop)  # type: ignore
+        self.__stats_service = MagicMock(StatsService)
+
+    async def test_aenter_called_for_each_client(self):
+        async with MultiProviderEvmRpcClient(self.__uris, self.__stats_service):
+            pass
+
+        self.__client_1.__aenter__.assert_awaited_once()
+        self.__client_2.__aenter__.assert_awaited_once()
+        self.__client_3.__aenter__.assert_awaited_once()
+
+    async def test_aexit_called_for_each_client(self):
+        async with MultiProviderEvmRpcClient(self.__uris, self.__stats_service):
+            pass
+
+        self.__client_1.__aexit__.assert_awaited_once()
+        self.__client_2.__aexit__.assert_awaited_once()
+        self.__client_3.__aexit__.assert_awaited_once()
+
+    async def test_init_params_passed(self):
+        MultiProviderEvmRpcClient(self.__uris, self.__stats_service, requests_per_second=3)
+        self.__evm_rpc_client_patch.assert_has_calls(
+            [
+                call(self.__uris[0], self.__stats_service, 3),
+                call(self.__uris[1], self.__stats_service, 3),
+                call(self.__uris[2], self.__stats_service, 3),
+            ]
+        )
+
+    async def test_passes_calls_to_pool_clients_round_robin(self):
+        self.__client_1.send.return_value = "0x1"
+        self.__client_2.send.return_value = "0x2"
+        self.__client_3.send.return_value = "0x3"
+        async with MultiProviderEvmRpcClient(self.__uris, self.__stats_service) as client:
+            await client.get_block_number()
+            self.__client_1.send.assert_awaited_once_with("eth_blockNumber")
+            await client.get_block_number()
+            self.__client_2.send.assert_awaited_once_with("eth_blockNumber")
+            await client.get_block_number()
+            self.__client_3.send.assert_awaited_once_with("eth_blockNumber")
+            await client.get_block_number()
+            self.assertEqual(
+                2, self.__client_1.send.call_count, "Expected client 1 to be called twice"
+            )
+
+    async def test_passes_result_from_pool_clients_as_result(self):
+        self.__client_1.send.return_value = "0x1"
+        async with MultiProviderEvmRpcClient(self.__uris, self.__stats_service) as client:
             actual = await client.get_block_number()
             self.assertEqual(HexInt(0x1), actual)
 

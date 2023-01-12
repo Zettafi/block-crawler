@@ -396,9 +396,10 @@ def tail(
     help="The size of block range in which the entire range will be divided.",
 )
 @click.option(
-    "--evm-archive-node-uri",
-    envvar="EVM_ARCHIVE_NODE_URI",
-    help="URI to access the archive node EVM RPC HTTP server",
+    "--evm-rpc-nodes",
+    envvar="EVM_RPC_NODES",
+    help="One or more URIs to access the archive node EVM RPC HTTP server",
+    multiple=True,
 )
 @click.option(
     "--rpc-requests-per-second",
@@ -454,7 +455,7 @@ def load(
     block_height: int,
     block_chunk_size: int,
     increment_data_version: bool,
-    evm_archive_node_uri: str,
+    evm_rpc_nodes: List[str],
     rpc_requests_per_second: Optional[int],
     rpc_connection_pool_size: int,
     dynamodb_timeout: float,
@@ -503,10 +504,9 @@ def load(
     try:
         gc_task = loop.create_task(garbage_collector())
         stats_task = loop.create_task(stats_writer.write_at_interval(60))
-        # tracemalloc_task = loop.create_task(print_tracemalloc(60))
-        # tracemalloc_task.add_done_callback(lambda task: print(task.exception()))
         block_timestamps = loop.run_until_complete(
             load_evm_contracts_by_block(
+                # TODO: Pass function to process updates to block times
                 blockchain=blockchain,
                 starting_block=starting_block,
                 ending_block=ending_block,
@@ -516,7 +516,7 @@ def load(
                 logger=logger,
                 stats_service=stats_service,
                 block_times=block_times,
-                archive_node_uri=evm_archive_node_uri,
+                archive_nodes=evm_rpc_nodes,
                 rpc_requests_per_second=rpc_requests_per_second,
                 rpc_connection_pool_size=rpc_connection_pool_size,
                 dynamodb_endpoint_url=dynamodb_endpoint_url,
@@ -537,7 +537,6 @@ def load(
     finally:
         gc_task.cancel()
         stats_task.cancel()
-        # tracemalloc_task.cancel()
         while loop.is_running():
             time.sleep(0.001)
         end = time.perf_counter()

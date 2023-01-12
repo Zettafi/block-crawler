@@ -109,7 +109,7 @@ class EvmRpcClient(RpcClient):
                     v=HexInt(tx["v"]),
                     r=HexBytes(tx["r"]),
                     s=HexBytes(tx["s"]),
-                    to_=Address(tx["to"]),
+                    to_=Address(tx.get("to")),
                     value=HexInt(tx["value"]),
                 )
                 for tx in result["transactions"]
@@ -166,7 +166,7 @@ class EvmRpcClient(RpcClient):
             block_hash=HexBytes(result["blockHash"]),
             block_number=HexInt(result["blockNumber"]),
             from_=result["from"],
-            to_=result["to"],
+            to_=result.get("to"),
             cumulative_gas_used=HexInt(result["cumulativeGasUsed"]),
             gas_used=HexInt(result["gasUsed"]),
             contract_address=result["contractAddress"],
@@ -249,7 +249,10 @@ class EvmRpcClient(RpcClient):
                     current_block = end_block + 1
                     processed = True
                 except RpcServerError as e:
-                    if e.error_code == -32005:
+                    if e.error_code in (
+                        -32005,  # Infura
+                        -32602,  # Alchemy
+                    ):
                         old_block_range_size = block_range_size
                         block_range_size = math.floor(block_range_size / 10)
                         if old_block_range_size <= block_range_size:
@@ -270,6 +273,37 @@ class ConnectionPoolingEvmRpcClient(EvmRpcClient):
     ) -> None:
         self.__pool: List[EvmRpcClient] = list()
         for _ in range(connection_pool_size):
+            self.__pool.append(EvmRpcClient(provider_url, stats_service, requests_per_second))
+        self.__pool_length = len(self.__pool)
+        self.__pool_index = self.__pool_length
+
+    async def __aenter__(self):
+        for client in self.__pool:
+            await client.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        for client in self.__pool:
+            await client.__aexit__(exc_type, exc_val, exc_tb)
+
+    async def send(self, method, *params) -> Any:
+        self.__pool_index += 1
+        if self.__pool_index >= self.__pool_length:
+            self.__pool_index = 0
+        return await self.__pool[self.__pool_index].send(method, *params)
+
+
+class MultiProviderEvmRpcClient(EvmRpcClient):
+
+    # noinspection PyMissingConstructor
+    def __init__(
+        self,
+        provider_urls: List[str],
+        stats_service: StatsService,
+        requests_per_second: Optional[int] = None,
+    ) -> None:
+        self.__pool: List[EvmRpcClient] = list()
+        for provider_url in provider_urls:
             self.__pool.append(EvmRpcClient(provider_url, stats_service, requests_per_second))
         self.__pool_length = len(self.__pool)
         self.__pool_index = self.__pool_length
