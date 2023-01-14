@@ -67,17 +67,35 @@ class HexIntTestCase(TestCase):
     def test_add_hex_int(self):
         self.assertEqual(HexInt(2), HexInt(1) + HexInt(1))
 
+    def test_add_int_is_hex_int(self):
+        self.assertIsInstance(HexInt(1) + 1, HexInt)
+
     def test_add_int(self):
         self.assertEqual(HexInt(2), HexInt(1) + 1)
+
+    def test_add_hex_int_is_hex_int(self):
+        self.assertIsInstance(HexInt(1) + 1, HexInt)
 
     def test_radd_int(self):
         self.assertEqual(2, 1 + HexInt(1))
 
+    def test_radd_int_is_int(self):
+        self.assertIsInstance(1 + HexInt(1), int)
+
     def test_sub_hex_int(self):
         self.assertEqual(HexInt(1), HexInt(2) - HexInt(1))
+
+    def test_sub_hex_int_is_hex_int(self):
+        self.assertIsInstance(HexInt(2) - HexInt(1), HexInt)
 
     def test_sub_int(self):
         self.assertEqual(HexInt(1), HexInt(2) - 1)
 
+    def test_sub_int_is_hex_int(self):
+        self.assertIsInstance(HexInt(2) - 1, HexInt)
+
     def test_rsub_int(self):
         self.assertEqual(1, 2 - HexInt(1))
+
+    def test_rsub_int_is_int(self):
+        self.assertIsInstance(2 - HexInt(1), int)

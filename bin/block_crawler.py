@@ -12,13 +12,14 @@ from asyncio import CancelledError
 from datetime import datetime
 from logging import Logger
 from logging import StreamHandler
-from typing import Optional, List, Tuple
+from typing import Optional, List
 
 import click
 
 from blockrail.blockcrawler.core.click import BlockChainParamType
 from blockrail.blockcrawler.core.entities import BlockChain
 from blockrail.blockcrawler.core.rpc import RpcClient
+from blockrail.blockcrawler.core.services import MemoryBlockTimeCache
 from blockrail.blockcrawler.core.stats import StatsService
 from blockrail.blockcrawler.nft import data_services
 from blockrail.blockcrawler.nft.commands import (
@@ -409,14 +410,6 @@ def tail(
     type=int,
 )
 @click.option(
-    "--rpc-connection-pool-size",
-    envvar="RPC_CONNECTION_POOL_SIZE",
-    help="The size of the connection pool for RPC archive nodes",
-    show_default=True,
-    default=10,
-    type=int,
-)
-@click.option(
     "--dynamodb-endpoint-url",
     envvar="AWS_DYNAMODB_ENDPOINT_URL",
     help="Override URL for connecting to Amazon DynamoDB",
@@ -433,6 +426,13 @@ def tail(
     help="AWS region for DynamoDB",
 )
 @click.option("--table-prefix", envvar="TABLE_PREFIX", help="Prefix for table names", default="")
+@click.option(
+    "--dynamodb-parallel-batches",
+    envvar="PARALLEL_BATCHES",
+    help="Number of DynamoDB batch writes to perform simultaneously",
+    default=20,
+    show_default=True,
+)
 @click.option(
     "--block-time-cache-filename",
     envvar="BLOCK_TIME_CACHE_FILENAME",
@@ -457,11 +457,11 @@ def load(
     increment_data_version: bool,
     evm_rpc_nodes: List[str],
     rpc_requests_per_second: Optional[int],
-    rpc_connection_pool_size: int,
     dynamodb_timeout: float,
     dynamodb_endpoint_url: str,
     dynamodb_region: str,
     table_prefix: str,
+    dynamodb_parallel_batches: int,
     block_time_cache_filename: pathlib.Path,
     debug: bool,
 ):
@@ -482,11 +482,11 @@ def load(
         except CancelledError:
             pass
 
-    block_times: List[Tuple[int, int]] = list()
+    block_time_cache = MemoryBlockTimeCache()
     try:
         with open(block_time_cache_filename, "r") as file:
             for block_id, timestamp in csv.reader(file):
-                block_times.append((int(block_id), int(timestamp)))
+                block_time_cache.set_sync(int(block_id), int(timestamp))
     except FileNotFoundError:
         pass
 
@@ -504,7 +504,7 @@ def load(
     try:
         gc_task = loop.create_task(garbage_collector())
         stats_task = loop.create_task(stats_writer.write_at_interval(60))
-        block_timestamps = loop.run_until_complete(
+        loop.run_until_complete(
             load_evm_contracts_by_block(
                 # TODO: Pass function to process updates to block times
                 blockchain=blockchain,
@@ -515,22 +515,18 @@ def load(
                 block_chunk_size=block_chunk_size,
                 logger=logger,
                 stats_service=stats_service,
-                block_times=block_times,
+                block_time_cache=block_time_cache,
                 archive_nodes=evm_rpc_nodes,
                 rpc_requests_per_second=rpc_requests_per_second,
-                rpc_connection_pool_size=rpc_connection_pool_size,
                 dynamodb_endpoint_url=dynamodb_endpoint_url,
                 dynamodb_region=dynamodb_region,
                 dynamodb_timeout=dynamodb_timeout,
                 table_prefix=table_prefix,
+                dynamodb_parallel_batches=dynamodb_parallel_batches,
                 block_bound_tracker=block_bound_tracker,
             )
         )
         fg = "green"
-        with open(block_time_cache_filename, "w+") as file:
-            csv_writer = csv.writer(file)
-            for row in block_timestamps:
-                csv_writer.writerow(row)
 
     except KeyboardInterrupt:
         fg = "yellow"
@@ -539,6 +535,12 @@ def load(
         stats_task.cancel()
         while loop.is_running():
             time.sleep(0.001)
+
+        with open(block_time_cache_filename, "w+") as file:
+            csv_writer = csv.writer(file)
+            for row in block_time_cache:
+                csv_writer.writerow(row)
+
         end = time.perf_counter()
         runtime = end - start
         secs = runtime % 60

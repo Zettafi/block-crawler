@@ -1,8 +1,10 @@
+import asyncio
 from typing import List
 
 from boto3.dynamodb.conditions import Attr
 from boto3.dynamodb.table import TableResource
 
+from blockrail.blockcrawler.nft.entities import TokenOwner, TokenTransfer, Token, Collection
 from . import (
     DataVersionTooOldException,
     DataService,
@@ -25,15 +27,17 @@ from . import (
     STAT_TOKEN_TRANSFER_WRITE_BATCH_MS,
     STAT_TOKEN_OWNER_WRITE_BATCH_MS,
 )
-from blockrail.blockcrawler.nft.entities import TokenOwner, TokenTransfer, Token, Collection
 from ...core.stats import StatsService
 
 
 class DynamoDbDataService(DataService):
-    def __init__(self, dynamodb, stats_service: StatsService, table_prefix: str = "") -> None:
+    def __init__(
+        self, dynamodb, stats_service: StatsService, table_prefix: str = "", parallel_batches=1
+    ) -> None:
         self.__dynamodb = dynamodb
         self.__stats_service = stats_service
         self.__table_prefix = table_prefix
+        self.__parallel_batches = parallel_batches
 
     async def write_collection(self, collection: Collection) -> None:
         with self.__stats_service.ms_counter(STAT_COLLECTION_WRITE_MS):
@@ -85,12 +89,9 @@ class DynamoDbDataService(DataService):
     async def write_token_batch(self, tokens: List[Token]):
         with self.__stats_service.ms_counter(STAT_TOKEN_WRITE_BATCH_MS):
             token_table = await self.__get_table("token")
-            async with token_table.batch_writer() as batch_writer:
-                for token in tokens:
-                    await batch_writer.put_item(
-                        Item=self.__get_token_item(token),
-                    )
-            self.__stats_service.increment(STAT_TOKEN_WRITE_BATCH, len(tokens))
+            token_items = [self.__get_token_item(token) for token in tokens]
+            await self.__write_batch(token_table, token_items)
+            self.__stats_service.increment(STAT_TOKEN_WRITE_BATCH, len(token_items))
 
     async def write_token_transfer(self, token_transfer: TokenTransfer):
         with self.__stats_service.ms_counter(STAT_TOKEN_TRANSFER_WRITE_MS):
@@ -109,10 +110,13 @@ class DynamoDbDataService(DataService):
     async def write_token_transfer_batch(self, token_transfers: List[TokenTransfer]) -> None:
         with self.__stats_service.ms_counter(STAT_TOKEN_TRANSFER_WRITE_BATCH_MS):
             token_transfer_table = await self.__get_table("tokentransfers")
-            async with token_transfer_table.batch_writer() as batch_writer:
-                for token_transfer in token_transfers:
-                    await batch_writer.put_item(Item=self.__get_token_transfer_item(token_transfer))
-            self.__stats_service.increment(STAT_TOKEN_TRANSFER_WRITE_BATCH, len(token_transfers))
+            token_transfer_items = [
+                self.__get_token_transfer_item(token_transfer) for token_transfer in token_transfers
+            ]
+            await self.__write_batch(token_transfer_table, token_transfer_items)
+            self.__stats_service.increment(
+                STAT_TOKEN_TRANSFER_WRITE_BATCH, len(token_transfer_items)
+            )
 
     async def write_token_owner(self, token_owner: TokenOwner):
         with self.__stats_service.ms_counter(STAT_TOKEN_OWNER_WRITE_MS):
@@ -131,13 +135,34 @@ class DynamoDbDataService(DataService):
     async def write_token_owner_batch(self, token_owners: List[TokenOwner]) -> None:
         with self.__stats_service.ms_counter(STAT_TOKEN_OWNER_WRITE_BATCH_MS):
             token_owner_table = await self.__get_table("owner")
-            async with token_owner_table.batch_writer() as batch_writer:
-                for token_owner in token_owners:
-                    await batch_writer.put_item(Item=self.__get_token_owner(token_owner))
-            self.__stats_service.increment(STAT_TOKEN_OWNER_WRITE_BATCH, len(token_owners))
+            token_owner_items = [
+                self.__get_token_owner(token_owner) for token_owner in token_owners
+            ]
+            await self.__write_batch(token_owner_table, token_owner_items)
+            self.__stats_service.increment(STAT_TOKEN_OWNER_WRITE_BATCH, len(token_owner_items))
 
     async def __get_table(self, table_name: str) -> TableResource:
         return await self.__dynamodb.Table(f"{self.__table_prefix}{table_name}")
+
+    async def __write_batch(self, table_resource, items):
+        async def __write_batch_to_dynamo(batch_items):
+            async with table_resource.batch_writer() as batch_writer:
+                for batch_item in batch_items:
+                    await batch_writer.put_item(
+                        Item=batch_item,
+                    )
+
+        items_ = items[:]
+        batches = [[] for _ in range(self.__parallel_batches)]
+        try:
+            while True:
+                for batch in batches:
+                    batch.append(items_.pop(0))
+        except IndexError:
+            pass  # No more items_
+
+        batch_writes = [__write_batch_to_dynamo(batch) for batch in batches if batch]
+        await asyncio.gather(*batch_writes)
 
     @staticmethod
     def __get_token_item(token: Token) -> dict:
@@ -151,7 +176,9 @@ class DynamoDbDataService(DataService):
             current_owner_version=token.attribute_version.hex_value,
             quantity=token.quantity.int_value,
             data_version=token.data_version,
-            metadata_url=token.metadata_url,
+            metadata_url=token.metadata_url
+            if token.metadata_url and len(token.metadata_url) < 2049
+            else None,
         )
 
     @staticmethod
@@ -182,6 +209,6 @@ class DynamoDbDataService(DataService):
             collection_id=token_owner.collection_id,
             token_id=token_owner.token_id.hex_value,
             account=token_owner.account,
-            quantity=token_owner.quantity.hex_value,
+            quantity=token_owner.quantity.int_value,
             data_version=token_owner.data_version,
         )

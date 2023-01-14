@@ -267,6 +267,102 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             await self.__data_service.write_token(token)
             self.__table_resource.put_item.assert_awaited_once()
 
+    async def test_write_token_with_2048_char_url_stores_url(self):
+        token = Token(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            data_version=999,
+            collection_id=Address("Collection Address"),
+            token_id=HexInt(1),
+            mint_date=HexInt(2),
+            mint_block=HexInt(4),
+            current_owner=Address("Current Owner"),
+            original_owner=Address("Original Owner"),
+            quantity=HexInt(3),
+            metadata_url="X" * 2048,
+            attribute_version=HexInt("0x00000000000000000007"),
+        )
+
+        await self.__data_service.write_token(token)
+        self.__table_resource.put_item.assert_awaited_once_with(
+            Item={
+                "blockchain_collection_id": ANY,
+                "token_id": ANY,
+                "mint_date": ANY,
+                "mint_block": ANY,
+                "original_owner": ANY,
+                "current_owner": ANY,
+                "current_owner_version": ANY,
+                "quantity": ANY,
+                "metadata_url": "X" * 2048,
+                "data_version": ANY,
+            },
+            ConditionExpression=ANY,
+        )
+
+    async def test_write_token_with_2049_char_url_stores_none(self):
+        token = Token(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            data_version=999,
+            collection_id=Address("Collection Address"),
+            token_id=HexInt(1),
+            mint_date=HexInt(2),
+            mint_block=HexInt(4),
+            current_owner=Address("Current Owner"),
+            original_owner=Address("Original Owner"),
+            quantity=HexInt(3),
+            metadata_url="X" * 2049,
+            attribute_version=HexInt("0x00000000000000000007"),
+        )
+
+        await self.__data_service.write_token(token)
+        self.__table_resource.put_item.assert_awaited_once_with(
+            Item={
+                "blockchain_collection_id": ANY,
+                "token_id": ANY,
+                "mint_date": ANY,
+                "mint_block": ANY,
+                "original_owner": ANY,
+                "current_owner": ANY,
+                "current_owner_version": ANY,
+                "quantity": ANY,
+                "metadata_url": None,
+                "data_version": ANY,
+            },
+            ConditionExpression=ANY,
+        )
+
+    async def test_write_token_with_none_as_url_stores_none(self):
+        token = Token(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            data_version=999,
+            collection_id=Address("Collection Address"),
+            token_id=HexInt(1),
+            mint_date=HexInt(2),
+            mint_block=HexInt(4),
+            current_owner=Address("Current Owner"),
+            original_owner=Address("Original Owner"),
+            quantity=HexInt(3),
+            metadata_url=None,
+            attribute_version=HexInt("0x00000000000000000007"),
+        )
+
+        await self.__data_service.write_token(token)
+        self.__table_resource.put_item.assert_awaited_once_with(
+            Item={
+                "blockchain_collection_id": ANY,
+                "token_id": ANY,
+                "mint_date": ANY,
+                "mint_block": ANY,
+                "original_owner": ANY,
+                "current_owner": ANY,
+                "current_owner_version": ANY,
+                "quantity": ANY,
+                "metadata_url": None,
+                "data_version": ANY,
+            },
+            ConditionExpression=ANY,
+        )
+
     async def test_write_token_batch_uses_token_table_with_prefix_prepended(self):
         token = Token(
             blockchain=BlockChain.ETHEREUM_MAINNET,
@@ -315,6 +411,105 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "quantity": 3,
                 "metadata_url": "Metadata URL",
                 "data_version": 999,
+            },
+        )
+
+    async def test_write_token_batch_with_2048_char_url_stores_url(self):
+        blockchain = Mock(BlockChain)
+        blockchain.value = "Expected Blockchain"
+        token = Token(
+            blockchain=blockchain,
+            data_version=999,
+            collection_id=Address("Collection Address"),
+            token_id=HexInt(1),
+            mint_date=HexInt(2),
+            mint_block=HexInt(4),
+            current_owner=Address("Current Owner"),
+            original_owner=Address("Original Owner"),
+            quantity=HexInt(3),
+            metadata_url="X" * 2048,
+            attribute_version=HexInt("0x00000000000000000007"),
+        )
+
+        await self.__data_service.write_token_batch([token])
+        self.__batch_writer.put_item.assert_awaited_once_with(
+            Item={
+                "blockchain_collection_id": ANY,
+                "token_id": ANY,
+                "mint_date": ANY,
+                "mint_block": ANY,
+                "original_owner": ANY,
+                "current_owner": ANY,
+                "current_owner_version": ANY,
+                "quantity": ANY,
+                "metadata_url": "X" * 2048,
+                "data_version": ANY,
+            },
+        )
+
+    async def test_write_token_batch_with_2049_char_url_stores_none(self):
+        blockchain = Mock(BlockChain)
+        blockchain.value = "Expected Blockchain"
+        token = Token(
+            blockchain=blockchain,
+            data_version=999,
+            collection_id=Address("Collection Address"),
+            token_id=HexInt(1),
+            mint_date=HexInt(2),
+            mint_block=HexInt(4),
+            current_owner=Address("Current Owner"),
+            original_owner=Address("Original Owner"),
+            quantity=HexInt(3),
+            metadata_url="X" * 2049,
+            attribute_version=HexInt("0x00000000000000000007"),
+        )
+
+        await self.__data_service.write_token_batch([token])
+        self.__batch_writer.put_item.assert_awaited_once_with(
+            Item={
+                "blockchain_collection_id": ANY,
+                "token_id": ANY,
+                "mint_date": ANY,
+                "mint_block": ANY,
+                "original_owner": ANY,
+                "current_owner": ANY,
+                "current_owner_version": ANY,
+                "quantity": ANY,
+                "metadata_url": None,
+                "data_version": ANY,
+            },
+        )
+
+    async def test_write_token_batch_with_none_url_stores_none(self):
+        blockchain = Mock(BlockChain)
+        blockchain.value = "Expected Blockchain"
+        token = Token(
+            blockchain=blockchain,
+            data_version=999,
+            collection_id=Address("Collection Address"),
+            token_id=HexInt(1),
+            mint_date=HexInt(2),
+            mint_block=HexInt(4),
+            current_owner=Address("Current Owner"),
+            original_owner=Address("Original Owner"),
+            quantity=HexInt(3),
+            metadata_url=None,
+            attribute_version=HexInt("0x00000000000000000007"),
+        )
+
+        await self.__data_service.write_token_batch([token])
+        self.__batch_writer.put_item.assert_awaited_once_with(
+            Item={
+                "blockchain_collection_id": ANY,
+                "token_id": ANY,
+                "mint_date": ANY,
+                "mint_block": ANY,
+                "original_owner": ANY,
+                "current_owner": ANY,
+                "current_owner_version": ANY,
+                "quantity": ANY,
+                "metadata_url": None,
+                "data_version": ANY,
             },
         )
 
@@ -525,7 +720,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "collection_id": "Collection ID",
                 "token_id": "0x10",
                 "account": "Account",
-                "quantity": "0x1",
+                "quantity": 1,
                 "data_version": 11,
             },
             ConditionExpression=ANY,
@@ -597,7 +792,88 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "collection_id": "Collection ID",
                 "token_id": "0x10",
                 "account": "Account",
-                "quantity": "0x1",
+                "quantity": 1,
                 "data_version": 11,
             },
+        )
+
+    async def test_write_batch_with_parallel_batches_write_parallel_batches(self):
+        batch_writer_obj_1 = AsyncMock()
+        batch_writer_obj_2 = AsyncMock()
+        batch_writer_obj_3 = AsyncMock()
+        self.__table_resource.batch_writer.side_effect = [
+            batch_writer_obj_1,
+            batch_writer_obj_2,
+            batch_writer_obj_3,
+        ]
+        batch_writer_1 = batch_writer_obj_1.__aenter__.return_value
+        batch_writer_2 = batch_writer_obj_2.__aenter__.return_value
+        batch_writer_3 = batch_writer_obj_3.__aenter__.return_value
+        self.__data_service = DynamoDbDataService(
+            self.__dynamodb, self.__stats_service, self.__table_prefix, 3
+        )
+
+        await self.__data_service.write_token_owner_batch(
+            [
+                TokenOwner(
+                    blockchain=BlockChain.ETHEREUM_MAINNET,
+                    collection_id=Address("Collection 1"),
+                    token_id=HexInt(0x10),
+                    account=Address("Account 1"),
+                    quantity=HexInt(0x11),
+                    data_version=1,
+                ),
+                TokenOwner(
+                    blockchain=BlockChain.ETHEREUM_MAINNET,
+                    collection_id=Address("Collection 2"),
+                    token_id=HexInt(0x20),
+                    account=Address("Account 2"),
+                    quantity=HexInt(0x21),
+                    data_version=2,
+                ),
+                TokenOwner(
+                    blockchain=BlockChain.ETHEREUM_MAINNET,
+                    collection_id=Address("Collection 3"),
+                    token_id=HexInt(0x30),
+                    account=Address("Account 3"),
+                    quantity=HexInt(0x31),
+                    data_version=3,
+                ),
+            ]
+        )
+
+        batch_writer_1.put_item.assert_awaited_once_with(
+            Item=dict(
+                blockchain_account=f"{BlockChain.ETHEREUM_MAINNET.value}::Account 1",
+                collection_id_token_id="Collection 1::0x10",
+                collection_id=Address("Collection 1"),
+                token_id=HexInt(0x10).hex_value,
+                account=Address("Account 1"),
+                quantity=HexInt(0x11).int_value,
+                data_version=1,
+            )
+        )
+
+        batch_writer_2.put_item.assert_awaited_once_with(
+            Item=dict(
+                blockchain_account=f"{BlockChain.ETHEREUM_MAINNET.value}::Account 2",
+                collection_id_token_id="Collection 2::0x20",
+                collection_id=Address("Collection 2"),
+                token_id=HexInt(0x20).hex_value,
+                account=Address("Account 2"),
+                quantity=HexInt(0x21).int_value,
+                data_version=2,
+            )
+        )
+
+        batch_writer_3.put_item.assert_awaited_once_with(
+            Item=dict(
+                blockchain_account=f"{BlockChain.ETHEREUM_MAINNET.value}::Account 3",
+                collection_id_token_id="Collection 3::0x30",
+                collection_id=Address("Collection 3"),
+                token_id=HexInt(0x30).hex_value,
+                account=Address("Account 3"),
+                quantity=HexInt(0x31).int_value,
+                data_version=3,
+            )
         )

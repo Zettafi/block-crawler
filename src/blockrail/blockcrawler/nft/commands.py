@@ -2,7 +2,7 @@ import asyncio
 import datetime
 import time
 from logging import Logger
-from typing import Union, Dict, cast, Optional, List, Tuple
+from typing import Union, Dict, cast, Optional, List, Iterable
 
 import aioboto3
 from botocore.config import Config
@@ -34,7 +34,7 @@ from .evm.transformers import (
 from ..core.bus import ParallelDataBus
 from ..core.data_clients import HttpDataClient, IpfsDataClient, ArweaveDataClient, DataUriDataClient
 from ..core.entities import HexInt
-from ..core.services import BlockTimeService
+from ..core.services import BlockTimeService, BlockTimeCache
 from ..core.stats import StatsService
 from ..core.storage_clients import S3StorageClient, StorageClientContext
 from ..data.models import BlockCrawlerConfig, Tokens
@@ -404,17 +404,17 @@ async def load_evm_contracts_by_block(
     block_chunk_size: int,
     logger: Logger,
     stats_service: StatsService,
-    block_times: List[Tuple[int, int]],
+    block_time_cache: BlockTimeCache,
     archive_nodes: List[str],
     rpc_requests_per_second: Optional[int],
-    rpc_connection_pool_size: int,
     blockchain: BlockChain,
-    dynamodb_endpoint_url: str,
+    dynamodb_endpoint_url: Optional[str],
     dynamodb_region: str,
     dynamodb_timeout: float,
     table_prefix: str,
+    dynamodb_parallel_batches: int,
     block_bound_tracker,
-) -> BlockTimeService:
+) -> None:
     session = aioboto3.Session()
 
     config = Config(connect_timeout=dynamodb_timeout, read_timeout=dynamodb_timeout)
@@ -429,7 +429,9 @@ async def load_evm_contracts_by_block(
     if dynamodb_region is not None:
         dynamodb_resource_kwargs["region_name"] = dynamodb_region
     async with session.resource("dynamodb", **dynamodb_resource_kwargs) as dynamodb:  # type: ignore
-        data_service = DynamoDbDataService(dynamodb, stats_service, table_prefix)
+        data_service = DynamoDbDataService(
+            dynamodb, stats_service, table_prefix, dynamodb_parallel_batches
+        )
         data_version = await get_data_version(  # noqa: F841
             dynamodb, blockchain, increment_data_version, table_prefix
         )
@@ -438,14 +440,7 @@ async def load_evm_contracts_by_block(
             archive_nodes, stats_service, rpc_requests_per_second
         ) as rpc_client:
             data_bus = ParallelDataBus(logger)
-            block_time_service = BlockTimeService(rpc_client)
-
-            try:
-                while True:
-                    block_id, timestamp = block_times.pop()
-                    await block_time_service.set_block_timestamp(block_id, timestamp)
-            except IndexError:
-                pass
+            block_time_service = BlockTimeService(block_time_cache, rpc_client)
 
             await data_bus.register(
                 EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(
@@ -492,7 +487,12 @@ async def load_evm_contracts_by_block(
                 )
             )
 
-            for block_chunk_start in range(ending_block, starting_block, -1 * block_chunk_size):
+            if ending_block == starting_block:
+                blocks: Iterable = [starting_block]
+            else:
+                blocks = range(ending_block, starting_block, -1 * block_chunk_size)
+
+            for block_chunk_start in blocks:
                 block_chunk_end = block_chunk_start - block_chunk_size + 1
                 if block_chunk_end < starting_block:
                     block_chunk_end = starting_block
@@ -504,7 +504,3 @@ async def load_evm_contracts_by_block(
                 )
                 async with data_bus:
                     await block_id_producer(data_bus)
-
-                # TODO: Update block times cache
-
-            return block_time_service
