@@ -115,7 +115,7 @@ class RpcClient:
     async def __connect(self):
         self._stats_service.increment(self.STAT_CONNECT)
         self.__ws = await self.__client.ws_connect(
-            self.__provider_url, max_msg_size=10 * 1024 * 1024
+            self.__provider_url, max_msg_size=100 * 1024 * 1024
         )
 
         self.__inbound_loop_task = asyncio.create_task(self.__inbound_loop(), name="inbound")
@@ -168,7 +168,7 @@ class RpcClient:
                                         response["error"]["data"]["backoff_seconds"]
                                     )
                                 else:
-                                    backoff_seconds = 0.1
+                                    backoff_seconds = 1.0
 
                                 warnings.warn(
                                     f"Received too many request from RPC API. "
@@ -215,7 +215,8 @@ class RpcClient:
                 except Exception as e:
                     warnings.warn("An error occurred processing the transport response", source=e)
 
-            if self.__ws.exception():  # Exception means implicit close due to error
+            if wse := self.__ws.exception():  # Exception means implicit close due to error
+                warnings.warn(f"Web Socket exception received: {wse}")
                 await self.__reconnect()
             else:  # No exception should mean explicit connection close
                 running = False
@@ -241,14 +242,17 @@ class RpcClient:
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 raise RpcError(e)
             except ConnectionResetError:
-                warnings.warn("Connection reset. Reconnecting...", RuntimeWarning)
                 self._stats_service.increment(self.STAT_CONNECTION_RESET)
-                await self.__connect()
+                await self.__reconnect()
         self._stats_service.increment(self.STAT_REQUEST_SENT)
         return start_time
 
     async def __reconnect(self) -> None:
-        warnings.warn("Connection reset. Reconnecting...", RuntimeWarning)
+        warnings.warn(
+            f"Connection reset. Reconnecting to {self.__provider_url} "
+            f"and replaying {len(self.__pending)} requests.",
+            RuntimeWarning,
+        )
         self._stats_service.increment(self.STAT_RECONNECT)
         replays: List[Tuple[Future, Dict, int]] = list()
         try:
@@ -289,7 +293,7 @@ class RpcClient:
                 await asyncio.sleep(0)
                 second = floor(loop.time())
 
-            if self.__this_second <= second:
+            if self.__this_second < second:
                 self.__this_second = second
                 self.__requests_this_second = 0
 

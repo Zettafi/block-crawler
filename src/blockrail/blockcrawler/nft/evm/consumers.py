@@ -333,6 +333,8 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
 class CollectionToEverythingElseErc1155CollectionBasedConsumer(
     CollectionToEverythingElseCollectionBasedConsumerBaseClass
 ):
+    HEX_INT_ZERO = HexInt(0)
+
     def __init__(
         self,
         data_bus: DataBus,
@@ -563,10 +565,11 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                 token_id_=token_id,
             )
         if transaction_type in (TokenTransactionType.BURN, TokenTransactionType.TRANSFER):
+            zero = CollectionToEverythingElseErc1155CollectionBasedConsumer.HEX_INT_ZERO
             __add_token_quantity_to_owner(
                 token_owners_=token_owners,
                 collection_=collection,
-                quantity_=0 - quantity,
+                quantity_=zero - quantity,
                 address=from_address,
                 token_id_=token_id,
             )

@@ -1,7 +1,6 @@
 import asyncio
 import csv
 import dataclasses
-import gc
 import logging
 import math
 import os
@@ -12,7 +11,7 @@ from asyncio import CancelledError
 from datetime import datetime
 from logging import Logger
 from logging import StreamHandler
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import click
 
@@ -399,8 +398,9 @@ def tail(
 @click.option(
     "--evm-rpc-nodes",
     envvar="EVM_RPC_NODES",
-    help="One or more URIs to access the archive node EVM RPC HTTP server",
+    help="RPC Node URI and the number of connections",
     multiple=True,
+    type=click.Tuple([str, int]),
 )
 @click.option(
     "--rpc-requests-per-second",
@@ -455,7 +455,7 @@ def load(
     block_height: int,
     block_chunk_size: int,
     increment_data_version: bool,
-    evm_rpc_nodes: List[str],
+    evm_rpc_nodes: List[Tuple[str, int]],
     rpc_requests_per_second: Optional[int],
     dynamodb_timeout: float,
     dynamodb_endpoint_url: str,
@@ -473,14 +473,6 @@ def load(
     BLOCK_HEIGHT. Multiple runs will require the same data version and BLOCK_HEIGHT to
     ensure accurate data.
     """
-
-    async def garbage_collector():
-        try:
-            while True:
-                await asyncio.sleep(60)
-                gc.collect()
-        except CancelledError:
-            pass
 
     block_time_cache = MemoryBlockTimeCache()
     try:
@@ -501,12 +493,10 @@ def load(
     asyncio.set_event_loop(loop)
     start = time.perf_counter()
     fg = "red"
+    stats_task = loop.create_task(stats_writer.write_at_interval(60))
     try:
-        gc_task = loop.create_task(garbage_collector())
-        stats_task = loop.create_task(stats_writer.write_at_interval(60))
         loop.run_until_complete(
             load_evm_contracts_by_block(
-                # TODO: Pass function to process updates to block times
                 blockchain=blockchain,
                 starting_block=starting_block,
                 ending_block=ending_block,
@@ -527,11 +517,9 @@ def load(
             )
         )
         fg = "green"
-
     except KeyboardInterrupt:
         fg = "yellow"
     finally:
-        gc_task.cancel()
         stats_task.cancel()
         while loop.is_running():
             time.sleep(0.001)

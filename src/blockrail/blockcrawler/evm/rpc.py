@@ -15,7 +15,6 @@ from .types import (
 )
 from .util import Function
 from ..core.rpc import RpcClient, RpcServerError, RpcDecodeError
-from ..core.stats import StatsService
 
 
 class EthCall:
@@ -266,45 +265,9 @@ class ConnectionPoolingEvmRpcClient(EvmRpcClient):
     # noinspection PyMissingConstructor
     def __init__(
         self,
-        provider_url: str,
-        stats_service: StatsService,
-        requests_per_second: Optional[int] = None,
-        connection_pool_size=10,
+        pool: List[EvmRpcClient],
     ) -> None:
-        self.__pool: List[EvmRpcClient] = list()
-        for _ in range(connection_pool_size):
-            self.__pool.append(EvmRpcClient(provider_url, stats_service, requests_per_second))
-        self.__pool_length = len(self.__pool)
-        self.__pool_index = self.__pool_length
-
-    async def __aenter__(self):
-        for client in self.__pool:
-            await client.__aenter__()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        for client in self.__pool:
-            await client.__aexit__(exc_type, exc_val, exc_tb)
-
-    async def send(self, method, *params) -> Any:
-        self.__pool_index += 1
-        if self.__pool_index >= self.__pool_length:
-            self.__pool_index = 0
-        return await self.__pool[self.__pool_index].send(method, *params)
-
-
-class MultiProviderEvmRpcClient(EvmRpcClient):
-
-    # noinspection PyMissingConstructor
-    def __init__(
-        self,
-        provider_urls: List[str],
-        stats_service: StatsService,
-        requests_per_second: Optional[int] = None,
-    ) -> None:
-        self.__pool: List[EvmRpcClient] = list()
-        for provider_url in provider_urls:
-            self.__pool.append(EvmRpcClient(provider_url, stats_service, requests_per_second))
+        self.__pool = pool[:]
         self.__pool_length = len(self.__pool)
         self.__pool_index = self.__pool_length
 

@@ -5,14 +5,14 @@ from botocore.exceptions import ClientError
 
 from blockrail.blockcrawler.core.entities import BlockChain
 from blockrail.blockcrawler.core.stats import StatsService
+from blockrail.blockcrawler.evm.rpc import EvmRpcClient
 from blockrail.blockcrawler.nft.commands import get_block, get_data_version
-from blockrail.blockcrawler.evm.rpc import RpcClient
 from blockrail.blockcrawler.evm.types import HexInt
 
 
 class GetBlockCommandTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        patcher = patch("blockrail.blockcrawler.nft.commands.EvmRpcClient", spec=RpcClient)
+        patcher = patch("blockrail.blockcrawler.nft.commands.EvmRpcClient", spec=EvmRpcClient)
         self.addCleanup(patcher.stop)
         self.__rpc_client = patcher.start()
         self.__rpc_client.return_value.get_block_number = AsyncMock()

@@ -792,3 +792,63 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
 
         await self.__transformer.receive(self.__data_package)
         self.__data_service.write_token_owner_batch.assert_awaited_once_with(expected)
+
+    async def test_writes_token_owner_records_properly_for_burn_as_first_transfer(self):
+        self.__rpc_client.get_logs.return_value.__aiter__.return_value = [
+            EvmLog(
+                removed=False,
+                log_index=HexInt("0x10"),
+                transaction_index=HexInt("0x11"),
+                transaction_hash=HexBytes(b"thash1"),
+                block_hash=HexBytes(b"bhash1"),
+                block_number=HexInt("0x12"),
+                data=HexBytes(encode(["uint256[]", "uint256[]"], [[0x13], [10]])),
+                topics=[
+                    HexBytes(Erc1155Events.TRANSFER_BATCH.event_signature_hash),
+                    HexBytes(encode(["address"], ["0x0000000000000000000000000000000000000001"])),
+                    HexBytes(encode(["address"], ["0x0000000000000000000000000000000000000012"])),
+                    HexBytes(encode(["address"], ["0x0000000000000000000000000000000000000000"])),
+                ],
+                address=Address("contract"),
+            ),
+            EvmLog(
+                removed=False,
+                log_index=HexInt("0x10"),
+                transaction_index=HexInt("0x11"),
+                transaction_hash=HexBytes(b"thash1"),
+                block_hash=HexBytes(b"bhash1"),
+                block_number=HexInt("0x12"),
+                data=HexBytes(encode(["uint256[]", "uint256[]"], [[0x13], [20]])),
+                topics=[
+                    HexBytes(Erc1155Events.TRANSFER_BATCH.event_signature_hash),
+                    HexBytes(encode(["address"], ["0x0000000000000000000000000000000000000001"])),
+                    HexBytes(encode(["address"], ["0x0000000000000000000000000000000000000000"])),
+                    HexBytes(encode(["address"], ["0x0000000000000000000000000000000000000012"])),
+                ],
+                address=Address("contract"),
+            ),
+        ]
+
+        self.__block_time_service.get_block_timestamp.return_value = HexInt(0x99)
+        self.__token_transaction_type_oracle.type_from_log.side_effect = [
+            TokenTransactionType.BURN,
+            TokenTransactionType.MINT,
+        ]
+        expected = [
+            TokenOwner(
+                blockchain=self.__data_package.collection.blockchain,
+                collection_id=self.__data_package.collection.collection_id,
+                token_id=HexInt(0x13),
+                account=Address("0x0000000000000000000000000000000000000012"),
+                quantity=HexInt(10),
+                data_version=self.__data_package.collection.data_version,
+            ),
+        ]
+
+        await self.__transformer.receive(self.__data_package)
+        self.__data_service.write_token_owner_batch.assert_awaited_once_with(expected)
+        self.assertIsInstance(
+            self.__data_service.write_token_owner_batch.call_args.args[0][0].quantity,
+            HexInt,
+            "TokenOwner.quantity must be a HexInt",
+        )

@@ -2,7 +2,7 @@ import asyncio
 import datetime
 import time
 from logging import Logger
-from typing import Union, Dict, cast, Optional, List, Iterable
+from typing import Union, Dict, cast, Optional, List, Iterable, Tuple
 
 import aioboto3
 from botocore.config import Config
@@ -39,7 +39,7 @@ from ..core.stats import StatsService
 from ..core.storage_clients import S3StorageClient, StorageClientContext
 from ..data.models import BlockCrawlerConfig, Tokens
 from ..evm.producers import BlockIDProducer
-from ..evm.rpc import EvmRpcClient, MultiProviderEvmRpcClient
+from ..evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient
 from ..evm.transformers import (
     BlockIdToEvmBlockTransformer,
     EvmBlockToEvmTransactionHashTransformer,
@@ -405,7 +405,7 @@ async def load_evm_contracts_by_block(
     logger: Logger,
     stats_service: StatsService,
     block_time_cache: BlockTimeCache,
-    archive_nodes: List[str],
+    archive_nodes: List[Tuple[str, int]],
     rpc_requests_per_second: Optional[int],
     blockchain: BlockChain,
     dynamodb_endpoint_url: Optional[str],
@@ -436,9 +436,11 @@ async def load_evm_contracts_by_block(
             dynamodb, blockchain, increment_data_version, table_prefix
         )
 
-        async with MultiProviderEvmRpcClient(
-            archive_nodes, stats_service, rpc_requests_per_second
-        ) as rpc_client:
+        rpc_clients: List[EvmRpcClient] = list()
+        for (uri, instances) in archive_nodes:
+            for _ in range(instances):
+                rpc_clients.append(EvmRpcClient(uri, stats_service, rpc_requests_per_second))
+        async with ConnectionPoolingEvmRpcClient(rpc_clients) as rpc_client:
             data_bus = ParallelDataBus(logger)
             block_time_service = BlockTimeService(block_time_cache, rpc_client)
 

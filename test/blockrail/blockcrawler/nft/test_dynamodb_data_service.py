@@ -91,6 +91,42 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             ConditionExpression=ANY,
         )
 
+    async def test_write_collection_truncates_name_short_to_1024_chars(self):
+        blockchain = Mock(BlockChain)
+        blockchain.value = "Expected Blockchain"
+        collection_type = "Expected Collection Type"
+        collection = Collection(
+            blockchain=blockchain,
+            collection_id=Address("Collection Address"),
+            block_created=HexInt("0x1"),
+            date_created=HexInt("0x1234"),
+            creator=Address("Creator"),
+            owner=Address("Owner"),
+            name="abcdefgh" * 200,
+            symbol="Symbol",
+            total_supply=HexInt("0x100"),
+            specification=CollectionType(collection_type),
+            data_version=999,
+        )
+        await self.__data_service.write_collection(collection)
+        self.__table_resource.put_item.assert_awaited_once_with(
+            Item={
+                "blockchain": ANY,
+                "collection_id": ANY,
+                "block_created": ANY,
+                "creator": ANY,
+                "owner": ANY,
+                "date_created": ANY,
+                "name": ANY,
+                "name_lower": "abcdefgh" * 128,
+                "symbol": ANY,
+                "total_supply": ANY,
+                "specification": ANY,
+                "data_version": ANY,
+            },
+            ConditionExpression=ANY,
+        )
+
     async def test_write_collection_uses_the_correct_conditional_expression_and_attrs(self):
         collection = Collection(
             blockchain=BlockChain.ETHEREUM_MAINNET,

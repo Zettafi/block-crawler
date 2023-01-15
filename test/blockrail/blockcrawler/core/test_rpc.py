@@ -69,10 +69,10 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                 expected, max_msg_size=ANY
             )
 
-    async def test_connects_with_10_mb_max_message_size(self):
+    async def test_connects_with_100_mb_max_message_size(self):
         async with RpcClient("", self._stats_service):
             self._aiohttp_client_session.ws_connect.assert_awaited_once_with(
-                ANY, max_msg_size=10 * 1024 * 1024
+                ANY, max_msg_size=100 * 1024 * 1024
             )
 
     async def test_sends_expected_params_with_request_when_no_params(self):
@@ -270,7 +270,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
         self._ws.receive_json.side_effect = side_effect
 
         with self.assertWarnsRegex(
-            Warning, "Received too many request from RPC API. Retrying in 0.1 seconds."
+            Warning, "Received too many request from RPC API. Retrying in 1.0 seconds."
         ):
             async with RpcClient("", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")

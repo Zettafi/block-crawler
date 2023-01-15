@@ -56,7 +56,7 @@ class DynamoDbDataService(DataService):
                 item["owner"] = collection.owner
             if collection.name is not None and len(collection.name) > 0:
                 item["name"] = collection.name
-                item["name_lower"] = collection.name.lower()
+                item["name_lower"] = collection.name.lower()[:1024]
             if collection.symbol is not None:
                 item["symbol"] = collection.symbol
 
