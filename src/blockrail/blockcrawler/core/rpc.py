@@ -213,10 +213,12 @@ class RpcClient:
                 except CancelledError:
                     raise
                 except Exception as e:
-                    warnings.warn("An error occurred processing the transport response", source=e)
+                    warnings.warn(
+                        f"An error occurred processing the transport response -- {e}", source=e
+                    )
 
             if wse := self.__ws.exception():  # Exception means implicit close due to error
-                warnings.warn(f"Web Socket exception received: {wse}")
+                warnings.warn(f"Web Socket exception received: {wse}", source=wse)
                 await self.__reconnect()
             else:  # No exception should mean explicit connection close
                 running = False
@@ -249,7 +251,7 @@ class RpcClient:
 
     async def __reconnect(self) -> None:
         warnings.warn(
-            f"Connection reset. Reconnecting to {self.__provider_url} "
+            f"Reconnecting to {self.__provider_url} "
             f"and replaying {len(self.__pending)} requests.",
             RuntimeWarning,
         )
