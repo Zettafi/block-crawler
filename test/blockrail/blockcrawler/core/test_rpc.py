@@ -1,10 +1,12 @@
 import asyncio
 import time
 import unittest
+import warnings
 from typing import Optional
 from unittest.mock import patch, AsyncMock, ANY, Mock, call, MagicMock
 
 import ddt
+from aiohttp import ClientError
 
 from blockrail.blockcrawler.core.rpc import RpcClient
 from blockrail.blockcrawler.core.stats import StatsService
@@ -270,9 +272,9 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
         self._ws.receive_json.side_effect = side_effect
 
         with self.assertWarnsRegex(
-            Warning, "Received too many request from RPC API. Retrying in 1.0 seconds."
+            Warning, "Received too many request from RPC API URI. Retrying in 1.0 seconds."
         ):
-            async with RpcClient("", self._stats_service) as rpc_client:
+            async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
                 self._ws.send_json.assert_has_calls(
                     [
@@ -310,13 +312,48 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
         self._ws.receive_json.side_effect = side_effect
 
         with self.assertWarnsRegex(
-            Warning, "Received too many request from RPC API. Retrying in 0.0 seconds."
+            Warning, "Received too many request from RPC API URI. Retrying in 0.0 seconds."
         ):
-            async with RpcClient("", self._stats_service) as rpc_client:
+            async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
                 self._ws.send_json.assert_has_calls(
                     [
                         call(dict(jsonrpc=ANY, method="hello", params=tuple(), id=ANY)),
                         call(dict(jsonrpc=ANY, method="hello", params=tuple(), id=ANY)),
                     ]
+                )
+
+    async def test_reconnect(self):
+
+        errored = False
+
+        async def send_json_side_effect(request):
+            nonlocal errored
+            if not errored:
+                errored = True
+                raise ConnectionResetError()
+            else:
+                return await self._ws_feedback_loop(request)
+
+        connected = False
+        connection_errored = False
+
+        async def ws_connect_side_effect(url, max_msg_size):
+            nonlocal connected, connection_errored
+            if not connected:
+                connected = True
+            elif not connection_errored:
+                connection_errored = True
+                raise ClientError()
+
+            return await self._open(url, max_msg_size)
+
+        self._aiohttp_client_session.ws_connect.side_effect = ws_connect_side_effect
+        self._ws.send_json.side_effect = send_json_side_effect
+        with warnings.catch_warnings(record=True) as w:
+            async with RpcClient("URI", self._stats_service) as rpc_client:
+                await rpc_client.send("hello")
+                self.assertRegex(
+                    str(w[1].message),
+                    r"Error connecting: ClientError\(\)\. Waiting .* to reconnect",
                 )

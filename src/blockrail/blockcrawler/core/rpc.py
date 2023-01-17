@@ -1,4 +1,5 @@
 import asyncio
+import random
 import re
 import time
 import warnings
@@ -8,6 +9,7 @@ from re import Pattern
 from typing import Dict, List, Optional, Any, Tuple
 
 import aiohttp
+from aiohttp import ClientError
 
 from blockrail.blockcrawler.core.stats import StatsService
 
@@ -107,16 +109,29 @@ class RpcClient:
         self.__requests_this_second: int = 0
 
     async def __aenter__(self):
-        self.__client = aiohttp.ClientSession()
         await self.__connect()
         self.__context_manager_running = True
         return self
 
-    async def __connect(self):
-        self._stats_service.increment(self.STAT_CONNECT)
-        self.__ws = await self.__client.ws_connect(
-            self.__provider_url, max_msg_size=100 * 1024 * 1024
-        )
+    async def __connect(self, retry=False):
+        connect_attempts = 0
+        while True:
+            self._stats_service.increment(self.STAT_CONNECT)
+            try:
+                self.__client = aiohttp.ClientSession()
+                self.__ws = await self.__client.ws_connect(
+                    self.__provider_url, max_msg_size=100 * 1024 * 1024
+                )
+                break
+            except ClientError as e:
+                if not retry:
+                    raise
+                wait = random.randint(0, 100) * 2**connect_attempts / 100
+                await asyncio.sleep(wait)
+                warnings.warn(
+                    f"Error connecting: {repr(e)}. Waiting {wait}s to reconnect", RuntimeWarning
+                )
+                connect_attempts += 1
 
         self.__inbound_loop_task = asyncio.create_task(self.__inbound_loop(), name="inbound")
 
@@ -125,103 +140,99 @@ class RpcClient:
         self.__context_manager_running = False
 
     async def __inbound_loop(self):
-        running = True
         loop = asyncio.get_running_loop()
         self.__reconnected = False
-        while running:
-            while not self.__ws.closed:
+        while not self.__ws.closed:
+            try:
+                response = await self.__ws.receive_json()
+                if "id" not in response:
+                    warnings.warn(f'Response received without "id" attribute -- {response}')
+                    continue
+
                 try:
-                    response = await self.__ws.receive_json()
-                    if "id" not in response:
-                        warnings.warn(f'Response received without "id" attribute -- {response}')
-                        continue
-
-                    try:
-                        future, request, start_time = self.__pending.pop(response["id"])
-                        end_time = time.perf_counter_ns()
-                        duration = int((end_time - start_time) / 1_000_000)
-                        self._stats_service.increment(self.STAT_REQUEST_MS, duration)
-                        self._stats_service.increment(
-                            f"{self.STAT_REQUEST_MS}.{request['method']}", duration
-                        )
-                    except KeyError:
-                        self._stats_service.increment(self.STAT_RESPONSE_UNKNOWN_ID)
-                        warnings.warn(f"Response received for unknown id -- {response}")
-                        continue
-
-                    self._stats_service.increment(self.STAT_RESPONSE_RECEIVED)
-                    if "error" in response:
-                        try:
-                            if response["error"][
-                                "code"
-                            ] in TOO_MANY_REQUESTS_ERROR_CODES and TOO_MANY_REQUESTS_ERROR_CODES[
-                                response["error"]["code"]
-                            ].match(
-                                response["error"]["message"]
-                            ):
-
-                                if (
-                                    "data" in response["error"]
-                                    and "backoff_seconds" in response["error"]["data"]
-                                ):
-                                    backoff_seconds = float(
-                                        response["error"]["data"]["backoff_seconds"]
-                                    )
-                                else:
-                                    backoff_seconds = 1.0
-
-                                warnings.warn(
-                                    f"Received too many request from RPC API. "
-                                    f"Retrying in {backoff_seconds} seconds."
-                                )
-                                self._stats_service.increment(self.STAT_RESPONSE_TOO_MANY_REQUESTS)
-                                self.__paused_for_too_many_requests = request["id"]
-                                loop.create_task(
-                                    self.__replay_to_many_requests_request(
-                                        backoff_seconds, future, request
-                                    )
-                                )
-
-                            else:
-                                future.set_exception(
-                                    RpcServerError(
-                                        response["jsonrpc"],
-                                        response["id"],
-                                        response["error"]["code"],
-                                        response["error"]["message"],
-                                    )
-                                )
-                        except KeyError as e:
-                            warnings.warn(
-                                f"Invalid error response received:"
-                                f" Missing Key {e} -- {response}"
-                            )
-                    elif "result" in response:
-                        future.set_result(response["result"])
-                    else:
-                        self._stats_service.increment(self.STAT_RESPONSE_UNKNOWN_FORMAT)
-                        future.set_exception(
-                            RpcError(f"No result or error in response: {response}")
-                        )
-
-                except TypeError:  # This is for an idiosyncrasy in the ws client
-                    pass
-                except ConnectionResetError:
-                    self._stats_service.increment(self.STAT_CONNECTION_RESET)
-                    await self.__reconnect()
-                    break
-                except CancelledError:
-                    raise
-                except Exception as e:
-                    warnings.warn(
-                        f"An error occurred processing the transport response -- {e}", source=e
+                    future, request, start_time = self.__pending.pop(response["id"])
+                    end_time = time.perf_counter_ns()
+                    duration = int((end_time - start_time) / 1_000_000)
+                    self._stats_service.increment(self.STAT_REQUEST_MS, duration)
+                    self._stats_service.increment(
+                        f"{self.STAT_REQUEST_MS}.{request['method']}", duration
                     )
+                except KeyError:
+                    self._stats_service.increment(self.STAT_RESPONSE_UNKNOWN_ID)
+                    warnings.warn(f"Response received for unknown id -- {response}")
+                    continue
 
-            if wse := self.__ws.exception():  # Exception means implicit close due to error
-                warnings.warn(f"Web Socket exception received: {wse}", source=wse)
-                await self.__reconnect()
-            else:  # No exception should mean explicit connection close
-                running = False
+                self._stats_service.increment(self.STAT_RESPONSE_RECEIVED)
+                if "error" in response:
+                    try:
+                        if response["error"][
+                            "code"
+                        ] in TOO_MANY_REQUESTS_ERROR_CODES and TOO_MANY_REQUESTS_ERROR_CODES[
+                            response["error"]["code"]
+                        ].match(
+                            response["error"]["message"]
+                        ):
+
+                            if (
+                                "data" in response["error"]
+                                and "backoff_seconds" in response["error"]["data"]
+                            ):
+                                backoff_seconds = float(
+                                    response["error"]["data"]["backoff_seconds"]
+                                )
+                            else:
+                                backoff_seconds = 1.0
+
+                            warnings.warn(
+                                f"Received too many request from RPC API {self.__provider_url}. "
+                                f"Retrying in {backoff_seconds} seconds."
+                            )
+                            self._stats_service.increment(self.STAT_RESPONSE_TOO_MANY_REQUESTS)
+                            self.__paused_for_too_many_requests = request["id"]
+                            loop.create_task(
+                                self.__replay_to_many_requests_request(
+                                    backoff_seconds, future, request
+                                )
+                            )
+
+                        else:
+                            future.set_exception(
+                                RpcServerError(
+                                    response["jsonrpc"],
+                                    response["id"],
+                                    response["error"]["code"],
+                                    response["error"]["message"],
+                                )
+                            )
+                    except KeyError as e:
+                        warnings.warn(
+                            f"Invalid error response received:" f" Missing Key {e} -- {response}"
+                        )
+                elif "result" in response:
+                    future.set_result(response["result"])
+                else:
+                    self._stats_service.increment(self.STAT_RESPONSE_UNKNOWN_FORMAT)
+                    future.set_exception(RpcError(f"No result or error in response: {response}"))
+
+            except TypeError:  # This is for an idiosyncrasy in the ws client
+                pass
+            except ConnectionResetError:
+                self._stats_service.increment(self.STAT_CONNECTION_RESET)
+                asyncio.create_task(self.__reconnect())
+                self.__reconnected = True
+                break
+            except CancelledError:
+                raise
+            except Exception as e:
+                warnings.warn(
+                    f"An error occurred processing the transport response -- {repr(e)}", source=e
+                )
+
+        if wse := self.__ws.exception():  # Exception means implicit close due to error
+            warnings.warn(f"Web Socket exception received: {repr(wse)}", source=wse)
+            asyncio.create_task(self.__reconnect())
+            self.__reconnected = True
+
         if not self.__reconnected:
             for _, (future, _) in self.__pending.items():
                 self._stats_service.increment(self.STAT_ORPHANED_REQUESTS)
@@ -263,12 +274,12 @@ class RpcClient:
                 replays.append(value)
         except KeyError:
             pass
-        await self.__connect()
+        await self.__client.close()
+        await self.__connect(retry=True)
         for future, request, _old_start_time in replays:
             start_time = await self.__send_json(request)
             self.__pending[request["id"]] = (future, request, start_time)
             await asyncio.sleep(0)  # Ensure replaying doesn't stop all other processing
-        self.__reconnected = True
 
     def __get_rpc_request(self, method, params) -> Dict[str, Any]:
         self.__nonce += 1
