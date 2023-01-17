@@ -1,13 +1,14 @@
 import asyncio
 import time
 import unittest
-import warnings
+from logging import INFO
 from typing import Optional
 from unittest.mock import patch, AsyncMock, ANY, Mock, call, MagicMock
 
 import ddt
 from aiohttp import ClientError
 
+from blockrail.blockcrawler import LOGGER_NAME
 from blockrail.blockcrawler.core.rpc import RpcClient
 from blockrail.blockcrawler.core.stats import StatsService
 
@@ -157,20 +158,28 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
         self._ws.receive_json.side_effect = respond
         self._ws.send_json.side_effect = None  # Turn off automatic adding of ID1
-        with self.assertWarnsRegex(Warning, 'Response received without "id" attribute'):
+        with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("", self._stats_service):
                 await asyncio.sleep(0)
                 await asyncio.sleep(0)
 
             self._ws.receive_json.assert_awaited()
+            self.assertIn(
+                f'ERROR:{LOGGER_NAME}:Response received without "id" attribute -- {{}}', cm.output
+            )
 
     async def test_warns_on_transport_responses_with_an_unknown_id(self):
         self._ws.send_json.side_effect = None
         self._ws_response = dict(id="9999", result=1)
-        with self.assertWarnsRegex(Warning, "Response received for unknown id"):
+        with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("", self._stats_service):
                 await asyncio.sleep(0)
             self._ws.receive_json.assert_awaited()
+            self.assertIn(
+                f"ERROR:{LOGGER_NAME}:Response received "
+                f"for unknown id -- {{'id': '9999', 'result': 1}}",
+                cm.output,
+            )
 
     async def test_handles_transport_closed_in_inbound_loop(self):
         closed = False
@@ -185,7 +194,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
         self._ws.send_json.side_effect = side_effect
 
-        with self.assertWarnsRegex(Warning, "Reconnecting to URI and replaying 1 requests."):
+        with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
                 self.assertEqual(
@@ -197,6 +206,9 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                         call(dict(jsonrpc=ANY, method="hello", params=tuple(), id=ANY)),
                     ]
                 )
+            self.assertIn(
+                f"INFO:{LOGGER_NAME}:Reconnecting to URI and replaying 1 requests.", cm.output
+            )
 
     async def test_handles_connection_reset_from_send_json(self):
         errored = False
@@ -210,7 +222,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                 return await self._ws_feedback_loop(request)
 
         self._ws.send_json.side_effect = side_effect
-        with self.assertWarnsRegex(Warning, "Reconnecting to URI and replaying 0 requests."):
+        with self.assertLogs(LOGGER_NAME, INFO):
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 self._ws = new_ws = AsyncMock()
                 new_ws.send_json.side_effect = self._ws_feedback_loop
@@ -235,7 +247,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                 return await self._ws_response_json()
 
         self._ws.receive_json.side_effect = side_effect
-        with self.assertWarnsRegex(Warning, "Reconnecting to URI and replaying 1 requests."):
+        with self.assertLogs(LOGGER_NAME, INFO):
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 self._ws = self._get_ws_mock()
                 await rpc_client.send("hello")
@@ -271,9 +283,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
         self._ws.receive_json.side_effect = side_effect
 
-        with self.assertWarnsRegex(
-            Warning, "Received too many request from RPC API URI. Retrying in 1.0 seconds."
-        ):
+        with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
                 self._ws.send_json.assert_has_calls(
@@ -281,6 +291,11 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                         call(dict(jsonrpc=ANY, method="hello", params=tuple(), id=ANY)),
                         call(dict(jsonrpc=ANY, method="hello", params=tuple(), id=ANY)),
                     ]
+                )
+                self.assertIn(
+                    f"WARNING:{LOGGER_NAME}:Received too many request from "
+                    f"RPC API URI. Retrying in 1.0 seconds.",
+                    cm.output,
                 )
 
     async def test_handles_throttling_with_32005_error_and_backoff(self):
@@ -311,9 +326,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
         self._ws.receive_json.side_effect = side_effect
 
-        with self.assertWarnsRegex(
-            Warning, "Received too many request from RPC API URI. Retrying in 0.0 seconds."
-        ):
+        with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
                 self._ws.send_json.assert_has_calls(
@@ -322,8 +335,14 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                         call(dict(jsonrpc=ANY, method="hello", params=tuple(), id=ANY)),
                     ]
                 )
+            self.assertIn(
+                f"WARNING:{LOGGER_NAME}:Received too many request from RPC API URI. "
+                f"Retrying in 0.0 seconds.",
+                cm.output,
+            )
 
-    async def test_reconnect(self):
+    @patch("random.randint")
+    async def test_reconnect(self, randint):
 
         errored = False
 
@@ -350,10 +369,11 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
         self._aiohttp_client_session.ws_connect.side_effect = ws_connect_side_effect
         self._ws.send_json.side_effect = send_json_side_effect
-        with warnings.catch_warnings(record=True) as w:
+        randint.return_value = 50
+        with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
-                self.assertRegex(
-                    str(w[1].message),
-                    r"Error connecting: ClientError\(\)\. Waiting .* to reconnect",
-                )
+            self.assertIn(
+                f"ERROR:{LOGGER_NAME}:Error connecting: ClientError(). Waiting 0.5s to reconnect",
+                cm.output,
+            )

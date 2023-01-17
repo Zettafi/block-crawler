@@ -8,13 +8,13 @@ import pathlib
 import sys
 import time
 from asyncio import CancelledError
-from datetime import datetime
-from logging import Logger
 from logging import StreamHandler
+from logging.handlers import TimedRotatingFileHandler
 from typing import Optional, List, Tuple
 
 import click
 
+from blockrail.blockcrawler import LOGGER_NAME
 from blockrail.blockcrawler.core.click import BlockChainParamType
 from blockrail.blockcrawler.core.entities import BlockChain
 from blockrail.blockcrawler.core.rpc import RpcClient
@@ -174,7 +174,7 @@ def crawl(
     ENDING_BLOCK , parse the data we want to collect and put that data in the database
     """
     log_handler = StreamHandler(sys.stdout)
-    logger = Logger("block_crawler")
+    logger = logging.getLogger(LOGGER_NAME)
     logger.addHandler(log_handler)
     logger.setLevel(logging.DEBUG if debug else logging.INFO)
     stats_service = StatsService()
@@ -340,7 +340,7 @@ def tail(
     and store that data in the database
     """
     log_handler = StreamHandler(sys.stdout)
-    logger = Logger("block_crawler")
+    logger = logging.getLogger("block_crawler")
     logger.setLevel(logging.DEBUG if debug else logging.INFO)
     logger.addHandler(log_handler)
     stats_service = StatsService()
@@ -442,6 +442,13 @@ def tail(
     "from which the command was run.",
 )
 @click.option(
+    "--log-file",
+    envvar="LOG_FILE",
+    type=click.Path(file_okay=True, dir_okay=False, allow_dash=False, path_type=pathlib.Path),
+    multiple=True,
+    help="Location and filename for a log.",
+)
+@click.option(
     "--debug/--no-debug",
     envvar="DEBUG",
     default=False,
@@ -463,6 +470,7 @@ def load(
     table_prefix: str,
     dynamodb_parallel_batches: int,
     block_time_cache_filename: pathlib.Path,
+    log_file: List[pathlib.Path],
     debug: bool,
 ):
     """
@@ -473,26 +481,29 @@ def load(
     BLOCK_HEIGHT. Multiple runs will require the same data version and BLOCK_HEIGHT to
     ensure accurate data.
     """
+    logger = logging.getLogger(LOGGER_NAME)
+    handlers: List[logging.Handler] = [StreamHandler()]
+    for filename in log_file:
+        handlers.append(TimedRotatingFileHandler(filename, when="D"))
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
+    logging.basicConfig(format="%(asctime)s %(message)s", handlers=handlers)
 
+    logger.info(f"Loading block time cache from file {block_time_cache_filename}")
     block_time_cache = MemoryBlockTimeCache()
     try:
         with open(block_time_cache_filename, "r") as file:
             for block_id, timestamp in csv.reader(file):
                 block_time_cache.set_sync(int(block_id), int(timestamp))
+        logger.info(f"Loaded block time cache from file {block_time_cache_filename}")
     except FileNotFoundError:
-        pass
+        logger.warning(f"File {block_time_cache_filename} does not exist.")
 
-    log_handler = StreamHandler(sys.stdout)
-    logger = Logger("block_crawler")
-    logger.addHandler(log_handler)
-    logger.setLevel(logging.DEBUG if debug else logging.INFO)
     stats_service = StatsService()
     block_bound_tracker = BlockBoundTracker()
     stats_writer = StatsWriter(stats_service, block_bound_tracker)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     start = time.perf_counter()
-    fg = "red"
     stats_task = loop.create_task(stats_writer.write_at_interval(60))
     try:
         loop.run_until_complete(
@@ -516,18 +527,19 @@ def load(
                 block_bound_tracker=block_bound_tracker,
             )
         )
-        fg = "green"
     except KeyboardInterrupt:
-        fg = "yellow"
+        logger.info("Processing interrupted by user!")
     finally:
         stats_task.cancel()
         while loop.is_running():
             time.sleep(0.001)
 
+        logger.info(f"Saving block time cache to file {block_time_cache_filename}")
         with open(block_time_cache_filename, "w+") as file:
             csv_writer = csv.writer(file)
             for row in block_time_cache:
                 csv_writer.writerow(row)
+        logger.info(f"Saved block time cache to file {block_time_cache_filename}")
 
         end = time.perf_counter()
         runtime = end - start
@@ -536,10 +548,10 @@ def load(
         mins = all_mins % 60
         hours = math.floor(all_mins / 60)
         stats_writer.write_line()
-        click.secho(f"Total Time: {hours}:{mins:02}:{secs:05.2F}", fg=fg)
-        click.secho(
-            f"Blocks {starting_block:,} to {ending_block:,}" f" at block height {block_height:,}",
-            fg=fg,
+        logger.info(
+            f"Total Time: {hours}:{mins:02}:{secs:05.2F}"
+            f" -- Blocks {starting_block:,} to {ending_block:,}"
+            f" at block height {block_height:,}"
         )
 
 
@@ -630,28 +642,27 @@ class StatsWriter:
         owner_count = self.__stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH)
         owner_ms = self.__stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH_MS)
         owner_ms_avg = self.__safe_average(owner_count, owner_ms)
-        print(
-            f"{datetime.utcnow():%Y-%m-%dT%H:%M:%S}",
-            f"Blocks [{self.__block_bound_tracker.low:,}:{self.__block_bound_tracker.high:,}]",
-            "--",
-            f"RPC Conn ["
+        logging.getLogger(LOGGER_NAME).info(
+            f"Blocks [{self.__block_bound_tracker.low:,}:{self.__block_bound_tracker.high:,}]"
+            f" -- "
+            f"Conn ["
             f"C:{rpc_connect:,} "
             f"X:{rpc_reconnect:,} "
             f"R:{rpc_connection_reset:,}"
-            f"]",
-            f"RPC Req ["
+            f"]"
+            f" RPC ["
             f"S:{rpc_sent:,} "
             f"D:{rpc_delayed:,} "
             f"T:{rpc_throttled:,} "
             f"R:{rpc_received:,}/{rpc_request_ms_avg:,.0F}"
-            f"]",
-            "--",
-            f"Data Write ["
+            f"]"
+            f" -- "
+            f"Write ["
             f"C:{collection_count:,}/{collection_ms_avg :,.0F} "
             f"T:{token_count :,}/{token_ms_avg :,.0F} "
             f"X:{transfer_count:,}/{transfer_ms_avg :,.0F} "
             f"O:{owner_count:,}/{owner_ms_avg :,.0F}"
-            f"]",
+            f"]"
         )
 
     async def write_at_interval(self, interval: int):

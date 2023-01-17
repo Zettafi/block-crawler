@@ -1,8 +1,8 @@
 import asyncio
+import logging
 import random
 import re
 import time
-import warnings
 from asyncio import Future, Task, CancelledError
 from math import floor
 from re import Pattern
@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Any, Tuple
 import aiohttp
 from aiohttp import ClientError
 
+from blockrail.blockcrawler import LOGGER_NAME
 from blockrail.blockcrawler.core.stats import StatsService
 
 TOO_MANY_REQUESTS_ERROR_CODES: Dict[int, Pattern] = {
@@ -107,6 +108,7 @@ class RpcClient:
         self.__paused_for_too_many_requests: Optional[str] = None
         self.__this_second: int = 0
         self.__requests_this_second: int = 0
+        self.__logger = logging.getLogger(LOGGER_NAME)
 
     async def __aenter__(self):
         await self.__connect()
@@ -128,9 +130,7 @@ class RpcClient:
                     raise
                 wait = random.randint(0, 100) * 2**connect_attempts / 100
                 await asyncio.sleep(wait)
-                warnings.warn(
-                    f"Error connecting: {repr(e)}. Waiting {wait}s to reconnect", RuntimeWarning
-                )
+                self.__logger.error(f"Error connecting: {repr(e)}. Waiting {wait}s to reconnect")
                 connect_attempts += 1
 
         self.__inbound_loop_task = asyncio.create_task(self.__inbound_loop(), name="inbound")
@@ -146,7 +146,7 @@ class RpcClient:
             try:
                 response = await self.__ws.receive_json()
                 if "id" not in response:
-                    warnings.warn(f'Response received without "id" attribute -- {response}')
+                    self.__logger.error(f'Response received without "id" attribute -- {response}')
                     continue
 
                 try:
@@ -159,7 +159,7 @@ class RpcClient:
                     )
                 except KeyError:
                     self._stats_service.increment(self.STAT_RESPONSE_UNKNOWN_ID)
-                    warnings.warn(f"Response received for unknown id -- {response}")
+                    self.__logger.error(f"Response received for unknown id -- {response}")
                     continue
 
                 self._stats_service.increment(self.STAT_RESPONSE_RECEIVED)
@@ -183,7 +183,7 @@ class RpcClient:
                             else:
                                 backoff_seconds = 1.0
 
-                            warnings.warn(
+                            self.__logger.warning(
                                 f"Received too many request from RPC API {self.__provider_url}. "
                                 f"Retrying in {backoff_seconds} seconds."
                             )
@@ -205,7 +205,7 @@ class RpcClient:
                                 )
                             )
                     except KeyError as e:
-                        warnings.warn(
+                        self.__logger.error(
                             f"Invalid error response received:" f" Missing Key {e} -- {response}"
                         )
                 elif "result" in response:
@@ -224,17 +224,17 @@ class RpcClient:
             except CancelledError:
                 raise
             except Exception as e:
-                warnings.warn(
-                    f"An error occurred processing the transport response -- {repr(e)}", source=e
+                self.__logger.exception(
+                    f"An error occurred processing the transport response -- {repr(e)}"
                 )
 
         if wse := self.__ws.exception():  # Exception means implicit close due to error
-            warnings.warn(f"Web Socket exception received: {repr(wse)}", source=wse)
+            self.__logger.error(f"Web Socket exception received: {repr(wse)}")
             asyncio.create_task(self.__reconnect())
             self.__reconnected = True
 
         if not self.__reconnected:
-            for _, (future, _) in self.__pending.items():
+            for _, (future, _, _) in self.__pending.items():
                 self._stats_service.increment(self.STAT_ORPHANED_REQUESTS)
                 future.set_exception(RpcError("Transport closed before response received"))
 
@@ -261,10 +261,9 @@ class RpcClient:
         return start_time
 
     async def __reconnect(self) -> None:
-        warnings.warn(
+        self.__logger.info(
             f"Reconnecting to {self.__provider_url} "
             f"and replaying {len(self.__pending)} requests.",
-            RuntimeWarning,
         )
         self._stats_service.increment(self.STAT_RECONNECT)
         replays: List[Tuple[Future, Dict, int]] = list()
