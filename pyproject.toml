@@ -50,3 +50,14 @@ precision = 2
 
 [tool.black]
 line-length=100
+
+
+[tool.mypy]
+python_version = 3.8
+
+[[tool.mypy.overrides]]
+module = [
+    "mypy-ddt",
+    "mypy-boto3.*"
+]
+ignore_missing_imports = true
