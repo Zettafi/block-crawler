@@ -28,6 +28,10 @@ class RpcTransportError(RpcError):
     pass
 
 
+class RpcClientError(RpcError):
+    pass
+
+
 class RpcDecodeError(RpcError):
     pass
 
@@ -323,8 +327,9 @@ class RpcClient:
 
     async def send(self, method, *params) -> Any:
         if not self.__context_manager_running or not self.__ws:
-            raise RpcError("Requests must be sent using a context manager instance!")
-
+            raise RpcClientError("Requests must be sent using a context manager instance!")
+        if not self.__inbound_loop_task or self.__inbound_loop_task.done():
+            raise RpcClientError("No inbound processing loop to react to response for request!")
         request = self.__get_rpc_request(method, params)
         start_time = await self.__send_json(request)
         self._stats_service.increment(f"{self.STAT_REQUEST_SENT}.{method}")

@@ -1,7 +1,7 @@
 import asyncio
 import time
 import unittest
-from logging import INFO
+from logging import INFO, DEBUG
 from typing import Optional
 from unittest.mock import patch, AsyncMock, ANY, Mock, call, MagicMock
 
@@ -9,7 +9,7 @@ import ddt
 from aiohttp import ClientError
 
 from blockrail.blockcrawler import LOGGER_NAME
-from blockrail.blockcrawler.core.rpc import RpcClient
+from blockrail.blockcrawler.core.rpc import RpcClient, RpcClientError
 from blockrail.blockcrawler.core.stats import StatsService
 
 
@@ -283,7 +283,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
         self._ws.receive_json.side_effect = side_effect
 
-        with self.assertLogs(LOGGER_NAME) as cm:
+        with self.assertLogs(LOGGER_NAME, DEBUG) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
                 self._ws.send_json.assert_has_calls(
@@ -293,7 +293,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                     ]
                 )
                 self.assertIn(
-                    f"WARNING:{LOGGER_NAME}:Received too many request from "
+                    f"DEBUG:{LOGGER_NAME}:Received too many request from "
                     f"RPC API URI. Retrying in 1.0 seconds.",
                     cm.output,
                 )
@@ -326,7 +326,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
         self._ws.receive_json.side_effect = side_effect
 
-        with self.assertLogs(LOGGER_NAME) as cm:
+        with self.assertLogs(LOGGER_NAME, DEBUG) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
                 self._ws.send_json.assert_has_calls(
@@ -336,7 +336,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                     ]
                 )
             self.assertIn(
-                f"WARNING:{LOGGER_NAME}:Received too many request from RPC API URI. "
+                f"DEBUG:{LOGGER_NAME}:Received too many request from RPC API URI. "
                 f"Retrying in 0.0 seconds.",
                 cm.output,
             )
@@ -377,3 +377,13 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                 f"ERROR:{LOGGER_NAME}:Error connecting: ClientError(). Waiting 0.5s to reconnect",
                 cm.output,
             )
+
+    async def test_unhandled_exception_in_inbound_loop_raises_rpc_error_on_subsequent_send(self):
+        self._ws.receive_json.side_effect = Exception
+        with self.assertRaisesRegex(
+            RpcClientError, "No inbound processing loop to react to response for request!"
+        ):
+            rpc_client = RpcClient("URI", self._stats_service)
+            async with rpc_client:
+                await asyncio.sleep(0)
+                await rpc_client.send("hello")

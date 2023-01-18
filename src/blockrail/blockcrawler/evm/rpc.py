@@ -1,3 +1,4 @@
+import logging
 import math
 from typing import Optional, Union, List, Any, AsyncIterable
 
@@ -14,7 +15,8 @@ from .types import (
     EvmTransaction,
 )
 from .util import Function
-from ..core.rpc import RpcClient, RpcServerError, RpcDecodeError
+from .. import LOGGER_NAME
+from ..core.rpc import RpcClient, RpcServerError, RpcDecodeError, RpcClientError
 
 
 class EthCall:
@@ -281,7 +283,17 @@ class ConnectionPoolingEvmRpcClient(EvmRpcClient):
             await client.__aexit__(exc_type, exc_val, exc_tb)
 
     async def send(self, method, *params) -> Any:
-        self.__pool_index += 1
-        if self.__pool_index >= self.__pool_length:
-            self.__pool_index = 0
-        return await self.__pool[self.__pool_index].send(method, *params)
+        while self.__pool_length > 0:
+            self.__pool_index += 1
+            if self.__pool_index >= self.__pool_length:
+                self.__pool_index = 0
+            try:
+                return await self.__pool[self.__pool_index].send(method, *params)
+            except RpcClientError:
+                logging.getLogger(LOGGER_NAME).error(
+                    "RPC Client not able to receive requests. Removing from pool"
+                )
+                self.__pool.pop(self.__pool_index)
+                self.__pool_length -= 1
+
+        raise RpcClientError("Connection pool fully depleted. Unable to send!")
