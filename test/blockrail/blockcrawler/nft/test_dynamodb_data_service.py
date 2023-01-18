@@ -80,7 +80,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "block_created": "0x1",
                 "creator": "Creator",
                 "owner": "Owner",
-                "date_created": "0x1234",
+                "date_created": 0x1234,
                 "name": "Name",
                 "name_lower": "name",
                 "symbol": "Symbol",

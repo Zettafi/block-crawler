@@ -46,7 +46,7 @@ class DynamoDbDataService(DataService):
                 "collection_id": collection.collection_id,
                 "block_created": collection.block_created.hex_value,
                 "creator": collection.creator,
-                "date_created": collection.date_created.hex_value,
+                "date_created": collection.date_created.int_value,
                 "specification": collection.specification,
                 "data_version": collection.data_version,
             }
