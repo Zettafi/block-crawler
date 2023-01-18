@@ -133,18 +133,20 @@ class RpcClient:
                 self.__logger.error(f"Error connecting: {repr(e)}. Waiting {wait}s to reconnect")
                 connect_attempts += 1
 
-        self.__inbound_loop_task = asyncio.create_task(self.__inbound_loop(), name="inbound")
+        self.__inbound_loop_task = asyncio.create_task(
+            self.__inbound_loop(self.__ws), name="inbound"
+        )
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.__client.close()
         self.__context_manager_running = False
 
-    async def __inbound_loop(self):
+    async def __inbound_loop(self, ws):
         loop = asyncio.get_running_loop()
         self.__reconnected = False
-        while not self.__ws.closed:
+        while not ws.closed:
             try:
-                response = await self.__ws.receive_json()
+                response = await ws.receive_json()
                 if "id" not in response:
                     self.__logger.error(f'Response received without "id" attribute -- {response}')
                     continue
@@ -227,6 +229,7 @@ class RpcClient:
                 self.__logger.exception(
                     f"An error occurred processing the transport response -- {repr(e)}"
                 )
+                break
 
         if wse := self.__ws.exception():  # Exception means implicit close due to error
             self.__logger.error(f"Web Socket exception received: {repr(wse)}")
