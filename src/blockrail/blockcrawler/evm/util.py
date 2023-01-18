@@ -199,7 +199,7 @@ class BlockTimeCacheManager:
     def __init__(self, cache_file: pathlib.Path) -> None:
         self.__cache_file = cache_file
 
-    def get_block_times_from_cache(self):
+    def get_block_times_from_cache(self) -> List[Tuple[int, int]]:
         block_times: List[Tuple[int, int]] = list()
         try:
             with open(self.__cache_file, "r") as file:
