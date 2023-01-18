@@ -185,7 +185,7 @@ class RpcClient:
                             else:
                                 backoff_seconds = 1.0
 
-                            self.__logger.warning(
+                            self.__logger.debug(
                                 f"Received too many request from RPC API {self.__provider_url}. "
                                 f"Retrying in {backoff_seconds} seconds."
                             )
