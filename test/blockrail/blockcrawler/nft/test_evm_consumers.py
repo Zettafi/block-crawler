@@ -14,7 +14,6 @@ from blockrail.blockcrawler.evm.types import Address, EvmLog
 from blockrail.blockcrawler.evm.util import Erc1155Events, Erc721Events, Erc721MetadataFunctions
 from blockrail.blockcrawler.nft.data_packages import (
     CollectionDataPackage,
-    TokenMetadataUriUpdatedDataPackage,
 )
 from blockrail.blockcrawler.nft.data_services import DataService
 from blockrail.blockcrawler.nft.entities import (
@@ -370,20 +369,6 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         await self.__transformer.receive(self.__data_package)
         self.__data_service.write_token_owner_batch.assert_not_called()
 
-    async def test_writes_token_metadata_uri_updated_to_data_bus(self):
-        self.__token_transaction_type_oracle.type_from_log.return_value = TokenTransactionType.MINT
-        await self.__transformer.receive(self.__data_package)
-        self.__data_bus.send.assert_awaited_once_with(
-            TokenMetadataUriUpdatedDataPackage(
-                blockchain=self.__data_package.collection.blockchain,
-                collection_id=self.__data_package.collection.collection_id,
-                token_id=HexInt(0x13),
-                metadata_uri="Metadata URI",
-                metadata_uri_version=self.__log_version_oracle.version_from_log.return_value,
-                data_version=self.__data_package.collection.data_version,
-            )
-        )
-
 
 # noinspection PyDataclass
 class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedAsyncioTestCase):
@@ -675,35 +660,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
         await self.__transformer.receive(self.__data_package)
         self.__data_service.write_token_batch.assert_awaited_once_with(expected)
 
-    async def test_writes_token_metadata_uri_updated_to_data_bus(self):
-        self.__rpc_client.get_logs.return_value.__aiter__.return_value = [
-            EvmLog(
-                removed=False,
-                log_index=HexInt("0x10"),
-                transaction_index=HexInt("0x11"),
-                transaction_hash=HexBytes(b"thash1"),
-                block_hash=HexBytes(b"bhash1"),
-                block_number=HexInt("0x12"),
-                data=HexBytes(encode(["string"], ["Metadata URI"])),
-                topics=[
-                    HexBytes(Erc1155Events.URI.event_signature_hash),
-                    HexBytes(encode(["address"], ["0x0000000000000000000000000000000000000013"])),
-                ],
-                address=Address("contract"),
-            )
-        ]
-
         await self.__transformer.receive(self.__data_package)
-        self.__data_bus.send.assert_awaited_once_with(
-            TokenMetadataUriUpdatedDataPackage(
-                blockchain=self.__data_package.collection.blockchain,
-                collection_id=self.__data_package.collection.collection_id,
-                token_id=HexInt(0x13),
-                metadata_uri="Metadata URI",
-                metadata_uri_version=self.__log_version_oracle.version_from_log.return_value,
-                data_version=self.__data_package.collection.data_version,
-            )
-        )
 
     async def test_writes_token_owner_records_accounting_for_transfers_and_burns(self):
         self.__rpc_client.get_logs.return_value.__aiter__.return_value = [

@@ -1,5 +1,6 @@
 import asyncio
 from abc import ABC
+from asyncio import Task
 from typing import List, Dict, cast, Tuple
 
 from eth_abi import decode
@@ -13,7 +14,6 @@ from blockrail.blockcrawler.evm.types import Address, EvmLog
 from blockrail.blockcrawler.evm.util import Erc721Events, Erc1155Events, Erc721MetadataFunctions
 from blockrail.blockcrawler.nft.data_packages import (
     CollectionDataPackage,
-    TokenMetadataUriUpdatedDataPackage,
 )
 from blockrail.blockcrawler.nft.data_services import DataService
 from blockrail.blockcrawler.nft.entities import (
@@ -31,32 +31,12 @@ class CollectionToEverythingElseCollectionBasedConsumerBaseClass(Transformer, AB
     def __init__(
         self,
         data_bus: DataBus,
-        data_service: DataService,
         block_time_service: BlockTimeService,
         log_version_oracle: LogVersionOracle,
     ):
         super().__init__(data_bus)
-        self.__data_service = data_service
         self.__block_time_service = block_time_service
         self.__log_version_oracle = log_version_oracle
-
-    async def _process_data(
-        self,
-        metadata_uri_updates: List[TokenMetadataUriUpdatedDataPackage],
-        token_owners: List[TokenOwner],
-        token_transfers: List[TokenTransfer],
-        tokens: List[Token],
-    ):
-        batches = list()
-        if tokens:
-            batches.append(self.__data_service.write_token_batch(tokens))
-        if token_transfers:
-            batches.append(self.__data_service.write_token_transfer_batch(token_transfers))
-        if token_owners:
-            batches.append(self.__data_service.write_token_owner_batch(token_owners))
-        for metadata_uri_update in metadata_uri_updates:
-            batches.append(self._get_data_bus().send(metadata_uri_update))
-        await asyncio.gather(*batches)
 
     async def _process_token_and_transfers(
         self,
@@ -163,16 +143,18 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
         token_transaction_type_oracle: TokenTransactionTypeOracle,
         log_version_oracle: LogVersionOracle,
         max_block_height: HexInt,
+        token_uri_batch_size: int = 100,
     ) -> None:
         super().__init__(
             data_bus=data_bus,
-            data_service=data_service,
             block_time_service=block_time_service,
             log_version_oracle=log_version_oracle,
         )
+        self.__data_service = data_service
         self.__rpc_client = rpc_client
         self.__token_transaction_type_oracle = token_transaction_type_oracle
         self.__max_block_height = max_block_height
+        self.__token_uri_batch_size = token_uri_batch_size
 
     async def receive(self, data_package: DataPackage):
         if (
@@ -185,7 +167,6 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
             tokens: Dict[HexInt, Token] = dict()
             token_transfers: List[TokenTransfer] = list()
             token_owners: Dict[HexInt, TokenOwner] = dict()
-            metadata_uri_updates: Dict[HexInt, TokenMetadataUriUpdatedDataPackage] = dict()
 
             async for log in self.__rpc_client.get_logs(
                 topics=[Erc721Events.TRANSFER.event_signature_hash.hex()],
@@ -232,44 +213,77 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                     token_owners, data_package.collection, to_address, token_id, transaction_type
                 )
 
-            calls = list()
-            for token_id, token in tokens.items():
-                calls.append(
-                    self.__rpc_client.call(
-                        EthCall(
-                            from_=None,
-                            to=token.collection_id,
-                            function=Erc721MetadataFunctions.TOKEN_URI,
-                            parameters=[token.token_id.int_value],
-                            block=token.mint_block.hex_value,
-                        )
+            loop = asyncio.get_running_loop()
+            tasks: List[Task] = list()
+            if token_transfers:
+                tasks.append(
+                    loop.create_task(
+                        self.__data_service.write_token_transfer_batch(token_transfers)
+                    )
+                )
+            token_owners_batch = [value for value in token_owners.values() if value.quantity > 0]
+            if token_owners_batch:
+                tasks.append(
+                    loop.create_task(
+                        self.__data_service.write_token_owner_batch(token_owners_batch)
                     )
                 )
 
-            results = await asyncio.gather(*calls, return_exceptions=True)
-            for (token_id, token), result in zip(tokens.items(), results):
-                if (
-                    isinstance(result, RpcServerError)
-                    and result.error_code in (-32000, 3)
-                    # -32000 is generic catch-all for execution reverted
-                    # 3 is query for non-existent token
-                    or isinstance(result, RpcDecodeError)
-                ):
-                    continue
-                elif isinstance(result, Exception):
-                    raise result
-                else:
-                    metadata_url = cast(Tuple, result)[0]
+            batch_tokens: List[Token] = list()
+            batch_tokens_batches: List[List[Token]] = list()
+            for _, token in tokens.items():
+                batch_tokens.append(token)
+                if len(batch_tokens) >= self.__token_uri_batch_size:
+                    batch_tokens_batches.append(batch_tokens)
+                    batch_tokens.clear()
+            if batch_tokens:
+                batch_tokens_batches.append(batch_tokens)
+            for batch_tokens_batch in batch_tokens_batches:
+                tasks.append(asyncio.create_task(self.__process_tokens_batch(batch_tokens_batch)))
 
-                metadata_uri_updates[token_id] = TokenMetadataUriUpdatedDataPackage(
-                    blockchain=token.blockchain,
-                    collection_id=token.collection_id,
-                    token_id=token_id,
-                    metadata_uri=metadata_url,
-                    metadata_uri_version=token.attribute_version,
-                    data_version=token.data_version,
+            for task in tasks:
+                await task
+
+        except Exception as e:
+            raise ConsumerError(
+                f"Error processing {data_package.collection.specification} "
+                f"collection {data_package.collection.collection_id} "
+                f"created in block {data_package.collection.block_created} "
+                f"-- {e}"
+            )
+
+    async def __process_tokens_batch(self, tokens: List[Token]):
+        calls = list()
+        for token in tokens:
+            calls.append(
+                self.__rpc_client.call(
+                    EthCall(
+                        from_=None,
+                        to=token.collection_id,
+                        function=Erc721MetadataFunctions.TOKEN_URI,
+                        parameters=[token.token_id.int_value],
+                        block=token.mint_block.hex_value,
+                    )
                 )
-                tokens[token_id] = Token(
+            )
+        results = await asyncio.gather(*calls, return_exceptions=True)
+        completed_tokens: List[Token] = list()
+        for token, result in zip(tokens, results):
+            if (
+                isinstance(result, RpcServerError)
+                and result.error_code in (-32000, 3)
+                # -32000 is generic catch-all for execution reverted
+                # 3 is query for non-existent token
+                or isinstance(result, RpcDecodeError)
+            ):
+                metadata_url = None
+            elif isinstance(result, Exception):
+                raise result
+            else:
+                metadata_url = cast(Tuple, result)[0]
+
+            completed_tokens.append(
+                Token(
                     blockchain=token.blockchain,
                     collection_id=token.collection_id,
                     token_id=token.token_id,
@@ -282,20 +296,9 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                     attribute_version=token.attribute_version,
                     metadata_url=metadata_url,
                 )
+            )
 
-            await self._process_data(
-                metadata_uri_updates=[value for value in metadata_uri_updates.values()],
-                token_owners=[value for value in token_owners.values()],
-                token_transfers=token_transfers,
-                tokens=[value for value in tokens.values()],
-            )
-        except Exception as e:
-            raise ConsumerError(
-                f"Error processing {data_package.collection.specification} "
-                f"collection {data_package.collection.collection_id} "
-                f"created in block {data_package.collection.block_created} "
-                f"-- {e}"
-            )
+        await self.__data_service.write_token_batch(completed_tokens)
 
     @staticmethod
     async def __process_token_owners(
@@ -347,7 +350,6 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
     ) -> None:
         super().__init__(
             data_bus=data_bus,
-            data_service=data_service,
             block_time_service=block_time_service,
             log_version_oracle=log_version_oracle,
         )
@@ -369,7 +371,6 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
             tokens: Dict[HexInt, Token] = dict()
             token_transfers: List[TokenTransfer] = list()
             token_owners: Dict[HexInt, Dict[Address, TokenOwner]] = dict()
-            metadata_uri_updates: Dict[HexInt, TokenMetadataUriUpdatedDataPackage] = dict()
 
             async for log in self.__rpc_client.get_logs(
                 topics=[
@@ -480,15 +481,6 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                         log.data,
                     )[0]
 
-                    attribute_version = self.__log_version_oracle.version_from_log(log)
-                    metadata_uri_updates[token_id] = TokenMetadataUriUpdatedDataPackage(
-                        blockchain=data_package.collection.blockchain,
-                        collection_id=data_package.collection.collection_id,
-                        token_id=token_id,
-                        metadata_uri=uri,
-                        metadata_uri_version=attribute_version,
-                        data_version=data_package.collection.data_version,
-                    )
                     if token_id in tokens:
                         token = tokens[token_id]
                         tokens[token_id] = Token(
@@ -505,16 +497,21 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                             metadata_url=uri,
                         )
 
-            token_owners_data: List[TokenOwner] = list()
-            for oto in token_owners.values():
-                token_owners_data.extend(oto.values())
+            batches = list()
+            if tokens:
+                token_batch = [token for token in tokens.values()]
+                batches.append(self.__data_service.write_token_batch(token_batch))
+            if token_transfers:
+                batches.append(self.__data_service.write_token_transfer_batch(token_transfers))
+            if token_owners:
+                token_owners_data: List[TokenOwner] = list()
+                for oto in token_owners.values():
+                    token_owners_data.extend(
+                        [value for value in oto.values() if value.quantity > 0]
+                    )
+                batches.append(self.__data_service.write_token_owner_batch(token_owners_data))
+            await asyncio.gather(*batches)
 
-            await self._process_data(
-                metadata_uri_updates=[update for update in metadata_uri_updates.values()],
-                token_owners=[owner for owner in token_owners_data if owner.quantity > 0],
-                token_transfers=token_transfers,
-                tokens=[token for token in tokens.values()],
-            )
         except Exception as e:
             raise ConsumerError(
                 f"Error processing {data_package.collection.specification} "

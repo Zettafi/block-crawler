@@ -475,6 +475,7 @@ async def load_evm_contracts_by_block(
                     log_version_oracle=log_version_oracle,
                     token_transaction_type_oracle=token_transaction_type_oracle,
                     max_block_height=HexInt(block_height),
+                    token_uri_batch_size=dynamodb_parallel_batches * 25,
                 )
             )
             await data_bus.register(
