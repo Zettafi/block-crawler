@@ -55,20 +55,25 @@ class EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(Tran
         if not isinstance(data_package, EvmBlockIDDataPackage):
             return
 
-        block = await self.__rpc_client.get_block(data_package.block_id, True)
-        await self.__block_time_service.set_block_timestamp(data_package.block_id, block.timestamp)
-        await self._get_data_bus().send(EvmBlockDataPackage(data_package.blockchain, block))
-        for transaction_hash in block.transaction_hashes:
-            await self._get_data_bus().send(
-                EvmTransactionHashDataPackage(data_package.blockchain, transaction_hash, block)
+        try:
+            block = await self.__rpc_client.get_block(data_package.block_id, True)
+            await self.__block_time_service.set_block_timestamp(
+                data_package.block_id, block.timestamp
             )
+            await self._get_data_bus().send(EvmBlockDataPackage(data_package.blockchain, block))
+            for transaction_hash in block.transaction_hashes:
+                await self._get_data_bus().send(
+                    EvmTransactionHashDataPackage(data_package.blockchain, transaction_hash, block)
+                )
 
-        if block.transactions is None:
-            raise ConsumerError("Block returned did not have full transactions!")
-        for transaction in block.transactions:
-            await self._get_data_bus().send(
-                EvmTransactionDataPackage(data_package.blockchain, transaction, block)
-            )
+            if block.transactions is None:
+                raise ConsumerError("Block returned did not have full transactions!")
+            for transaction in block.transactions:
+                await self._get_data_bus().send(
+                    EvmTransactionDataPackage(data_package.blockchain, transaction, block)
+                )
+        except Exception as e:
+            raise ConsumerError(f"Error processing block ID {data_package.block_id} - {e}")
 
 
 class EvmTransactionHashToEvmTransactionReceiptTransformer(Transformer):
