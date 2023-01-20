@@ -81,6 +81,7 @@ class RpcResponse:
 
 
 class RpcClient:
+    MAX_MSG_SIZE = 100 * 1024 * 1024
 
     STAT_CONNECT = "rpc.connect"
     STAT_CONNECTION_RESET = "rpc.connection-reset"
@@ -113,6 +114,7 @@ class RpcClient:
         self.__this_second: int = 0
         self.__requests_this_second: int = 0
         self.__logger = logging.getLogger(LOGGER_NAME)
+        self.__connecting: bool = False
 
     async def __aenter__(self):
         await self.__connect()
@@ -120,13 +122,14 @@ class RpcClient:
         return self
 
     async def __connect(self, retry=False):
+        self.__connecting = True
         connect_attempts = 0
         while True:
             self._stats_service.increment(self.STAT_CONNECT)
             try:
                 self.__client = aiohttp.ClientSession()
                 self.__ws = await self.__client.ws_connect(
-                    self.__provider_url, max_msg_size=100 * 1024 * 1024
+                    self.__provider_url, max_msg_size=self.MAX_MSG_SIZE
                 )
                 break
             except ClientError as e:
@@ -140,6 +143,7 @@ class RpcClient:
         self.__inbound_loop_task = asyncio.create_task(
             self.__inbound_loop(self.__ws), name="inbound"
         )
+        self.__connecting = False
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.__client.close()
@@ -243,7 +247,8 @@ class RpcClient:
         if not self.__reconnected:
             for _, (future, _, _) in self.__pending.items():
                 self._stats_service.increment(self.STAT_ORPHANED_REQUESTS)
-                future.set_exception(RpcError("Transport closed before response received"))
+                if not future.done():
+                    future.set_exception(RpcError("Transport closed before response received"))
 
     async def __replay_to_many_requests_request(self, backoff_seconds, future, request):
         await asyncio.sleep(backoff_seconds)
@@ -328,8 +333,13 @@ class RpcClient:
     async def send(self, method, *params) -> Any:
         if not self.__context_manager_running or not self.__ws:
             raise RpcClientError("Requests must be sent using a context manager instance!")
-        if not self.__inbound_loop_task or self.__inbound_loop_task.done():
+        if (
+            not self.__inbound_loop_task or self.__inbound_loop_task.done()
+        ) and not self.__connecting:
             raise RpcClientError("No inbound processing loop to react to response for request!")
+        elif self.__connecting:
+            while self.__connecting:
+                await asyncio.sleep(0)
         request = self.__get_rpc_request(method, params)
         start_time = await self.__send_json(request)
         self._stats_service.increment(f"{self.STAT_REQUEST_SENT}.{method}")

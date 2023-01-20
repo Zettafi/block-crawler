@@ -379,11 +379,12 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_unhandled_exception_in_inbound_loop_raises_rpc_error_on_subsequent_send(self):
-        self._ws.receive_json.side_effect = Exception
-        with self.assertRaisesRegex(
-            RpcClientError, "No inbound processing loop to react to response for request!"
-        ):
-            rpc_client = RpcClient("URI", self._stats_service)
-            async with rpc_client:
-                await asyncio.sleep(0)
-                await rpc_client.send("hello")
+        with self.assertLogs():  # We're not checking logs here, just suppressing them from printing
+            self._ws.receive_json.side_effect = Exception
+            with self.assertRaisesRegex(
+                RpcClientError, "No inbound processing loop to react to response for request!"
+            ):
+                rpc_client = RpcClient("URI", self._stats_service)
+                async with rpc_client:
+                    await asyncio.sleep(0)
+                    await rpc_client.send("hello")
