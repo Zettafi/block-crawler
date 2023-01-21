@@ -4,7 +4,6 @@ from abc import ABC
 from typing import Tuple, Optional
 
 from eth_abi import decode
-from eth_abi.exceptions import DecodingError
 
 from blockrail.blockcrawler.core.bus import (
     Transformer,
@@ -55,10 +54,11 @@ class EvmTransactionReceiptToNftCollectionTransformer(Transformer):
         if not isinstance(data_package, EvmTransactionReceiptDataPackage):
             return
 
+        contract_id = data_package.transaction_receipt.contract_address
+        if contract_id is None:
+            return
+
         try:
-            contract_id = data_package.transaction_receipt.contract_address
-            if contract_id is None:
-                return
 
             supports_erc721_interface_coro = self.__rpc_client.call(
                 EthCall(
@@ -174,13 +174,13 @@ class EvmTransactionReceiptToNftCollectionTransformer(Transformer):
             )
             for result in symbol_result, name_result, total_supply_result, owner_result:
                 if isinstance(result, Exception) and not isinstance(
-                    result, (RpcServerError, DecodingError)
+                    result, (RpcServerError, RpcDecodeError)
                 ):
                     raise result
         else:
             try:
                 owner_result = await owner_coro
-            except (RpcServerError, DecodingError):
+            except (RpcServerError, RpcDecodeError):
                 owner_result = (None,)
             finally:
                 symbol_result, name_result, total_supply_result = (None,), (None,), (None,)
