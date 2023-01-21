@@ -45,7 +45,7 @@ class DynamoDbDataService(DataService):
                 "blockchain": collection.blockchain.value,
                 "collection_id": collection.collection_id,
                 "block_created": collection.block_created.hex_value,
-                "creator": collection.creator,
+                "creator_account": collection.creator,
                 "date_created": collection.date_created.int_value,
                 "specification": collection.specification,
                 "data_version": collection.data_version,
@@ -53,9 +53,9 @@ class DynamoDbDataService(DataService):
             if collection.total_supply is not None:
                 item["total_supply"] = collection.total_supply.hex_value
             if collection.owner is not None:
-                item["owner"] = collection.owner
+                item["current_owner_account"] = collection.owner
             if collection.name is not None and len(collection.name) > 0:
-                item["name"] = collection.name
+                item["collection_name"] = collection.name
                 item["name_lower"] = collection.name.lower()[:1024]
             if collection.symbol is not None:
                 item["symbol"] = collection.symbol
