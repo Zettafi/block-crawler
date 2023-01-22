@@ -79,7 +79,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "collection_id": "Collection Address",
                 "block_created": "0x1",
                 "creator_account": "Creator",
-                "current_owner_account": "Owner",
+                "owner_account": "Owner",
                 "date_created": 0x1234,
                 "collection_name": "Name",
                 "name_lower": "name",
@@ -115,7 +115,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "collection_id": ANY,
                 "block_created": ANY,
                 "creator_account": ANY,
-                "current_owner_account": ANY,
+                "owner_account": ANY,
                 "date_created": ANY,
                 "collection_name": ANY,
                 "name_lower": "abcdefgh" * 128,
@@ -196,7 +196,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "collection_id": ANY,
                 "block_created": ANY,
                 "creator_account": ANY,
-                "current_owner_account": ANY,
+                "owner_account": ANY,
                 "date_created": ANY,
                 "symbol": ANY,
                 "total_supply": ANY,
@@ -246,14 +246,47 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             Item={
                 "blockchain_collection_id": "Expected Blockchain::Collection Address",
                 "token_id": "0x1",
-                "mint_date": 2,
-                "mint_block": "0x4",
-                "original_owner": "Original Owner",
-                "current_owner": "Current Owner",
+                "mint_timestamp": 2,
+                "mint_block_id": "0x4",
+                "original_owner_account": "Original Owner",
+                "current_owner_account": "Current Owner",
                 "current_owner_version": "0x00000000000000000007",
                 "quantity": 3,
                 "metadata_url": "Metadata URL",
+                "metadata_url_version": "0x00000000000000000007",
                 "data_version": 999,
+            },
+            ConditionExpression=ANY,
+        )
+
+    async def test_write_token_does_not_store_owners_data_when_owners_are_none(self):
+        blockchain = Mock(BlockChain)
+        blockchain.value = "Expected Blockchain"
+        token = Token(
+            blockchain=blockchain,
+            data_version=999,
+            collection_id=Address("Collection Address"),
+            token_id=HexInt(1),
+            mint_date=HexInt(2),
+            mint_block=HexInt(4),
+            current_owner=None,
+            original_owner=None,
+            quantity=HexInt(3),
+            metadata_url="Metadata URL",
+            attribute_version=HexInt("0x00000000000000000007"),
+        )
+
+        await self.__data_service.write_token(token)
+        self.__table_resource.put_item.assert_awaited_once_with(
+            Item={
+                "blockchain_collection_id": ANY,
+                "token_id": ANY,
+                "mint_timestamp": ANY,
+                "mint_block_id": ANY,
+                "quantity": ANY,
+                "metadata_url": ANY,
+                "metadata_url_version": ANY,
+                "data_version": ANY,
             },
             ConditionExpression=ANY,
         )
@@ -323,19 +356,20 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             Item={
                 "blockchain_collection_id": ANY,
                 "token_id": ANY,
-                "mint_date": ANY,
-                "mint_block": ANY,
-                "original_owner": ANY,
-                "current_owner": ANY,
+                "mint_timestamp": ANY,
+                "mint_block_id": ANY,
+                "original_owner_account": ANY,
+                "current_owner_account": ANY,
                 "current_owner_version": ANY,
                 "quantity": ANY,
                 "metadata_url": "X" * 2048,
+                "metadata_url_version": ANY,
                 "data_version": ANY,
             },
             ConditionExpression=ANY,
         )
 
-    async def test_write_token_with_2049_char_url_stores_none(self):
+    async def test_write_token_with_2049_char_url_does_not_store_url_data(self):
         token = Token(
             blockchain=BlockChain.ETHEREUM_MAINNET,
             data_version=999,
@@ -355,19 +389,18 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             Item={
                 "blockchain_collection_id": ANY,
                 "token_id": ANY,
-                "mint_date": ANY,
-                "mint_block": ANY,
-                "original_owner": ANY,
-                "current_owner": ANY,
+                "mint_timestamp": ANY,
+                "mint_block_id": ANY,
+                "original_owner_account": ANY,
+                "current_owner_account": ANY,
                 "current_owner_version": ANY,
                 "quantity": ANY,
-                "metadata_url": None,
                 "data_version": ANY,
             },
             ConditionExpression=ANY,
         )
 
-    async def test_write_token_with_none_as_url_stores_none(self):
+    async def test_write_token_does_not_store_url_data_when_url_is_none(self):
         token = Token(
             blockchain=BlockChain.ETHEREUM_MAINNET,
             data_version=999,
@@ -387,13 +420,42 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             Item={
                 "blockchain_collection_id": ANY,
                 "token_id": ANY,
-                "mint_date": ANY,
-                "mint_block": ANY,
-                "original_owner": ANY,
-                "current_owner": ANY,
+                "mint_timestamp": ANY,
+                "mint_block_id": ANY,
+                "original_owner_account": ANY,
+                "current_owner_account": ANY,
                 "current_owner_version": ANY,
                 "quantity": ANY,
-                "metadata_url": None,
+                "data_version": ANY,
+            },
+            ConditionExpression=ANY,
+        )
+
+    async def test_write_token_does_not_store_owner_data_when_none(self):
+        token = Token(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            data_version=999,
+            collection_id=Address("Collection Address"),
+            token_id=HexInt(1),
+            mint_date=HexInt(2),
+            mint_block=HexInt(4),
+            current_owner=None,
+            original_owner=None,
+            quantity=HexInt(3),
+            metadata_url="URL",
+            attribute_version=HexInt("0x00000000000000000007"),
+        )
+
+        await self.__data_service.write_token(token)
+        self.__table_resource.put_item.assert_awaited_once_with(
+            Item={
+                "blockchain_collection_id": ANY,
+                "token_id": ANY,
+                "mint_timestamp": ANY,
+                "mint_block_id": ANY,
+                "metadata_url": ANY,
+                "metadata_url_version": ANY,
+                "quantity": ANY,
                 "data_version": ANY,
             },
             ConditionExpression=ANY,
@@ -439,13 +501,14 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             Item={
                 "blockchain_collection_id": "Expected Blockchain::Collection Address",
                 "token_id": "0x1",
-                "mint_date": 2,
-                "mint_block": "0x4",
-                "original_owner": "Original Owner",
-                "current_owner": "Current Owner",
+                "mint_timestamp": 2,
+                "mint_block_id": "0x4",
+                "original_owner_account": "Original Owner",
+                "current_owner_account": "Current Owner",
                 "current_owner_version": "0x00000000000000000007",
                 "quantity": 3,
                 "metadata_url": "Metadata URL",
+                "metadata_url_version": "0x00000000000000000007",
                 "data_version": 999,
             },
         )
@@ -472,18 +535,19 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             Item={
                 "blockchain_collection_id": ANY,
                 "token_id": ANY,
-                "mint_date": ANY,
-                "mint_block": ANY,
-                "original_owner": ANY,
-                "current_owner": ANY,
+                "mint_timestamp": ANY,
+                "mint_block_id": ANY,
+                "original_owner_account": ANY,
+                "current_owner_account": ANY,
                 "current_owner_version": ANY,
                 "quantity": ANY,
                 "metadata_url": "X" * 2048,
+                "metadata_url_version": ANY,
                 "data_version": ANY,
             },
         )
 
-    async def test_write_token_batch_with_2049_char_url_stores_none(self):
+    async def test_write_token_batch_with_2049_char_url_does_not_store_url_data(self):
         blockchain = Mock(BlockChain)
         blockchain.value = "Expected Blockchain"
         token = Token(
@@ -505,18 +569,17 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             Item={
                 "blockchain_collection_id": ANY,
                 "token_id": ANY,
-                "mint_date": ANY,
-                "mint_block": ANY,
-                "original_owner": ANY,
-                "current_owner": ANY,
+                "mint_timestamp": ANY,
+                "mint_block_id": ANY,
+                "original_owner_account": ANY,
+                "current_owner_account": ANY,
                 "current_owner_version": ANY,
                 "quantity": ANY,
-                "metadata_url": None,
                 "data_version": ANY,
             },
         )
 
-    async def test_write_token_batch_with_none_url_stores_none(self):
+    async def test_write_token_batch_with_none_url_does_not_store_url_data(self):
         blockchain = Mock(BlockChain)
         blockchain.value = "Expected Blockchain"
         token = Token(
@@ -538,13 +601,12 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             Item={
                 "blockchain_collection_id": ANY,
                 "token_id": ANY,
-                "mint_date": ANY,
-                "mint_block": ANY,
-                "original_owner": ANY,
-                "current_owner": ANY,
+                "mint_timestamp": ANY,
+                "mint_block_id": ANY,
+                "original_owner_account": ANY,
+                "current_owner_account": ANY,
                 "current_owner_version": ANY,
                 "quantity": ANY,
-                "metadata_url": None,
                 "data_version": ANY,
             },
         )
@@ -597,7 +659,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "transaction_log_index_hash": "0x99",
                 "collection_id": "Collection ID",
                 "token_id": "0x10",
-                "timestamp": 74565,
+                "transaction_timestamp": 74565,
                 "block_id": "0x00000080",
                 "transaction_type": TokenTransactionType.TRANSFER.value,
                 "from_account": "From",
@@ -712,7 +774,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "transaction_log_index_hash": "0x99",
                 "collection_id": "Collection ID",
                 "token_id": "0x10",
-                "timestamp": 74565,
+                "transaction_timestamp": 74565,
                 "block_id": "0x00000080",
                 "transaction_type": TokenTransactionType.TRANSFER.value,
                 "from_account": "From",

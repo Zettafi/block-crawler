@@ -53,7 +53,7 @@ class DynamoDbDataService(DataService):
             if collection.total_supply is not None:
                 item["total_supply"] = collection.total_supply.hex_value
             if collection.owner is not None:
-                item["current_owner_account"] = collection.owner
+                item["owner_account"] = collection.owner
             if collection.name is not None and len(collection.name) > 0:
                 item["collection_name"] = collection.name
                 item["name_lower"] = collection.name.lower()[:1024]
@@ -166,20 +166,23 @@ class DynamoDbDataService(DataService):
 
     @staticmethod
     def __get_token_item(token: Token) -> dict:
-        return dict(
+        item = dict(
             blockchain_collection_id=f"{token.blockchain.value}" f"::{token.collection_id}",
             token_id=token.token_id.hex_value,
-            mint_date=token.mint_date.int_value,
-            mint_block=token.mint_block.hex_value,
-            original_owner=token.original_owner,
-            current_owner=token.current_owner,
-            current_owner_version=token.attribute_version.hex_value,
+            mint_timestamp=token.mint_date.int_value,
+            mint_block_id=token.mint_block.hex_value,
             quantity=token.quantity.int_value,
             data_version=token.data_version,
-            metadata_url=token.metadata_url
-            if token.metadata_url and len(token.metadata_url) < 2049
-            else None,
         )
+        if token.original_owner:
+            item["original_owner_account"] = token.original_owner
+        if token.current_owner:
+            item["current_owner_account"] = token.current_owner
+            item["current_owner_version"] = token.attribute_version.hex_value
+        if token.metadata_url and len(token.metadata_url) < 2049:
+            item["metadata_url"] = token.metadata_url
+            item["metadata_url_version"] = token.attribute_version.hex_value
+        return item
 
     @staticmethod
     def __get_token_transfer_item(token_transfer: TokenTransfer) -> dict:
@@ -189,7 +192,7 @@ class DynamoDbDataService(DataService):
             transaction_log_index_hash=token_transfer.attribute_version.hex_value,
             collection_id=token_transfer.collection_id,
             token_id=token_transfer.token_id.hex_value,
-            timestamp=token_transfer.timestamp.int_value,
+            transaction_timestamp=token_transfer.timestamp.int_value,
             block_id=token_transfer.block_id.padded_hex(8),
             transaction_type=token_transfer.transaction_type.value,
             from_account=token_transfer.from_,
