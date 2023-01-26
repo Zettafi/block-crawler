@@ -81,7 +81,7 @@ class RpcResponse:
 
 
 class RpcClient:
-    MAX_MSG_SIZE = 100 * 1024 * 1024
+    MAX_MSG_SIZE = 200 * 1024 * 1024
 
     STAT_CONNECT = "rpc.connect"
     STAT_CONNECTION_RESET = "rpc.connection-reset"

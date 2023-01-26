@@ -72,10 +72,10 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                 expected, max_msg_size=ANY
             )
 
-    async def test_connects_with_100_mb_max_message_size(self):
+    async def test_connects_with_200_mb_max_message_size(self):
         async with RpcClient("", self._stats_service):
             self._aiohttp_client_session.ws_connect.assert_awaited_once_with(
-                ANY, max_msg_size=100 * 1024 * 1024
+                ANY, max_msg_size=200 * 1024 * 1024
             )
 
     async def test_sends_expected_params_with_request_when_no_params(self):
