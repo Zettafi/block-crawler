@@ -1,7 +1,7 @@
 import asyncio
 from abc import ABC
 from asyncio import Task
-from typing import List, Dict, cast, Tuple
+from typing import List, Dict, cast, Tuple, Awaitable
 
 from eth_abi import decode
 
@@ -154,7 +154,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
         self.__rpc_client = rpc_client
         self.__token_transaction_type_oracle = token_transaction_type_oracle
         self.__max_block_height = max_block_height
-        self.__token_uri_batch_size = token_uri_batch_size
+        self.__write_batch_size = token_uri_batch_size
 
     async def receive(self, data_package: DataPackage):
         if (
@@ -164,6 +164,9 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
             return
 
         try:
+            loop = asyncio.get_running_loop()
+            log_batch: List[Awaitable] = list()
+            tasks: List[Task] = list()
             tokens: Dict[HexInt, Token] = dict()
             token_transfers: List[TokenTransfer] = list()
             token_owners: Dict[HexInt, TokenOwner] = dict()
@@ -177,45 +180,27 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                 if len(log.topics) != 4:
                     continue  # Ignore other same signature events such as ERC-20 Transfer
 
-                from_address = Address(
-                    decode(
-                        ["address"],
-                        log.topics[1],
-                    )[0]
+                log_batch.append(
+                    self.__process_log_entry(
+                        data_package, log, token_owners, token_transfers, tokens
+                    )
                 )
-                to_address = Address(
-                    decode(
-                        ["address"],
-                        log.topics[2],
-                    )[0]
-                )
-                token_id = HexInt(
-                    decode(
-                        ["uint256"],
-                        log.topics[3],
-                    )[0]
-                )
-                transaction_type = self.__token_transaction_type_oracle.type_from_log(log)
+                if len(log_batch) >= self.__write_batch_size:
+                    await asyncio.gather(*log_batch)
+                    log_batch.clear()
 
-                await self._process_token_and_transfers(
-                    tokens=tokens,
-                    token_transfers=token_transfers,
-                    collection=data_package.collection,
-                    log=log,
-                    transaction_type=transaction_type,
-                    from_address=from_address,
-                    to_address=to_address,
-                    token_id=token_id,
-                    quantity=HexInt(1),
-                )
+                    tasks.append(
+                        loop.create_task(
+                            self.__data_service.write_token_transfer_batch(token_transfers[:])
+                        )
+                    )
+                    await asyncio.sleep(0)  # Start processing token transfer saves to clear memory
+                    token_transfers.clear()
 
-                await self.__process_token_owners(
-                    token_owners, data_package.collection, to_address, token_id, transaction_type
-                )
+            if log_batch:  # Gather any remaining log batch entries
+                await asyncio.gather(*log_batch)
 
-            loop = asyncio.get_running_loop()
-            tasks: List[Task] = list()
-            if token_transfers:
+            if token_transfers:  # Write any remaining token transfers
                 tasks.append(
                     loop.create_task(
                         self.__data_service.write_token_transfer_batch(token_transfers)
@@ -233,7 +218,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
             batch_tokens_batches: List[List[Token]] = list()
             for _, token in tokens.items():
                 batch_tokens.append(token)
-                if len(batch_tokens) >= self.__token_uri_batch_size:
+                if len(batch_tokens) >= self.__write_batch_size:
                     batch_tokens_batches.append(batch_tokens)
                     batch_tokens.clear()
             if batch_tokens:
@@ -251,6 +236,48 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                 f"created in block {data_package.collection.block_created} "
                 f"-- {e}"
             )
+
+    async def __process_log_entry(
+        self,
+        data_package: CollectionDataPackage,
+        log: EvmLog,
+        token_owners: Dict[HexInt, TokenOwner],
+        token_transfers: List[TokenTransfer],
+        tokens: Dict[HexInt, Token],
+    ):
+        from_address = Address(
+            decode(
+                ["address"],
+                log.topics[1],
+            )[0]
+        )
+        to_address = Address(
+            decode(
+                ["address"],
+                log.topics[2],
+            )[0]
+        )
+        token_id = HexInt(
+            decode(
+                ["uint256"],
+                log.topics[3],
+            )[0]
+        )
+        transaction_type = self.__token_transaction_type_oracle.type_from_log(log)
+        await self._process_token_and_transfers(
+            tokens=tokens,
+            token_transfers=token_transfers,
+            collection=data_package.collection,
+            log=log,
+            transaction_type=transaction_type,
+            from_address=from_address,
+            to_address=to_address,
+            token_id=token_id,
+            quantity=HexInt(1),
+        )
+        await self.__process_token_owners(
+            token_owners, data_package.collection, to_address, token_id, transaction_type
+        )
 
     async def __process_tokens_batch(self, tokens: List[Token]):
         calls = list()

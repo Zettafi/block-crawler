@@ -34,7 +34,7 @@ class HexInt:
         return self.__hex_str
 
     def __hash__(self) -> int:
-        return self.int_value
+        return self.int_value.__hash__()
 
     def __repr__(self):
         return f"{self.__class__.__name__}('{self.__hex_str}')"
