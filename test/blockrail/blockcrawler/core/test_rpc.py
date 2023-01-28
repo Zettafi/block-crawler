@@ -61,6 +61,9 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
         self._aiohttp_client_session.ws_connect.side_effect = self._open
         self.addAsyncCleanup(patcher.stop)  # type: ignore
         self._stats_service = MagicMock(StatsService)
+        patcher = patch("uuid.uuid1")
+        self.__uuid1 = patcher.start()
+        self.addCleanup(patcher.stop)
 
     async def asyncTearDown(self) -> None:
         self._ws.closed = True
@@ -72,11 +75,9 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                 expected, max_msg_size=ANY
             )
 
-    async def test_connects_with_200_mb_max_message_size(self):
+    async def test_connects_with_no_max_message_size(self):
         async with RpcClient("", self._stats_service):
-            self._aiohttp_client_session.ws_connect.assert_awaited_once_with(
-                ANY, max_msg_size=200 * 1024 * 1024
-            )
+            self._aiohttp_client_session.ws_connect.assert_awaited_once_with(ANY, max_msg_size=0)
 
     async def test_sends_expected_params_with_request_when_no_params(self):
         async with RpcClient("", self._stats_service) as rpc_client:
@@ -158,6 +159,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
         self._ws.receive_json.side_effect = respond
         self._ws.send_json.side_effect = None  # Turn off automatic adding of ID1
+        self.__uuid1.return_value = "uuid"
         with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("", self._stats_service):
                 await asyncio.sleep(0)
@@ -165,18 +167,20 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
             self._ws.receive_json.assert_awaited()
             self.assertIn(
-                f'ERROR:{LOGGER_NAME}:Response received without "id" attribute -- {{}}', cm.output
+                f'ERROR:{LOGGER_NAME}:uuid:Response received without "id" attribute -- {{}}',
+                cm.output,
             )
 
     async def test_warns_on_transport_responses_with_an_unknown_id(self):
         self._ws.send_json.side_effect = None
         self._ws_response = dict(id="9999", result=1)
+        self.__uuid1.return_value = "uuid"
         with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("", self._stats_service):
                 await asyncio.sleep(0)
             self._ws.receive_json.assert_awaited()
             self.assertIn(
-                f"ERROR:{LOGGER_NAME}:Response received "
+                f"ERROR:{LOGGER_NAME}:uuid:Response received "
                 f"for unknown id -- {{'id': '9999', 'result': 1}}",
                 cm.output,
             )
@@ -193,6 +197,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
             await self._ws_feedback_loop(json)
 
         self._ws.send_json.side_effect = side_effect
+        self.__uuid1.return_value = "uuid"
 
         with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
@@ -207,7 +212,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                     ]
                 )
             self.assertIn(
-                f"INFO:{LOGGER_NAME}:Reconnecting to URI and replaying 1 requests.", cm.output
+                f"INFO:{LOGGER_NAME}:uuid:Reconnecting to URI and replaying 1 requests.", cm.output
             )
 
     async def test_handles_connection_reset_from_send_json(self):
@@ -282,6 +287,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
             return await self._ws_response_json()
 
         self._ws.receive_json.side_effect = side_effect
+        self.__uuid1.return_value = "uuid"
 
         with self.assertLogs(LOGGER_NAME, DEBUG) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
@@ -293,7 +299,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                     ]
                 )
                 self.assertIn(
-                    f"DEBUG:{LOGGER_NAME}:Received too many request from "
+                    f"DEBUG:{LOGGER_NAME}:uuid:Received too many request from "
                     f"RPC API URI. Retrying in 1.0 seconds.",
                     cm.output,
                 )
@@ -325,6 +331,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
             return await self._ws_response_json()
 
         self._ws.receive_json.side_effect = side_effect
+        self.__uuid1.return_value = "uuid"
 
         with self.assertLogs(LOGGER_NAME, DEBUG) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
@@ -336,7 +343,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                     ]
                 )
             self.assertIn(
-                f"DEBUG:{LOGGER_NAME}:Received too many request from RPC API URI. "
+                f"DEBUG:{LOGGER_NAME}:uuid:Received too many request from RPC API URI. "
                 f"Retrying in 0.0 seconds.",
                 cm.output,
             )
@@ -370,11 +377,13 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
         self._aiohttp_client_session.ws_connect.side_effect = ws_connect_side_effect
         self._ws.send_json.side_effect = send_json_side_effect
         randint.return_value = 50
+        self.__uuid1.return_value = "uuid"
         with self.assertLogs(LOGGER_NAME) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
             self.assertIn(
-                f"ERROR:{LOGGER_NAME}:Error connecting: ClientError(). Waiting 0.5s to reconnect",
+                f"ERROR:{LOGGER_NAME}:uuid:Error connecting:"
+                f" ClientError(). Waiting 0.5s to reconnect",
                 cm.output,
             )
 

@@ -706,7 +706,7 @@ class GetBlockNumberTestCase(BaseRPCClientTestCase):
 
     async def test_get_block_number_raises_exception_for_rpc_error(self):
         self._rpc_response = {"jsonrpc": "rpc", "error": {"code": "code", "message": "message"}}
-        expected = r"RPC rpc - Req \d - code: message"
+        expected = r"RPC rpc - Req .+ - code: message"
         with self.assertRaisesRegex(RpcServerError, expected):
             try:
                 await self._rpc_client.get_block_number()

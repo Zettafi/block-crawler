@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import time
+import uuid
 from asyncio import Future, Task, CancelledError
 from math import floor
 from re import Pattern
@@ -81,7 +82,6 @@ class RpcResponse:
 
 
 class RpcClient:
-    MAX_MSG_SIZE = 200 * 1024 * 1024
 
     STAT_CONNECT = "rpc.connect"
     STAT_CONNECTION_RESET = "rpc.connection-reset"
@@ -115,6 +115,8 @@ class RpcClient:
         self.__requests_this_second: int = 0
         self.__logger = logging.getLogger(LOGGER_NAME)
         self.__connecting: bool = False
+        self.__reconnect_future: Optional[Future] = None
+        self.__instance = uuid.uuid1()
 
     async def __aenter__(self):
         await self.__connect()
@@ -128,16 +130,14 @@ class RpcClient:
             self._stats_service.increment(self.STAT_CONNECT)
             try:
                 self.__client = aiohttp.ClientSession()
-                self.__ws = await self.__client.ws_connect(
-                    self.__provider_url, max_msg_size=self.MAX_MSG_SIZE
-                )
+                self.__ws = await self.__client.ws_connect(self.__provider_url, max_msg_size=0)
                 break
             except ClientError as e:
                 if not retry:
                     raise
                 wait = random.randint(0, 100) * 2**connect_attempts / 100
                 await asyncio.sleep(wait)
-                self.__logger.error(f"Error connecting: {repr(e)}. Waiting {wait}s to reconnect")
+                self.__log_error(f"Error connecting: {repr(e)}. Waiting {wait}s to reconnect")
                 connect_attempts += 1
 
         self.__inbound_loop_task = asyncio.create_task(
@@ -156,7 +156,7 @@ class RpcClient:
             try:
                 response = await ws.receive_json()
                 if "id" not in response:
-                    self.__logger.error(f'Response received without "id" attribute -- {response}')
+                    self.__log_error(f'Response received without "id" attribute -- {response}')
                     continue
 
                 try:
@@ -169,7 +169,7 @@ class RpcClient:
                     )
                 except KeyError:
                     self._stats_service.increment(self.STAT_RESPONSE_UNKNOWN_ID)
-                    self.__logger.error(f"Response received for unknown id -- {response}")
+                    self.__log_error(f"Response received for unknown id -- {response}")
                     continue
 
                 self._stats_service.increment(self.STAT_RESPONSE_RECEIVED)
@@ -193,7 +193,7 @@ class RpcClient:
                             else:
                                 backoff_seconds = 1.0
 
-                            self.__logger.debug(
+                            self.__log_debug(
                                 f"Received too many request from RPC API {self.__provider_url}. "
                                 f"Retrying in {backoff_seconds} seconds."
                             )
@@ -215,7 +215,7 @@ class RpcClient:
                                 )
                             )
                     except KeyError as e:
-                        self.__logger.error(
+                        self.__log_error(
                             f"Invalid error response received:" f" Missing Key {e} -- {response}"
                         )
                 elif "result" in response:
@@ -234,13 +234,13 @@ class RpcClient:
             except CancelledError:
                 raise
             except Exception as e:
-                self.__logger.exception(
+                self.__log_exception(
                     f"An error occurred processing the transport response -- {repr(e)}"
                 )
                 break
 
         if wse := self.__ws.exception():  # Exception means implicit close due to error
-            self.__logger.error(f"Web Socket exception received: {repr(wse)}")
+            self.__log_error(f"Web Socket exception received: {repr(wse)}")
             asyncio.create_task(self.__reconnect())
             self.__reconnected = True
 
@@ -273,7 +273,13 @@ class RpcClient:
         return start_time
 
     async def __reconnect(self) -> None:
-        self.__logger.info(
+        if self.__reconnect_future:
+            # If already reconnecting, wait until it's done and return
+            return await self.__reconnect_future
+
+        self.__reconnect_future = asyncio.get_running_loop().create_future()
+
+        self.__log_info(
             f"Reconnecting to {self.__provider_url} "
             f"and replaying {len(self.__pending)} requests.",
         )
@@ -291,6 +297,8 @@ class RpcClient:
             start_time = await self.__send_json(request)
             self.__pending[request["id"]] = (future, request, start_time)
             await asyncio.sleep(0)  # Ensure replaying doesn't stop all other processing
+        self.__reconnect_future.set_result(None)
+        self.__reconnect_future = None
 
     def __get_rpc_request(self, method, params) -> Dict[str, Any]:
         self.__nonce += 1
@@ -298,7 +306,7 @@ class RpcClient:
             "jsonrpc": "2.0",
             "method": method,
             "params": params,
-            "id": str(self.__nonce),
+            "id": f"{self.__instance}-{self.__nonce}",
         }
         return data
 
@@ -329,6 +337,25 @@ class RpcClient:
 
         if delayed:
             self._stats_service.increment(self.STAT_REQUEST_DELAYED)
+
+        while self.__connecting:
+            # We're not ready to send a message if we're connecting
+            await asyncio.sleep(0)
+
+    def __log_info(self, message):
+        self.__log(logging.INFO, message)
+
+    def __log_error(self, message):
+        self.__log(logging.ERROR, message)
+
+    def __log_debug(self, message):
+        self.__log(logging.DEBUG, message)
+
+    def __log_exception(self, message):
+        self.__log(logging.ERROR, message, exc_info=True)
+
+    def __log(self, level, message, **kwargs):
+        self.__logger.log(level, f"{self.__instance}:{message}", **kwargs)
 
     async def send(self, method, *params) -> Any:
         if not self.__context_manager_running or not self.__ws:
