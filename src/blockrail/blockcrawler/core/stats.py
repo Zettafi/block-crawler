@@ -21,9 +21,9 @@ from blockrail.blockcrawler.nft.entities import TokenTransactionType
 
 class StatsService:
     def __init__(self) -> None:
-        self.__counters: Dict[str, int] = dict()
-        self.__timers: Dict[str, List[int]] = dict()
-        self.__point_in_time_counters: Dict[str, int] = dict()
+        self.__counters: Dict[str, int] = {}
+        self.__timers: Dict[str, List[int]] = {}
+        self.__point_in_time_counters: Dict[str, int] = {}
 
     def increment(self, stat: str, quantity: int = 1):
         if stat in self.__counters:
@@ -57,14 +57,14 @@ class StatsService:
             end = time.perf_counter_ns()
             duration = end - start
             if stat not in self.__timers:
-                self.__timers[stat] = list()
+                self.__timers[stat] = []
             self.__timers[stat].append(duration)
 
     def get_timings(self, stat):
         if stat in self.__timers:
             timings = self.__timers[stat]
         else:
-            timings = list()
+            timings = []
         return timings
 
     def set_point_in_time_counter(self, stat: str, count: int):

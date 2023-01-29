@@ -17,7 +17,7 @@ class BlockTimeCache(abc.ABC):
 
 class MemoryBlockTimeCache(BlockTimeCache):
     def __init__(self) -> None:
-        self.__block_timestamps: Dict[int, int] = dict()
+        self.__block_timestamps: Dict[int, int] = {}
 
     async def set(self, block_id: int, timestamp: int):
         self.set_sync(block_id, timestamp)

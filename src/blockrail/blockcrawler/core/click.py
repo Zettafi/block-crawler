@@ -10,7 +10,7 @@ class BlockChainParamType(ParamType):
     def convert(
         self, value: t.Any, param: t.Optional["Parameter"], ctx: t.Optional["Context"]
     ) -> t.Any:
-        options = list()
+        options = []
         for item in BlockChain:
             if item.value == value:
                 return item

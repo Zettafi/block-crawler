@@ -211,7 +211,7 @@ async def crawl_evm_blocks(
     session = aioboto3.Session()
 
     config = Config(connect_timeout=dynamodb_timeout, read_timeout=dynamodb_timeout)
-    base_resource_kwargs: Dict[str, Union[str, Config]] = dict(config=config)
+    base_resource_kwargs: Dict[str, Union[str, Config]] = {"config": config}
 
     dynamodb_resource_kwargs = base_resource_kwargs.copy()
     if dynamodb_endpoint_url is not None:  # This would only be in non-deployed environments
@@ -284,7 +284,7 @@ async def listen_for_and_process_new_evm_blocks(
     session = aioboto3.Session()
 
     config = Config(connect_timeout=dynamodb_timeout, read_timeout=dynamodb_timeout)
-    base_resource_kwargs: Dict[str, Union[str, Config]] = dict(config=config)
+    base_resource_kwargs: Dict[str, Union[str, Config]] = {"config": config}
 
     dynamodb_resource_kwargs = base_resource_kwargs.copy()
     if dynamodb_endpoint_url is not None:  # This would only be in non-deployed environments
@@ -376,7 +376,7 @@ async def listen_for_and_process_new_evm_blocks(
 async def set_last_block_id_for_block_chain(
     blockchain: str, last_block_id: int, dynamodb_endpoint_url: str, table_prefix: str
 ):
-    resource_kwargs = dict()
+    resource_kwargs = {}
     if dynamodb_endpoint_url is not None:  # This would only be in non-deployed environments
         resource_kwargs["endpoint_url"] = dynamodb_endpoint_url
     session = aioboto3.Session()
@@ -418,7 +418,7 @@ async def load_evm_contracts_by_block(
     session = aioboto3.Session()
 
     config = Config(connect_timeout=dynamodb_timeout, read_timeout=dynamodb_timeout)
-    base_resource_kwargs: Dict[str, Union[str, Config]] = dict(config=config)
+    base_resource_kwargs: Dict[str, Union[str, Config]] = {"config": config}
 
     token_transaction_type_oracle = TokenTransactionTypeOracle()
     log_version_oracle = LogVersionOracle()
@@ -436,7 +436,7 @@ async def load_evm_contracts_by_block(
             dynamodb, blockchain, increment_data_version, table_prefix
         )
 
-        rpc_clients: List[EvmRpcClient] = list()
+        rpc_clients: List[EvmRpcClient] = []
         for (uri, instances) in archive_nodes:
             for _ in range(instances):
                 rpc_clients.append(EvmRpcClient(uri, stats_service, rpc_requests_per_second))
@@ -475,7 +475,7 @@ async def load_evm_contracts_by_block(
                     log_version_oracle=log_version_oracle,
                     token_transaction_type_oracle=token_transaction_type_oracle,
                     max_block_height=HexInt(block_height),
-                    token_uri_batch_size=dynamodb_parallel_batches * 25,
+                    write_batch_size=dynamodb_parallel_batches * 25,
                 )
             )
             await data_bus.register(

@@ -33,7 +33,7 @@ class S3StorageContext(StorageClientContext):
             await self.__bucket.upload_fileobj(
                 data_reader,
                 Key=path,
-                ExtraArgs=dict(ContentType=content_type),
+                ExtraArgs={"ContentType": content_type},
             )
             self.__stats_service.increment(S3StorageClient.STAT_STORE)
 
@@ -53,7 +53,7 @@ class S3StorageClient(StorageClient):
         self.__session_ctm: Optional[AsyncContextManager] = None
 
     async def __aenter__(self):
-        kwargs = dict()
+        kwargs = {}
         if self.__endpoint_url is not None:
             kwargs["endpoint_url"] = self.__endpoint_url
         if self.__region_name is not None:

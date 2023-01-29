@@ -200,7 +200,7 @@ class BlockTimeCacheManager:
         self.__cache_file = cache_file
 
     def get_block_times_from_cache(self) -> List[Tuple[int, int]]:
-        block_times: List[Tuple[int, int]] = list()
+        block_times: List[Tuple[int, int]] = []
         try:
             with open(self.__cache_file, "r") as file:
                 for block_id, timestamp in csv.reader(file):

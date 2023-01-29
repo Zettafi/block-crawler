@@ -82,7 +82,6 @@ class RpcResponse:
 
 
 class RpcClient:
-
     STAT_CONNECT = "rpc.connect"
     STAT_CONNECTION_RESET = "rpc.connection-reset"
     STAT_RECONNECT = "rpc.reconnect"
@@ -101,13 +100,14 @@ class RpcClient:
         provider_url: str,
         stats_service: StatsService,
         requests_per_second: Optional[int] = None,
+        max_concurrent_requests: Optional[int] = None,
     ) -> None:
         self._stats_service = stats_service
         self.__inbound_loop_task: Optional[Task] = None
         self.__provider_url: str = provider_url
         self.__nonce: int = 0
         self.__ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        self.__pending: Dict[str, Tuple[Future, Dict[str, Any], int]] = dict()
+        self.__pending: Dict[str, Tuple[Future, Dict[str, Any], int]] = {}
         self.__context_manager_running: bool = False
         self.__requests_per_second: Optional[int] = requests_per_second
         self.__paused_for_too_many_requests: Optional[str] = None
@@ -116,7 +116,10 @@ class RpcClient:
         self.__logger = logging.getLogger(LOGGER_NAME)
         self.__connecting: bool = False
         self.__reconnect_future: Optional[Future] = None
-        self.__instance = uuid.uuid1()
+        self.__instance: uuid.UUID = uuid.uuid1()
+        self.__max_concurrent_requests: Optional[int] = (
+            max_concurrent_requests or requests_per_second
+        )
 
     async def __aenter__(self):
         await self.__connect()
@@ -284,7 +287,7 @@ class RpcClient:
             f"and replaying {len(self.__pending)} requests.",
         )
         self._stats_service.increment(self.STAT_RECONNECT)
-        replays: List[Tuple[Future, Dict, int]] = list()
+        replays: List[Tuple[Future, Dict, int]] = []
         try:
             while True:
                 _, value = self.__pending.popitem()
@@ -331,7 +334,9 @@ class RpcClient:
 
             self.__requests_this_second += 1
 
-        while self.__paused_for_too_many_requests:
+        while self.__paused_for_too_many_requests or (
+            self.__max_concurrent_requests and len(self.__pending) > self.__max_concurrent_requests
+        ):
             delayed = True
             await asyncio.sleep(0)
 

@@ -89,9 +89,9 @@ class ParallelDataBus(DataBus):
     """
 
     def __init__(self, logger: Logger) -> None:
-        self.__tasks: List[Task] = list()
+        self.__tasks: List[Task] = []
         self.__logger: Logger = logger
-        self.__consumers: List[Consumer] = list()
+        self.__consumers: List[Consumer] = []
         self.__task_watcher_task: Optional[Task] = None
 
     async def __aenter__(self):
@@ -116,12 +116,12 @@ class ParallelDataBus(DataBus):
             self.__task_watcher_task.cancel()
 
     async def send(self, data_package: DataPackage):
-        self.__logger.debug("RECEIVED DATA PACKAGE", extra=dict(data_package=data_package))
+        self.__logger.debug("RECEIVED DATA PACKAGE", extra={"data_package": data_package})
         for consumer in self.__consumers:
             try:
                 self.__logger.debug(
                     "SENDING DATA PACKAGE TO CONSUMER",
-                    extra=dict(consumer=consumer, data_package=data_package),
+                    extra={"consumer": consumer, "data_package": data_package},
                 )
                 await self.__add_task(consumer.receive(data_package))
                 await asyncio.sleep(0)  # Allow task to start before continuing
@@ -135,7 +135,7 @@ class ParallelDataBus(DataBus):
 
     async def register(self, consumer: Consumer):
         self.__consumers.append(consumer)
-        self.__logger.debug("REGISTERED CONSUMER", extra=dict(consumer=consumer))
+        self.__logger.debug("REGISTERED CONSUMER", extra={"consumer": consumer})
 
     async def __add_task(self, coroutine: Coroutine):
         self.__tasks.append(asyncio.get_running_loop().create_task(coroutine))

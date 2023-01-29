@@ -31,7 +31,7 @@ class EthCall:
         self.__from = from_
         self.__to = to
         self.__function = function
-        self.__parameters = list() if parameters is None else parameters.copy()
+        self.__parameters = [] if parameters is None else parameters.copy()
         self.__block = block
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -146,7 +146,7 @@ class EvmRpcClient(RpcClient):
 
     async def get_transaction_receipt(self, tx_hash: HexBytes) -> EvmTransactionReceipt:
         result = await self.send("eth_getTransactionReceipt", tx_hash.hex())
-        logs: List[EvmLog] = list()
+        logs: List[EvmLog] = []
         for log in result["logs"]:
             logs.append(
                 EvmLog(
@@ -227,12 +227,12 @@ class EvmRpcClient(RpcClient):
                 try:
                     logs = await self.send(
                         "eth_getLogs",
-                        dict(
-                            topics=topics,
-                            fromBlock=current_block.hex_value,
-                            toBlock=end_block.hex_value,
-                            address=str(address),
-                        ),
+                        {
+                            "topics": topics,
+                            "fromBlock": current_block.hex_value,
+                            "toBlock": end_block.hex_value,
+                            "address": str(address),
+                        },
                     )
                     if logs:
                         for log in logs:

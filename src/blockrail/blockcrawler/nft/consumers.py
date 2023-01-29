@@ -123,11 +123,11 @@ class NftTokenQuantityUpdatingConsumer(Consumer):
     @backoff.on_exception(backoff.expo, ClientError, max_tries=5)
     async def __update_quantity(self, quantity, token_transfer):
         await self.__tokens_table.update_item(
-            Key=dict(
-                blockchain_collection_id=f"{token_transfer.blockchain.value}"
+            Key={
+                "blockchain_collection_id": f"{token_transfer.blockchain.value}"
                 f"::{token_transfer.collection_id}",
-                token_id=token_transfer.token_id.hex_value,
-            ),
+                "token_id": token_transfer.token_id.hex_value,
+            },
             UpdateExpression="ADD quantity :q",
             ExpressionAttributeValues={":q": quantity},
             ConditionExpression=Attr("data_version").eq(token_transfer.data_version),
@@ -152,10 +152,10 @@ class NftMetadataUriUpdatingConsumer(Consumer):
         try:
 
             await self.__tokens_table.update_item(
-                Key=dict(
-                    blockchain_collection_id=blockchain_collection_id,
-                    token_id=data_package.token_id.hex_value,
-                ),
+                Key={
+                    "blockchain_collection_id": blockchain_collection_id,
+                    "token_id": data_package.token_id.hex_value,
+                },
                 UpdateExpression="SET metadata_uri = :metadata_uri, "
                 "metadata_uri_version = :metadata_uri_version",
                 ExpressionAttributeValues={
@@ -169,10 +169,10 @@ class NftMetadataUriUpdatingConsumer(Consumer):
             )
         except self.__tokens_table.meta.client.exceptions.ConditionalCheckFailedException:
             result = await self.__tokens_table.get_item(
-                Key=dict(
-                    blockchain_collection_id=blockchain_collection_id,
-                    token_id=data_package.token_id.hex_value,
-                )
+                Key={
+                    "blockchain_collection_id": blockchain_collection_id,
+                    "token_id": data_package.token_id.hex_value,
+                }
             )
 
             if (
@@ -308,7 +308,7 @@ class CurrentOwnerPersistingConsumer(Consumer):
 
         token_transfer = data_package.token_transfer
         blockchain = token_transfer.blockchain.value
-        transfers: List[Tuple[Address, int]] = list()
+        transfers: List[Tuple[Address, int]] = []
         if token_transfer.transaction_type in (
             TokenTransactionType.MINT,
             TokenTransactionType.TRANSFER,
@@ -321,11 +321,11 @@ class CurrentOwnerPersistingConsumer(Consumer):
             transfers.append((token_transfer.from_, -token_transfer.quantity.int_value))
 
         for address, quantity in transfers:
-            table_key = dict(
-                blockchain_account=f"{blockchain}::{address}",
-                collection_id_token_id=f"{token_transfer.collection_id}"
+            table_key = {
+                "blockchain_account": f"{blockchain}::{address}",
+                "collection_id_token_id": f"{token_transfer.collection_id}"
                 f"::{token_transfer.token_id.hex_value}",
-            )
+            }
             error_template = (
                 f"Failed to add {quantity} to quantity for owner {address} "
                 f"and token {token_transfer.token_id.hex_value}as no "
@@ -334,25 +334,25 @@ class CurrentOwnerPersistingConsumer(Consumer):
                 f" -- Cause: %s"
             )
 
-            update_params = dict(
-                Key=table_key,
-                UpdateExpression="SET collection_id = :cid"
+            update_params = {
+                "Key": table_key,
+                "UpdateExpression": "SET collection_id = :cid"
                 ",token_id = :tid"
                 ",account = :a"
                 ",data_version = :dv"
                 " ADD quantity :q",
-                ExpressionAttributeValues={
+                "ExpressionAttributeValues": {
                     ":cid": str(token_transfer.collection_id),
                     ":tid": token_transfer.token_id.hex_value,
                     ":a": address,
                     ":q": quantity,
                     ":dv": token_transfer.data_version,
                 },
-                ConditionExpression=(
+                "ConditionExpression": (
                     Attr("data_version").not_exists()
                     | Attr("data_version").eq(token_transfer.data_version)
                 ),
-            )
+            }
             try:
                 await self.__owners_table.update_item(**update_params)
 
