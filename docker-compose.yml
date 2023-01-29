@@ -7,30 +7,19 @@ services:
       - "-jar"
       - "DynamoDBLocal.jar"
       - "-sharedDb"
-  block-crawler-localstack:
-    image: localstack/localstack:latest
-    environment:
-     - DEFAULT_REGION=${AWS_DEFAULT_REGION:?err}
-    ports:
-     - "4566:4566"
-     - "4510-4559:4510-4559"
   block-crawler-bootstrapper:
     build: ./
     links:
-      - block-crawler-localstack
       - block-crawler-dynamodb
     depends_on:
-      - block-crawler-localstack
       - block-crawler-dynamodb
     environment:
      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:?err}
      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:?err}
      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:?err}
      - AWS_DYNAMODB_REGION=${AWS_DYNAMODB_REGION:?err}
-     - AWS_S3_METADATA_BUCKET=${AWS_S3_METADATA_BUCKET:?err}
     entrypoint: ""
     command: >
       bash -c "echo \"Preparing environment...\"
-      && python bin/reset.py --retry http://block-crawler-localstack:4566 s3
       && python bin/reset.py --retry http://block-crawler-dynamodb:8000 db
       && echo OK"
