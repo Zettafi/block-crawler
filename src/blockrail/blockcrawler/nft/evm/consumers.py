@@ -193,7 +193,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                     await asyncio.gather(*log_batch)
                     log_batch.clear()
 
-                    await self.__wait_for_ready_to_add_batch_task(token_owner_batch_write_tasks)
+                    await self.__wait_for_ready_to_add_batch_task(token_xfr_batch_write_tasks)
                     token_xfr_batch_write_tasks.append(
                         loop.create_task(
                             self.__data_service.write_token_transfer_batch(token_transfers[:])
