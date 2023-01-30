@@ -642,6 +642,7 @@ class StatsWriter:
         owner_count = self.__stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH)
         owner_ms = self.__stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH_MS)
         owner_ms_avg = self.__safe_average(owner_count, owner_ms)
+        write_delayed = self.__stats_service.get_count(data_services.STAT_WRITE_DELAYED)
         logging.getLogger(LOGGER_NAME).info(
             f"Blocks [{self.__block_bound_tracker.low:,}:{self.__block_bound_tracker.high:,}]"
             f" -- "
@@ -658,6 +659,7 @@ class StatsWriter:
             f"]"
             f" -- "
             f"Write ["
+            f"D:{write_delayed:,} "
             f"C:{collection_count:,}/{collection_ms_avg :,.0F} "
             f"T:{token_count :,}/{token_ms_avg :,.0F} "
             f"X:{transfer_count:,}/{transfer_ms_avg :,.0F} "

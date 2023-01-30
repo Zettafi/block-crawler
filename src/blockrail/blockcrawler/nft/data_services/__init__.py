@@ -42,6 +42,7 @@ class DataService(abc.ABC):
         raise NotImplementedError
 
 
+STAT_WRITE_DELAYED = "data_write_delayed"
 STAT_TOKEN_OWNER_WRITE_BATCH = "token_owner_write_batch"
 STAT_TOKEN_OWNER_WRITE_BATCH_MS = "token_owner_write_batch_ms"
 STAT_TOKEN_OWNER_WRITE_DATA_TOO_OLD = "token_owner_write_data_too_old"
