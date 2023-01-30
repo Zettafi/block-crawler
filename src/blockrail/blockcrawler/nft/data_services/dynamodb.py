@@ -269,6 +269,7 @@ class DynamoDbDataService(DataService):
         ):
             await asyncio.sleep(0)
             delayed = True
+            second = floor(loop.time())
 
         if delayed:
             self.__stats_service.increment(STAT_WRITE_DELAYED)
