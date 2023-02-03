@@ -180,6 +180,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                 from_block=data_package.collection.block_created,
                 to_block=self.__max_block_height,
                 address=data_package.collection.collection_id,
+                block_range_size=100_000,
             ):
                 if len(log.topics) != 4:
                     continue  # Ignore other same signature events such as ERC-20 Transfer
@@ -225,7 +226,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
             for _, token in tokens.items():
                 batch_tokens.append(token)
                 if len(batch_tokens) >= self.__write_batch_size:
-                    batch_tokens_batches.append(batch_tokens)
+                    batch_tokens_batches.append(batch_tokens[:])
                     batch_tokens.clear()
             if batch_tokens:
                 batch_tokens_batches.append(batch_tokens)
@@ -314,7 +315,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                         to=token.collection_id,
                         function=Erc721MetadataFunctions.TOKEN_URI,
                         parameters=[token.token_id.int_value],
-                        block=token.mint_block.hex_value,
+                        block=token.mint_block,
                     )
                 )
             )
@@ -435,6 +436,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                 from_block=data_package.collection.block_created,
                 to_block=self.__max_block_height,
                 address=data_package.collection.collection_id,
+                block_range_size=100_000,
             ):
 
                 if log.topics[0] == Erc1155Events.TRANSFER_SINGLE.event_signature_hash:

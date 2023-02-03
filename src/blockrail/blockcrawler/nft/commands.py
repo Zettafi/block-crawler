@@ -14,7 +14,6 @@ from .consumers import (
     NftTokenTransferPersistenceConsumer,
     NftTokenQuantityUpdatingConsumer,
     NftMetadataUriUpdatingConsumer,
-    NftTokenMetadataPersistingConsumer,
 )
 from .data_services.dynamodb import DynamoDbDataService
 from .entities import BlockChain
@@ -32,11 +31,9 @@ from .evm.transformers import (
     Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer,
 )
 from ..core.bus import ParallelDataBus
-from ..core.data_clients import HttpDataClient, IpfsDataClient, ArweaveDataClient, DataUriDataClient
 from ..core.entities import HexInt
 from ..core.services import BlockTimeService, BlockTimeCache
 from ..core.stats import StatsService
-from ..core.storage_clients import S3StorageClient, StorageClientContext
 from ..data.models import BlockCrawlerConfig, Tokens
 from ..evm.producers import BlockIDProducer
 from ..evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient
@@ -53,15 +50,9 @@ async def __evm_block_crawler_data_bus_factory(
     stats_service: StatsService,
     dynamodb,
     table_prefix: str,
-    storage_client_context: StorageClientContext,
     logger: Logger,
     rpc_client: EvmRpcClient,
     blockchain: BlockChain,
-    http_metadata_timeout: float,
-    ipfs_node_uri: str,
-    ipfs_metadata_timeout: float,
-    arweave_node_uri: str,
-    arweave_metadata_timeout: float,
     data_version: int,
 ):
     data_bus = ParallelDataBus(logger)
@@ -137,21 +128,6 @@ async def __evm_block_crawler_data_bus_factory(
             data_version=data_version,
         )
     )
-    http_data_client = HttpDataClient(http_metadata_timeout, stats_service)
-    ipfs_data_client = IpfsDataClient(ipfs_node_uri, ipfs_metadata_timeout, stats_service)
-    arweave_data_client = ArweaveDataClient(
-        arweave_node_uri, arweave_metadata_timeout, stats_service
-    )
-    data_uri_data_client = DataUriDataClient(stats_service)
-    await data_bus.register(
-        NftTokenMetadataPersistingConsumer(
-            http_client=http_data_client,
-            ipfs_client=ipfs_data_client,
-            arweave_client=arweave_data_client,
-            data_uri_client=data_uri_data_client,
-            storage_client_context=storage_client_context,
-        )
-    )
     return data_bus
 
 
@@ -194,18 +170,10 @@ async def crawl_evm_blocks(
     blockchain: BlockChain,
     dynamodb_endpoint_url: str,
     dynamodb_region: str,
-    s3_endpoint_url: str,
-    s3_region: str,
     dynamodb_timeout: float,
     table_prefix: str,
-    s3_metadata_bucket: str,
-    http_metadata_timeout: float,
-    ipfs_node_uri: str,
-    ipfs_metadata_timeout: float,
-    arweave_node_uri: str,
-    arweave_metadata_timeout: float,
-    starting_block: int,
-    ending_block: int,
+    starting_block: HexInt,
+    ending_block: HexInt,
     increment_data_version: bool,
 ):
     session = aioboto3.Session()
@@ -223,41 +191,29 @@ async def crawl_evm_blocks(
             dynamodb, blockchain, increment_data_version, table_prefix
         )
 
-        async with S3StorageClient(
-            bucket=s3_metadata_bucket,
-            stats_service=stats_service,
-            endpoint_url=s3_endpoint_url,
-            region_name=s3_region,
-        ) as storage_client_context:
-            async with EvmRpcClient(
-                archive_node_uri, stats_service, rpc_requests_per_second
-            ) as rpc_client:
-                # TODO: Process chunks and allow for graceful stop
-                # TODO: Report on progress
-                data_bus = await __evm_block_crawler_data_bus_factory(
-                    stats_service=stats_service,
-                    dynamodb=dynamodb,
-                    table_prefix=table_prefix,
-                    storage_client_context=storage_client_context,
-                    logger=logger,
-                    rpc_client=rpc_client,
-                    blockchain=blockchain,
-                    http_metadata_timeout=http_metadata_timeout,
-                    ipfs_node_uri=ipfs_node_uri,
-                    ipfs_metadata_timeout=ipfs_metadata_timeout,
-                    arweave_node_uri=arweave_node_uri,
-                    arweave_metadata_timeout=arweave_metadata_timeout,
-                    data_version=data_version,
-                )
-                # await data_bus.register(
-                #     DebugConsumer(
-                #         lambda package: isinstance(package, NftTokenMetadataUriUpdatedDataPackage)
-                #     )
-                # )
+        async with EvmRpcClient(
+            archive_node_uri, stats_service, rpc_requests_per_second
+        ) as rpc_client:
+            # TODO: Process chunks and allow for graceful stop
+            # TODO: Report on progress
+            data_bus = await __evm_block_crawler_data_bus_factory(
+                stats_service=stats_service,
+                dynamodb=dynamodb,
+                table_prefix=table_prefix,
+                logger=logger,
+                rpc_client=rpc_client,
+                blockchain=blockchain,
+                data_version=data_version,
+            )
+            # await data_bus.register(
+            #     DebugConsumer(
+            #         lambda package: isinstance(package, NftTokenMetadataUriUpdatedDataPackage)
+            #     )
+            # )
 
-                block_id_producer = BlockIDProducer(blockchain, starting_block, ending_block)
-                async with data_bus:
-                    await block_id_producer(data_bus)
+            block_id_producer = BlockIDProducer(blockchain, starting_block, ending_block)
+            async with data_bus:
+                await block_id_producer(data_bus)
 
 
 async def listen_for_and_process_new_evm_blocks(
@@ -270,14 +226,6 @@ async def listen_for_and_process_new_evm_blocks(
     dynamodb_region: str,
     dynamodb_timeout: float,
     table_prefix: str,
-    s3_endpoint_url: str,
-    s3_region: str,
-    s3_metadata_bucket: str,
-    http_metadata_timeout: float,
-    ipfs_node_uri: str,
-    ipfs_metadata_timeout: float,
-    arweave_node_uri: str,
-    arweave_metadata_timeout: float,
     trail_blocks: int,
     process_interval: int,
 ):
@@ -295,86 +243,75 @@ async def listen_for_and_process_new_evm_blocks(
         data_version = await get_data_version(  # noqa: F841
             dynamodb, blockchain, False, table_prefix
         )
-        async with S3StorageClient(
-            bucket=s3_metadata_bucket,
+        async with EvmRpcClient(
+            provider_url=archive_node_uri,
             stats_service=stats_service,
-            endpoint_url=s3_endpoint_url,
-            region_name=s3_region,
-        ) as storage_client_context:
-
-            async with EvmRpcClient(
-                provider_url=archive_node_uri,
+            requests_per_second=rpc_requests_per_second,
+        ) as rpc_client:
+            data_bus = await __evm_block_crawler_data_bus_factory(
                 stats_service=stats_service,
-                requests_per_second=rpc_requests_per_second,
-            ) as rpc_client:
-                data_bus = await __evm_block_crawler_data_bus_factory(
-                    stats_service=stats_service,
-                    dynamodb=dynamodb,
-                    table_prefix=table_prefix,
-                    storage_client_context=storage_client_context,
-                    logger=logger,
-                    rpc_client=rpc_client,
-                    blockchain=blockchain,
-                    http_metadata_timeout=http_metadata_timeout,
-                    ipfs_node_uri=ipfs_node_uri,
-                    ipfs_metadata_timeout=ipfs_metadata_timeout,
-                    arweave_node_uri=arweave_node_uri,
-                    arweave_metadata_timeout=arweave_metadata_timeout,
-                    data_version=data_version,
+                dynamodb=dynamodb,
+                table_prefix=table_prefix,
+                logger=logger,
+                rpc_client=rpc_client,
+                blockchain=blockchain,
+                data_version=data_version,
+            )
+
+            last_block_table = await dynamodb.Table(BlockCrawlerConfig.table_name)
+            last_block_result = await last_block_table.get_item(
+                Key={"blockchain": blockchain.value}
+            )
+            try:
+                last_block_processed = HexInt(
+                    int(last_block_result.get("Item").get("last_block_id"))
+                )
+            except AttributeError:
+                exit(
+                    "Unable to determine the last block number processed. "
+                    "Are you starting fresh and forgot to seed?"
                 )
 
-                last_block_table = await dynamodb.Table(BlockCrawlerConfig.table_name)
-                last_block_result = await last_block_table.get_item(
-                    Key={"blockchain": blockchain.value}
-                )
-                try:
-                    last_block_processed = int(last_block_result.get("Item").get("last_block_id"))
-                except AttributeError:
-                    exit(
-                        "Unable to determine the last block number processed. "
-                        "Are you starting fresh and forgot to seed?"
+            process_time: float = 0.0
+            caught_up = False
+            while True:
+                # TODO: Gracefully handle shutdown
+                block_number = await rpc_client.get_block_number()
+                current_block_number = block_number - trail_blocks
+                if last_block_processed < current_block_number:
+                    start_block = last_block_processed + 1
+                    block_ids = current_block_number - start_block + 1
+                    if not caught_up and block_ids > 1:
+                        print(f"Catching up {block_ids} blocks")
+                    start = time.perf_counter()
+                    block_id_producer = BlockIDProducer(
+                        blockchain, start_block, current_block_number
                     )
+                    async with data_bus:
+                        await block_id_producer(data_bus)
 
-                process_time: float = 0.0
-                caught_up = False
-                while True:
-                    # TODO: Gracefully handle shutdown
-                    block_number = await rpc_client.get_block_number()
-                    current_block_number = block_number.int_value - trail_blocks
-                    if last_block_processed < current_block_number:
-                        start_block = last_block_processed + 1
-                        block_ids = current_block_number - start_block + 1
-                        if not caught_up and block_ids > 1:
-                            print(f"Catching up {block_ids} blocks")
-                        start = time.perf_counter()
-                        block_id_producer = BlockIDProducer(
-                            blockchain, start_block, current_block_number
-                        )
-                        async with data_bus:
-                            await block_id_producer(data_bus)
+                    end = time.perf_counter()
+                    process_time = end - start
+                    print(
+                        datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S%z")
+                        + f" - {start_block}:{current_block_number}"
+                        f" - {process_time:0.3f}s"
+                        f" - blk:{block_ids:,}"
+                    )
+                    last_block_processed = current_block_number
 
-                        end = time.perf_counter()
-                        process_time = end - start
-                        print(
-                            datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S%z")
-                            + f" - {start_block}:{current_block_number}"
-                            f" - {process_time:0.3f}s"
-                            f" - blk:{block_ids:,}"
-                        )
-                        last_block_processed = current_block_number
-
-                        await set_last_block_id_for_block_chain(
-                            cast(str, blockchain.value),
-                            last_block_processed,
-                            dynamodb_endpoint_url,
-                            table_prefix,
-                        )
-                    caught_up = True
-                    await asyncio.sleep(process_interval - process_time)
+                    await set_last_block_id_for_block_chain(
+                        cast(str, blockchain.value),
+                        last_block_processed,
+                        dynamodb_endpoint_url,
+                        table_prefix,
+                    )
+                caught_up = True
+                await asyncio.sleep(process_interval - process_time)
 
 
 async def set_last_block_id_for_block_chain(
-    blockchain: str, last_block_id: int, dynamodb_endpoint_url: str, table_prefix: str
+    blockchain: str, last_block_id: HexInt, dynamodb_endpoint_url: str, table_prefix: str
 ):
     resource_kwargs = {}
     if dynamodb_endpoint_url is not None:  # This would only be in non-deployed environments
@@ -385,7 +322,7 @@ async def set_last_block_id_for_block_chain(
         await block_crawler_config.update_item(
             Key={"blockchain": blockchain},
             UpdateExpression="SET last_block_id = :block_id",
-            ExpressionAttributeValues={":block_id": last_block_id},
+            ExpressionAttributeValues={":block_id": last_block_id.int_value},
         )
 
 
@@ -397,9 +334,9 @@ async def get_block(evm_node_uri, stats_service: StatsService):
 
 
 async def load_evm_contracts_by_block(
-    starting_block: int,
-    ending_block: int,
-    block_height: int,
+    starting_block: HexInt,
+    ending_block: HexInt,
+    block_height: HexInt,
     increment_data_version: bool,
     block_chunk_size: int,
     logger: Logger,
@@ -474,7 +411,7 @@ async def load_evm_contracts_by_block(
                     block_time_service=block_time_service,
                     log_version_oracle=log_version_oracle,
                     token_transaction_type_oracle=token_transaction_type_oracle,
-                    max_block_height=HexInt(block_height),
+                    max_block_height=block_height,
                     write_batch_size=dynamodb_parallel_batches * 25,
                 )
             )
@@ -486,14 +423,16 @@ async def load_evm_contracts_by_block(
                     block_time_service=block_time_service,
                     log_version_oracle=log_version_oracle,
                     token_transaction_type_oracle=token_transaction_type_oracle,
-                    max_block_height=HexInt(block_height),
+                    max_block_height=block_height,
                 )
             )
 
             if ending_block == starting_block:
                 blocks: Iterable = [starting_block]
             else:
-                blocks = range(ending_block, starting_block, -1 * block_chunk_size)
+                blocks = range(
+                    ending_block.int_value, starting_block.int_value, -1 * block_chunk_size
+                )
 
             for block_chunk_start in blocks:
                 block_chunk_end = block_chunk_start - block_chunk_size + 1

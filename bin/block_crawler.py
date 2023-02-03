@@ -15,8 +15,8 @@ from typing import Optional, List, Tuple
 import click
 
 from blockrail.blockcrawler import LOGGER_NAME
-from blockrail.blockcrawler.core.click import BlockChainParamType
-from blockrail.blockcrawler.core.entities import BlockChain
+from blockrail.blockcrawler.core.click import BlockChainParamType, HexIntParamType
+from blockrail.blockcrawler.core.entities import BlockChain, HexInt
 from blockrail.blockcrawler.core.rpc import RpcClient
 from blockrail.blockcrawler.core.services import MemoryBlockTimeCache
 from blockrail.blockcrawler.core.stats import StatsService
@@ -44,8 +44,8 @@ def block_crawler():
 
 
 @block_crawler.command()
-@click.argument("STARTING_BLOCK", type=int)
-@click.argument("ENDING_BLOCK", type=int)
+@click.argument("STARTING_BLOCK", type=HexInt)
+@click.argument("ENDING_BLOCK", type=HexInt)
 @click.option(
     "--blockchain",
     envvar="BLOCKCHAIN",
@@ -83,52 +83,10 @@ def block_crawler():
 )
 @click.option(
     "--dynamodb-region",
-    envvar="AWS_DYNAMODB_REGION",
+    envvar="AWS_REGION",
     help="AWS region for DynamoDB",
 )
 @click.option("--table-prefix", envvar="TABLE_PREFIX", help="Prefix for table names", default="")
-@click.option(
-    "--s3-region",
-    envvar="AWS_S3_REGION",
-    help="AWS region for S3",
-)
-@click.option(
-    "--s3-metadata-bucket",
-    envvar="AWS_S3_METADATA_BUCKET",
-    default="chain-conductor-metadata",
-    help="S3 bucket to store metadata files",
-)
-@click.option(
-    "--http-metadata-timeout",
-    envvar="HTTP_METADATA_TIMEOUT",
-    default=10.0,
-    show_default=True,
-    help="Maximum time in seconds to wait for response from HTTP server when collecting metadata",
-)
-@click.option(
-    "--ipfs-node-uri",
-    envvar="IPFS_NODE_URI",
-    help="URI for IPFS requests to obtain token metadata",
-)
-@click.option(
-    "--ipfs-metadata-timeout",
-    envvar="IPFS_METADATA_TIMEOUT",
-    default=60.0,
-    show_default=True,
-    help="Maximum time in seconds to wait for response from IPFS node when collecting metadata",
-)
-@click.option(
-    "--arweave-node-uri",
-    envvar="ARWEAVE_NODE_URI",
-    help="URI for Arweave requests to obtain token metadata",
-)
-@click.option(
-    "--arweave-metadata-timeout",
-    envvar="ARWEAVE_METADATA_TIMEOUT",
-    default=10.0,
-    show_default=True,
-    help="Maximum time in seconds to wait for response from Arweave node when collecting metadata",
-)
 @click.option(
     "--increment-data-version",
     envvar="INCREMENT_DATA_VERSION",
@@ -147,8 +105,8 @@ def block_crawler():
     help="Show debug messages in the console.",
 )
 def crawl(
-    starting_block: int,
-    ending_block: int,
+    starting_block: HexInt,
+    ending_block: HexInt,
     blockchain: BlockChain,
     evm_archive_node_uri: str,
     rpc_requests_per_second: Optional[int],
@@ -156,14 +114,6 @@ def crawl(
     dynamodb_endpoint_url: str,
     dynamodb_region: str,
     table_prefix: str,
-    s3_endpoint_url: str,
-    s3_region: str,
-    s3_metadata_bucket: str,
-    http_metadata_timeout: float,
-    ipfs_node_uri: str,
-    ipfs_metadata_timeout: float,
-    arweave_node_uri: str,
-    arweave_metadata_timeout: float,
     increment_data_version: bool,
     debug: bool,
 ):
@@ -190,16 +140,8 @@ def crawl(
                 blockchain=blockchain,
                 dynamodb_endpoint_url=dynamodb_endpoint_url,
                 dynamodb_region=dynamodb_region,
-                s3_endpoint_url=s3_endpoint_url,
-                s3_region=s3_region,
                 dynamodb_timeout=dynamodb_timeout,
                 table_prefix=table_prefix,
-                s3_metadata_bucket=s3_metadata_bucket,
-                http_metadata_timeout=http_metadata_timeout,
-                ipfs_node_uri=ipfs_node_uri,
-                ipfs_metadata_timeout=ipfs_metadata_timeout,
-                arweave_node_uri=arweave_node_uri,
-                arweave_metadata_timeout=arweave_metadata_timeout,
                 starting_block=starting_block,
                 ending_block=ending_block,
                 increment_data_version=increment_data_version,
@@ -235,11 +177,6 @@ def crawl(
     help="Override URL for connecting to Amazon DynamoDB",
 )
 @click.option(
-    "--s3-endpoint-url",
-    envvar="AWS_S3_ENDPOINT_URL",
-    help="Override URL for connecting to Amazon S3",
-)
-@click.option(
     "--dynamodb-timeout",
     envvar="DYNAMODB_TIMEOUT",
     default=5.0,
@@ -249,49 +186,6 @@ def crawl(
     "--dynamodb-region",
     envvar="AWS_DYNAMODB_REGION",
     help="AWS region for DynamoDB",
-)
-@click.option("--table-prefix", envvar="TABLE_PREFIX", help="Prefix for table names", default="")
-@click.option(
-    "--s3-region",
-    envvar="AWS_S3_REGION",
-    help="AWS region for S3",
-)
-@click.option(
-    "--s3-metadata-bucket",
-    envvar="AWS_S3_METADATA_BUCKET",
-    default="chain-conductor-metadata",
-    help="S3 bucket to store metadata files",
-)
-@click.option(
-    "--http-metadata-timeout",
-    envvar="HTTP_METADATA_TIMEOUT",
-    default=10.0,
-    show_default=True,
-    help="Maximum time in seconds to wait for response from HTTP server when collecting metadata",
-)
-@click.option(
-    "--ipfs-node-uri",
-    envvar="IPFS_NODE_URI",
-    help="URI for IPFS requests to obtain token metadata",
-)
-@click.option(
-    "--ipfs-metadata-timeout",
-    envvar="IPFS_METADATA_TIMEOUT",
-    default=60.0,
-    show_default=True,
-    help="Maximum time in seconds to wait for response from IPFS node when collecting metadata",
-)
-@click.option(
-    "--arweave-node-uri",
-    envvar="ARWEAVE_NODE_URI",
-    help="URI for Arweave requests to obtain token metadata",
-)
-@click.option(
-    "--arweave-metadata-timeout",
-    envvar="ARWEAVE_METADATA_TIMEOUT",
-    default=10.0,
-    show_default=True,
-    help="Maximum time in seconds to wait for response from Arweave node when collecting metadata",
 )
 @click.option(
     "--trail-blocks",
@@ -320,16 +214,8 @@ def tail(
     blockchain: BlockChain,
     dynamodb_endpoint_url: str,
     dynamodb_region: str,
-    s3_endpoint_url: str,
-    s3_region: str,
     dynamodb_timeout: float,
     table_prefix: str,
-    s3_metadata_bucket: str,
-    http_metadata_timeout: float,
-    ipfs_node_uri: str,
-    ipfs_metadata_timeout: float,
-    arweave_node_uri: str,
-    arweave_metadata_timeout: float,
     trail_blocks: int,
     process_interval: int,
     debug: bool,
@@ -358,14 +244,6 @@ def tail(
                 dynamodb_region=dynamodb_region,
                 dynamodb_timeout=dynamodb_timeout,
                 table_prefix=table_prefix,
-                s3_endpoint_url=s3_endpoint_url,
-                s3_region=s3_region,
-                s3_metadata_bucket=s3_metadata_bucket,
-                http_metadata_timeout=http_metadata_timeout,
-                ipfs_node_uri=ipfs_node_uri,
-                ipfs_metadata_timeout=ipfs_metadata_timeout,
-                arweave_node_uri=arweave_node_uri,
-                arweave_metadata_timeout=arweave_metadata_timeout,
                 trail_blocks=trail_blocks,
                 process_interval=process_interval,
             )
@@ -376,9 +254,9 @@ def tail(
 
 @block_crawler.command()
 @click.argument("BLOCKCHAIN", type=BlockChainParamType())
-@click.argument("STARTING_BLOCK", type=int)
-@click.argument("ENDING_BLOCK", type=int)
-@click.argument("BLOCK_HEIGHT", type=int)
+@click.argument("STARTING_BLOCK", type=HexIntParamType())
+@click.argument("ENDING_BLOCK", type=HexIntParamType())
+@click.argument("BLOCK_HEIGHT", type=HexIntParamType())
 @click.option(
     "--increment-data-version",
     envvar="INCREMENT_DATA_VERSION",
@@ -457,9 +335,9 @@ def tail(
 )
 def load(
     blockchain: BlockChain,
-    starting_block: int,
-    ending_block: int,
-    block_height: int,
+    starting_block: HexInt,
+    ending_block: HexInt,
+    block_height: HexInt,
     block_chunk_size: int,
     increment_data_version: bool,
     evm_rpc_nodes: List[Tuple[str, int]],
@@ -550,13 +428,13 @@ def load(
         stats_writer.write_line()
         logger.info(
             f"Total Time: {hours}:{mins:02}:{secs:05.2F}"
-            f" -- Blocks {starting_block:,} to {ending_block:,}"
-            f" at block height {block_height:,}"
+            f" -- Blocks {starting_block.int_value:,} to {ending_block.int_value:,}"
+            f" at block height {block_height.int_value:,}"
         )
 
 
 @block_crawler.command()
-@click.argument("LAST_BLOCK_ID", type=int)
+@click.argument("LAST_BLOCK_ID", type=HexInt)
 @click.option(
     "--dynamodb-endpoint-url",
     envvar="AWS_DYNAMODB_ENDPOINT_URL",
@@ -570,7 +448,7 @@ def load(
     type=BlockChainParamType(),
 )
 @click.option("--table-prefix", envvar="TABLE_PREFIX", help="Prefix for table names", default="")
-def seed(blockchain, last_block_id, dynamodb_endpoint_url, table_prefix):
+def seed(blockchain, last_block_id: HexInt, dynamodb_endpoint_url, table_prefix):
     """
     Set the LAST_BLOCK_ID processed for the blockchain in the database. The
     listen command will use ths value to process blocks after this bock.
@@ -603,8 +481,8 @@ def block_number(evm_archive_node_uri):
 
 @dataclasses.dataclass
 class BlockBoundTracker:
-    low: Optional[int] = 0
-    high: Optional[int] = 0
+    low: Optional[HexInt] = HexInt(0)
+    high: Optional[HexInt] = HexInt(0)
 
 
 class StatsWriter:
@@ -644,7 +522,10 @@ class StatsWriter:
         owner_ms_avg = self.__safe_average(owner_count, owner_ms)
         write_delayed = self.__stats_service.get_count(data_services.STAT_WRITE_DELAYED)
         logging.getLogger(LOGGER_NAME).info(
-            f"Blocks [{self.__block_bound_tracker.low:,}:{self.__block_bound_tracker.high:,}]"
+            f"Blocks ["
+            f"{self.__block_bound_tracker.low.int_value:,}:"
+            f"{self.__block_bound_tracker.high.int_value:,}"
+            f"]"
             f" -- "
             f"Conn ["
             f"C:{rpc_connect:,} "

@@ -11,10 +11,10 @@ class BlockIDProducer(Producer):
     """
 
     def __init__(
-        self, blockchain: BlockChain, starting_block: int, ending_block: int, step: int = 1
+        self, blockchain: BlockChain, starting_block: HexInt, ending_block: HexInt, step: int = 1
     ) -> None:
         self.__block_chain = blockchain
-        self.__block_range = range(starting_block, ending_block + step, step)
+        self.__block_range = range(starting_block.int_value, ending_block.int_value + step, step)
 
     async def __call__(self, data_bus: DataBus):
         for block_id in self.__block_range:

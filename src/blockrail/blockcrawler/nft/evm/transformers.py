@@ -397,7 +397,7 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(Transformer):
                     to=data_package.token_transfer.collection_id,
                     function=Erc721MetadataFunctions.TOKEN_URI,
                     parameters=[data_package.token_transfer.token_id.int_value],
-                    block=data_package.token_transfer.block_id.hex_value,
+                    block=data_package.token_transfer.block_id,
                 )
             )
         except Exception as e:

@@ -24,7 +24,7 @@ class HexInt:
 
     def __eq__(self, o) -> bool:
         if isinstance(o, self.__class__):
-            return o.hex_value == self.__hex_str
+            return o.int_value == self.int_value
         elif isinstance(o, int):
             return self.int_value == o
         else:

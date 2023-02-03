@@ -10,6 +10,9 @@ class HexIntTestCase(TestCase):
     def test_equal_hex_str_is_equal(self):
         self.assertEqual(HexInt("0x1"), HexInt("0x1"))
 
+    def test_equivalent_hex_str_is_equal(self):
+        self.assertEqual(HexInt("0x01"), HexInt("0x1"))
+
     def test_equal_int_is_equal(self):
         self.assertEqual(HexInt("0x1"), 1)
 

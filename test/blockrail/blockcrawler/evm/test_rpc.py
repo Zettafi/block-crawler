@@ -829,9 +829,9 @@ class GetLogsTestCase(BaseRPCClientTestCase):
             },
         )
 
-    async def test_breaks_up_block_into_100_000_block_chunks(self):
+    async def test_breaks_up_block_into_block_chunk_size_chunks(self):
         async for _ in self._rpc_client.get_logs(
-            [], HexInt(1), HexInt(100_001), Address("contract")
+            [], HexInt(1), HexInt(100_001), Address("contract"), 100_000
         ):
             pass
 
@@ -874,7 +874,7 @@ class GetLogsTestCase(BaseRPCClientTestCase):
         -32005,  # Infura
         -32602,  # Alchemy
     )
-    async def test_halves_block_range_until_one_and_errors_when_to_many_records_error_returned(
+    async def test_reduces_block_range_until_one_and_errors_when_to_many_records_error_returned(
         self,
         error_code,
     ):
@@ -958,7 +958,7 @@ class GetLogsTestCase(BaseRPCClientTestCase):
             ]
         )
         logs = self._rpc_client.get_logs(
-            [], HexInt(1), HexInt(200_000), Address("contract")
+            [], HexInt(1), HexInt(200_000), Address("contract"), 100_000
         ).__aiter__()
         self.assertEqual(0, self._ws_connect_patch.return_value.send_json.await_count)
         await logs.__anext__()

@@ -1,6 +1,6 @@
 import logging
 import math
-from typing import Optional, Union, List, Any, AsyncIterable
+from typing import Optional, Union, List, Any, AsyncIterable, Literal
 
 from eth_abi import decode, encode
 from eth_utils import decode_hex
@@ -26,13 +26,15 @@ class EthCall:
         to: str,
         function: Function,
         parameters: Optional[list] = None,
-        block: Optional[Union[str, int]] = "latest",
+        block: Optional[
+            Union[HexInt, Literal["latest"], Literal["earliest"], Literal["pending"]]
+        ] = "latest",
     ):
         self.__from = from_
         self.__to = to
         self.__function = function
         self.__parameters = [] if parameters is None else parameters.copy()
-        self.__block = block
+        self.__block = block.hex_value if isinstance(block, HexInt) else block
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
@@ -213,17 +215,24 @@ class EvmRpcClient(RpcClient):
         return response
 
     async def get_logs(
-        self, topics: list, from_block: HexInt, to_block: HexInt, address: Address
+        self,
+        topics: List[Union[str, List[str]]],
+        from_block: HexInt,
+        to_block: HexInt,
+        address: Address,
+        block_range_size: int = None,
     ) -> AsyncIterable[EvmLog]:
+        if not block_range_size:
+            block_range_size = to_block.int_value - from_block.int_value + 1
         current_block = from_block
         while current_block <= to_block:
-            block_range_size = 100_000
+            current_block_range_size = block_range_size
             processed = False
             while not processed:
-                end_block = current_block + block_range_size - 1
+                end_block = current_block + current_block_range_size - 1
                 if end_block > to_block:
                     end_block = to_block
-                    block_range_size = 1 + end_block - current_block
+                    current_block_range_size = 1 + end_block - current_block
                 try:
                     logs = await self.send(
                         "eth_getLogs",
@@ -254,9 +263,9 @@ class EvmRpcClient(RpcClient):
                         -32005,  # Infura
                         -32602,  # Alchemy
                     ):
-                        old_block_range_size = block_range_size
-                        block_range_size = math.floor(block_range_size / 10)
-                        if old_block_range_size <= block_range_size:
+                        old_block_range_size = current_block_range_size
+                        current_block_range_size = math.floor(current_block_range_size / 10)
+                        if old_block_range_size <= current_block_range_size:
                             raise
                     else:
                         raise
