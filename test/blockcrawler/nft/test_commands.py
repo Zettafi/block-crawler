@@ -13,7 +13,7 @@ from blockcrawler.evm.types import HexInt
 
 class GetBlockCommandTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        patcher = patch("blockcrawler.nft.commands.EvmRpcClient", spec=EvmRpcClient)
+        patcher = patch("blockcrawler.evm.bin.EvmRpcClient", spec=EvmRpcClient)
         self.addCleanup(patcher.stop)
         self.__rpc_client = patcher.start()
         self.__rpc_client.return_value.get_block_number = AsyncMock()
