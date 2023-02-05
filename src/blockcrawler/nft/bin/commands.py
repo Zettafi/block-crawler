@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import math
 import time
 from logging import Logger
 from typing import Union, Dict, cast, Optional, List, Iterable, Tuple
@@ -396,6 +397,10 @@ async def load_evm_contracts_by_block(
                 )
             )
             await data_bus.register(NftCollectionPersistenceConsumer(data_service))
+            # Make sure batches are full as batches are 25 items
+            dynamodb_write_batch_size = dynamodb_parallel_batches * 25
+            # Make sure we don't exceed max hot partition value of 1,000
+            dynamodb_max_concurrent_batches = math.floor(1_000 / dynamodb_write_batch_size)
             await data_bus.register(
                 CollectionToEverythingElseErc721CollectionBasedConsumer(
                     data_service=data_service,
@@ -404,7 +409,8 @@ async def load_evm_contracts_by_block(
                     log_version_oracle=log_version_oracle,
                     token_transaction_type_oracle=token_transaction_type_oracle,
                     max_block_height=block_height,
-                    write_batch_size=dynamodb_parallel_batches * 25,
+                    write_batch_size=dynamodb_write_batch_size,
+                    max_concurrent_batch_writes=dynamodb_max_concurrent_batches,
                 )
             )
             await data_bus.register(
@@ -415,6 +421,8 @@ async def load_evm_contracts_by_block(
                     log_version_oracle=log_version_oracle,
                     token_transaction_type_oracle=token_transaction_type_oracle,
                     max_block_height=block_height,
+                    write_batch_size=dynamodb_write_batch_size,
+                    max_concurrent_batch_writes=dynamodb_max_concurrent_batches,
                 )
             )
 

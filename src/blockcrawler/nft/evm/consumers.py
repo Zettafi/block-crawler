@@ -31,7 +31,11 @@ class CollectionToEverythingElseCollectionBasedConsumerBaseClass(Consumer, ABC):
         self,
         block_time_service: BlockTimeService,
         log_version_oracle: LogVersionOracle,
+        write_batch_size: int,
+        max_concurrent_batch_writes: int,
     ):
+        self._write_batch_size = write_batch_size
+        self._max_concurrent_batch_writes = max_concurrent_batch_writes
         self.__block_time_service = block_time_service
         self.__log_version_oracle = log_version_oracle
 
@@ -127,6 +131,33 @@ class CollectionToEverythingElseCollectionBasedConsumerBaseClass(Consumer, ABC):
                     metadata_url=old_token.metadata_url,
                 )
 
+    async def _wait_for_ready_to_add_batch_task(self, batch_tasks):
+        """
+        Function for waiting until the current batch tasks
+        limit is not exceeded.
+        """
+        while len(batch_tasks) >= self._max_concurrent_batch_writes:
+            await asyncio.sleep(0)
+            for task in batch_tasks:
+                if task.done():
+                    batch_tasks.remove(task)
+
+    async def _process_batches(self, items, processor):
+        tasks = []
+        batch_items: List[Token] = []
+        batch_items_batches: List[List[Token]] = []
+        for token in items:
+            batch_items.append(token)
+            if len(batch_items) >= self._write_batch_size:
+                batch_items_batches.append(batch_items[:])
+                batch_items.clear()
+        if batch_items:
+            batch_items_batches.append(batch_items)
+        for batch_items_batch in batch_items_batches:
+            await self._wait_for_ready_to_add_batch_task(tasks)
+            tasks.append(asyncio.create_task(processor(batch_items_batch)))
+        await asyncio.gather(*tasks)
+
 
 class CollectionToEverythingElseErc721CollectionBasedConsumer(
     CollectionToEverythingElseCollectionBasedConsumerBaseClass
@@ -145,13 +176,13 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
         super().__init__(
             block_time_service=block_time_service,
             log_version_oracle=log_version_oracle,
+            write_batch_size=write_batch_size,
+            max_concurrent_batch_writes=max_concurrent_batch_writes,
         )
         self.__data_service = data_service
         self.__rpc_client = rpc_client
         self.__token_transaction_type_oracle = token_transaction_type_oracle
         self.__max_block_height = max_block_height
-        self.__write_batch_size = write_batch_size
-        self.__max_concurrent_batch_writes = max_concurrent_batch_writes
 
     async def receive(self, data_package: DataPackage):
         if (
@@ -161,11 +192,8 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
             return
 
         try:
-            loop = asyncio.get_running_loop()
             log_batch: List[Awaitable] = []
             token_xfr_batch_write_tasks: List[Task] = []
-            token_batch_write_tasks: List[Task] = []
-            token_owner_batch_write_tasks: List[Task] = []
             tokens: Dict[HexInt, Token] = {}
             token_transfers: List[TokenTransfer] = []
             token_owners: Dict[HexInt, TokenOwner] = {}
@@ -185,13 +213,13 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                         data_package, log, token_owners, token_transfers, tokens
                     )
                 )
-                if len(log_batch) >= self.__write_batch_size:
+                if len(log_batch) >= self._write_batch_size:
                     await asyncio.gather(*log_batch)
                     log_batch.clear()
 
-                    await self.__wait_for_ready_to_add_batch_task(token_xfr_batch_write_tasks)
+                    await self._wait_for_ready_to_add_batch_task(token_xfr_batch_write_tasks)
                     token_xfr_batch_write_tasks.append(
-                        loop.create_task(
+                        asyncio.create_task(
                             self.__data_service.write_token_transfer_batch(token_transfers[:])
                         )
                     )
@@ -202,42 +230,28 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                 await asyncio.gather(*log_batch)
 
             if token_transfers:  # Write any remaining token transfers
+                await self._wait_for_ready_to_add_batch_task(token_xfr_batch_write_tasks)
                 token_xfr_batch_write_tasks.append(
-                    loop.create_task(
+                    asyncio.create_task(
                         self.__data_service.write_token_transfer_batch(token_transfers)
                     )
                 )
-            token_owners_batch = [value for value in token_owners.values() if value.quantity > 0]
-            if token_owners_batch:
-                await self.__wait_for_ready_to_add_batch_task(token_owner_batch_write_tasks)
-                token_owner_batch_write_tasks.append(
-                    loop.create_task(
-                        self.__data_service.write_token_owner_batch(token_owners_batch)
-                    )
-                )
 
-            batch_tokens: List[Token] = []
-            batch_tokens_batches: List[List[Token]] = []
-            for _, token in tokens.items():
-                batch_tokens.append(token)
-                if len(batch_tokens) >= self.__write_batch_size:
-                    batch_tokens_batches.append(batch_tokens[:])
-                    batch_tokens.clear()
-            if batch_tokens:
-                batch_tokens_batches.append(batch_tokens)
-            for batch_tokens_batch in batch_tokens_batches:
-                await self.__wait_for_ready_to_add_batch_task(token_batch_write_tasks)
-                token_batch_write_tasks.append(
-                    asyncio.create_task(self.__process_tokens_batch(batch_tokens_batch))
+            cleaned_token_owners = [value for value in token_owners.values() if value.quantity != 0]
+            write_token_owners_task = asyncio.create_task(
+                self._process_batches(
+                    cleaned_token_owners, self.__data_service.write_token_owner_batch
                 )
+            )
 
-            for tasks in (
-                token_xfr_batch_write_tasks,
-                token_batch_write_tasks,
-                token_owner_batch_write_tasks,
-            ):
-                for task in tasks:
-                    await task
+            tokens_list = [token for _, token in tokens.items()]
+            write_tokens_task = asyncio.create_task(
+                self._process_batches(tokens_list, self.__process_tokens_batch)
+            )
+
+            await asyncio.gather(
+                *token_xfr_batch_write_tasks, write_token_owners_task, write_tokens_task
+            )
 
         except Exception as e:
             raise ConsumerError(
@@ -246,17 +260,6 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                 f"created in block {data_package.collection.block_created} "
                 f"-- {e}"
             )
-
-    async def __wait_for_ready_to_add_batch_task(self, batch_tasks):
-        """
-        Function for waiting until the current batch tasks
-        limit is not exceeded.
-        """
-        while len(batch_tasks) > self.__max_concurrent_batch_writes:
-            await asyncio.sleep(0)
-            for task in batch_tasks:
-                if task.done():
-                    batch_tasks.remove(task)
 
     async def __process_log_entry(
         self,
@@ -394,10 +397,14 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
         token_transaction_type_oracle: TokenTransactionTypeOracle,
         log_version_oracle: LogVersionOracle,
         max_block_height: HexInt,
+        write_batch_size: int = 100,
+        max_concurrent_batch_writes: int = 25,
     ) -> None:
         super().__init__(
             block_time_service=block_time_service,
             log_version_oracle=log_version_oracle,
+            max_concurrent_batch_writes=max_concurrent_batch_writes,
+            write_batch_size=write_batch_size,
         )
         self.__data_service = data_service
         self.__rpc_client = rpc_client
@@ -551,7 +558,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                 token_owners_data: List[TokenOwner] = []
                 for oto in token_owners.values():
                     token_owners_data.extend(
-                        [value for value in oto.values() if value.quantity > 0]
+                        [value for value in oto.values() if value.quantity != 0]
                     )
                 batches.append(self.__data_service.write_token_owner_batch(token_owners_data))
             await asyncio.gather(*batches)

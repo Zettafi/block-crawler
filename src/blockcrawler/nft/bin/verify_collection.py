@@ -16,9 +16,10 @@ from hexbytes import HexBytes
 from blockcrawler.core.click import HexIntParamType, BlockChainParamType, AddressParamType
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError, RpcClient
-from blockcrawler.evm.services import BlockTimeService, MemoryBlockTimeCache
 from blockcrawler.core.stats import StatsService
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.evm.rpc import EvmRpcClient, EthCall
+from blockcrawler.evm.services import BlockTimeService, MemoryBlockTimeCache
 from blockcrawler.evm.types import (
     Erc165InterfaceID,
     EvmBlock,
@@ -32,8 +33,6 @@ from blockcrawler.evm.types import (
     Erc721Events,
     Erc1155Events,
 )
-from blockcrawler.core.types import Address, HexInt
-from .block_crawler import nft
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
@@ -296,7 +295,7 @@ class StatsWriter:
         )
 
 
-@nft.command("verify")
+@click.command
 @click.argument(
     "BLOCKCHAIN",
     required=True,
@@ -708,9 +707,10 @@ async def verify_token(
             contract_metadata_uri = await rpc_service.get_erc721_token_uri(token_id)
         else:
             contract_metadata_uri = None
-        if contract_metadata_uri != token["metadata_url"]:
+        db_metadata_url = token.get("metadata_url")
+        if contract_metadata_uri != db_metadata_url:
             errors.append(
-                f"Database metadata URL value {token['metadata_url']} does not match"
+                f"Database metadata URL value {db_metadata_url} does not match"
                 f"tokenURI() value of {contract_metadata_uri} for token {token_id.int_value}"
             )
         if token["quantity"] != 1:
@@ -735,17 +735,18 @@ async def verify_token(
                 f"Contract discrepancy for metadata URI on token{token_id} as contract "
                 f"uri() returns {contract_uri} and last URI event log has {log_uri}"
             )
+        db_metadata_url = token.get("metadata_url")
         if log_uri:
-            if log_uri != token["metadata_url"]:
+            if log_uri != db_metadata_url:
                 errors.append(
-                    f"Metadata URL in token item for token {token_id} has {log_uri} and URI "
-                    f"event logs have {log_uri}"
+                    f"Metadata URL in token item for token {token_id} has {db_metadata_url} and "
+                    f"URI event logs have {log_uri}"
                 )
         elif contract_uri:
-            if contract_uri != token.get("metadata_url"):
+            if contract_uri != db_metadata_url:
                 errors.append(
-                    f"Metadata URL in token item for token {token_id} has {log_uri} "
-                    f"and uri() method for token {token_id} returns {contract_uri}"
+                    f"Metadata URL in token item for token {token_id} has {db_metadata_url} "
+                    f"and contrat uri() returns {contract_uri}"
                 )
 
         expected_quantity = 0
@@ -787,10 +788,10 @@ async def verify_erc721_transfer(
     item: dict,
     collection_id: Address,
 ):
+    (log_from,) = decode(["address"], log.topics[1])
+    (log_to,) = decode(["address"], log.topics[2])
     (token_id,) = decode(["uint256"], log.topics[3])
-    (log_from,) = decode(["address"], log.topics[2])
-    (log_to,) = decode(["address"], log.topics[3])
-    errors = verify_transfer(
+    errors = await verify_transfer(
         block_time_service=block_time_service,
         collection_id=collection_id,
         item=item,

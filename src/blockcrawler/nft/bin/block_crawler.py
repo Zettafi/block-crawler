@@ -22,12 +22,13 @@ from blockcrawler.core.rpc import RpcClient
 from blockcrawler.evm.services import MemoryBlockTimeCache
 from blockcrawler.core.stats import StatsService
 from blockcrawler.nft import data_services
-from blockcrawler.nft.bin.commands import (
+from .commands import (
     crawl_evm_blocks,
     load_evm_contracts_by_block,
     listen_for_and_process_new_evm_blocks,
     set_last_block_id_for_block_chain,
 )
+from .verify_collection import verify
 
 try:  # If dotenv in installed, use it load env vars
     # noinspection PyPackageRequirements
@@ -44,6 +45,9 @@ def nft():
     Loading and verifying NFTs
     """
     pass
+
+
+nft.add_command(verify)
 
 
 @nft.command()
