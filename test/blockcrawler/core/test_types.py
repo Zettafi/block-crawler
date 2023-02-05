@@ -2,7 +2,7 @@ from unittest import TestCase
 
 import ddt
 
-from blockcrawler.core.entities import HexInt
+from blockcrawler.core.types import HexInt
 
 
 @ddt.ddt()

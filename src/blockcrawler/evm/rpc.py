@@ -8,13 +8,12 @@ from hexbytes import HexBytes
 
 from .types import (
     EvmBlock,
-    HexInt,
     EvmLog,
     EvmTransactionReceipt,
-    Address,
     EvmTransaction,
+    Function,
 )
-from .util import Function
+from ..core.types import Address, HexInt
 from .. import LOGGER_NAME
 from ..core.rpc import RpcClient, RpcServerError, RpcDecodeError, RpcClientError
 

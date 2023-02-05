@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, AsyncMock
 
-from blockcrawler.core.entities import HexInt
-from blockcrawler.core.services import (
+from blockcrawler.core.types import HexInt
+from blockcrawler.evm.services import (
     BlockTimeService,
     BlockTimeCache,
     MemoryBlockTimeCache,

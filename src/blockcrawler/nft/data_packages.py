@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
 from blockcrawler.core.bus import DataPackage
-from blockcrawler.core.entities import HexInt, BlockChain
-from blockcrawler.evm.types import Address
+from blockcrawler.core.entities import BlockChain
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.entities import Collection, TokenTransfer, Token
 
 

@@ -5,11 +5,11 @@ import ddt
 from boto3.dynamodb.conditions import Attr
 from hexbytes import HexBytes
 
-from blockcrawler.core.entities import HexInt, BlockChain
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.stats import StatsService
 from blockcrawler.nft.data_services.dynamodb import DynamoDbDataService
 from blockcrawler.nft.data_services import DataVersionTooOldException
-from blockcrawler.evm.types import Address
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.entities import (
     Collection,
     CollectionType,

@@ -42,12 +42,9 @@ class S3StorageClient(StorageClient):
     STAT_STORE = "s3_store"
     STAT_STORE_MS = "s3_store_ms"
 
-    def __init__(
-        self, bucket: str, stats_service: StatsService, region_name=None, endpoint_url=None
-    ) -> None:
+    def __init__(self, bucket: str, stats_service: StatsService, endpoint_url=None) -> None:
         self.__bucket = bucket
         self.__stats_service = stats_service
-        self.__region_name = region_name
         self.__endpoint_url = endpoint_url
         self.__s3_bucket: Optional[Any] = None
         self.__session_ctm: Optional[AsyncContextManager] = None
@@ -56,8 +53,6 @@ class S3StorageClient(StorageClient):
         kwargs = {}
         if self.__endpoint_url is not None:
             kwargs["endpoint_url"] = self.__endpoint_url
-        if self.__region_name is not None:
-            kwargs["region_name"] = self.__region_name
         resource = self.__session_ctm = (
             await aioboto3.Session().resource("s3", **kwargs).__aenter__()
         )

@@ -14,10 +14,10 @@ from blockcrawler.core.data_clients import (
     InvalidRequestProtocolError,
     TooManyRequestsProtocolError,
 )
-from blockcrawler.core.entities import BlockChain, HexInt
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.storage_clients import StorageClientContext
 from blockcrawler.nft.data_services import DataVersionTooOldException, DataService
-from blockcrawler.evm.types import Address
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.consumers import (
     NftCollectionPersistenceConsumer,
     NftTokenMintPersistenceConsumer,

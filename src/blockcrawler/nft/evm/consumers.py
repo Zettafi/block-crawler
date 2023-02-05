@@ -5,13 +5,12 @@ from typing import List, Dict, cast, Tuple, Awaitable
 
 from eth_abi import decode
 
-from blockcrawler.core.bus import DataPackage, Transformer, DataBus, ConsumerError
-from blockcrawler.core.entities import HexInt
+from blockcrawler.core.bus import DataPackage, ConsumerError, Consumer
 from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
-from blockcrawler.core.services import BlockTimeService
+from blockcrawler.evm.services import BlockTimeService
 from blockcrawler.evm.rpc import EvmRpcClient, EthCall
-from blockcrawler.evm.types import Address, EvmLog
-from blockcrawler.evm.util import Erc721Events, Erc1155Events, Erc721MetadataFunctions
+from blockcrawler.evm.types import EvmLog, Erc721MetadataFunctions, Erc721Events, Erc1155Events
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
 )
@@ -27,14 +26,12 @@ from blockcrawler.nft.entities import (
 from blockcrawler.nft.evm.oracles import TokenTransactionTypeOracle, LogVersionOracle
 
 
-class CollectionToEverythingElseCollectionBasedConsumerBaseClass(Transformer, ABC):
+class CollectionToEverythingElseCollectionBasedConsumerBaseClass(Consumer, ABC):
     def __init__(
         self,
-        data_bus: DataBus,
         block_time_service: BlockTimeService,
         log_version_oracle: LogVersionOracle,
     ):
-        super().__init__(data_bus)
         self.__block_time_service = block_time_service
         self.__log_version_oracle = log_version_oracle
 
@@ -136,7 +133,6 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
 ):
     def __init__(
         self,
-        data_bus: DataBus,
         data_service: DataService,
         rpc_client: EvmRpcClient,
         block_time_service: BlockTimeService,
@@ -147,7 +143,6 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
         max_concurrent_batch_writes: int = 25,
     ) -> None:
         super().__init__(
-            data_bus=data_bus,
             block_time_service=block_time_service,
             log_version_oracle=log_version_oracle,
         )
@@ -393,7 +388,6 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
 
     def __init__(
         self,
-        data_bus: DataBus,
         data_service: DataService,
         rpc_client: EvmRpcClient,
         block_time_service: BlockTimeService,
@@ -402,7 +396,6 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
         max_block_height: HexInt,
     ) -> None:
         super().__init__(
-            data_bus=data_bus,
             block_time_service=block_time_service,
             log_version_oracle=log_version_oracle,
         )

@@ -5,7 +5,7 @@ from blockcrawler.core.bus import (
     ConsumerError,
 )
 from blockcrawler.core.entities import BlockChain
-from blockcrawler.core.services import BlockTimeService
+from blockcrawler.evm.services import BlockTimeService
 from blockcrawler.evm.data_packages import (
     EvmBlockDataPackage,
     EvmTransactionHashDataPackage,
@@ -15,8 +15,7 @@ from blockcrawler.evm.data_packages import (
     EvmTransactionDataPackage,
 )
 from blockcrawler.evm.rpc import EvmRpcClient
-from blockcrawler.evm.types import Erc165InterfaceID
-from blockcrawler.evm.util import Erc165Functions
+from blockcrawler.evm.types import Erc165InterfaceID, Erc165Functions
 
 
 class BlockIdToEvmBlockTransformer(Transformer):

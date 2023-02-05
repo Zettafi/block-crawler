@@ -4,8 +4,8 @@ from typing import Optional, NewType
 
 from hexbytes import HexBytes
 
-from ..core.entities import HexInt, BlockChain, Entity
-from ..evm.types import Address
+from ..core.entities import BlockChain, Entity
+from ..core.types import Address, HexInt
 
 CollectionType = NewType("CollectionType", str)
 

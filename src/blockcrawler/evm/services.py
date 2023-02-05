@@ -1,7 +1,7 @@
 import abc
 from typing import Dict, Union, Optional
 
-from blockcrawler.core.entities import HexInt
+from blockcrawler.core.types import HexInt
 from blockcrawler.evm.rpc import EvmRpcClient
 
 

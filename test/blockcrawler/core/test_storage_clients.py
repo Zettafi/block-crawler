@@ -20,22 +20,18 @@ class S3StorageClientTestCase(unittest.IsolatedAsyncioTestCase):
         self.__data_reader = AsyncMock(DataReader)
         self.__storage_client = S3StorageClient("bucket", self.__stats_service)
 
-    async def test_creates_a_proper_s3_bucket_without_endpoint_url_or_region_name(self):
+    async def test_creates_a_proper_s3_bucket_without_endpoint_url(self):
         async with S3StorageClient("bucket", self.__stats_service):
             pass
         self.__boto3.Session.assert_called_once()
         self.__boto3.Session.return_value.resource.assert_called_once_with("s3")
         self.__s3_ctm.Bucket.assert_awaited_once_with("bucket")
 
-    async def test_creates_a_proper_s3_bucket_with_endpoint_url_and_region_name(self):
-        async with S3StorageClient(
-            "bucket", self.__stats_service, region_name="region", endpoint_url="url"
-        ):
+    async def test_creates_a_proper_s3_bucket_with_endpoint_url(self):
+        async with S3StorageClient("bucket", self.__stats_service, endpoint_url="url"):
             pass
         self.__boto3.Session.assert_called_once()
-        self.__boto3.Session.return_value.resource.assert_called_once_with(
-            "s3", region_name="region", endpoint_url="url"
-        )
+        self.__boto3.Session.return_value.resource.assert_called_once_with("s3", endpoint_url="url")
         self.__s3_ctm.Bucket.assert_awaited_once_with("bucket")
 
     async def test_sends_data_reader_to_s3_bucket(self):

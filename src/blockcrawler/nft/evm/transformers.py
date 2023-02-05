@@ -11,15 +11,15 @@ from blockcrawler.core.bus import (
     DataBus,
     ConsumerError,
 )
-from blockcrawler.core.entities import BlockChain, HexInt
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
 from blockcrawler.evm.data_packages import (
     EvmTransactionReceiptDataPackage,
     EvmLogDataPackage,
 )
 from blockcrawler.evm.rpc import EvmRpcClient, EthCall
-from blockcrawler.evm.types import Erc165InterfaceID, Address
-from blockcrawler.evm.util import (
+from blockcrawler.evm.types import (
+    Erc165InterfaceID,
     Erc165Functions,
     Erc721MetadataFunctions,
     Erc721EnumerableFunctions,
@@ -27,6 +27,7 @@ from blockcrawler.evm.util import (
     Erc721Events,
     Erc1155Events,
 )
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
     TokenTransferDataPackage,

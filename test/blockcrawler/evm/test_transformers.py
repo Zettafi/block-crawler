@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, call, Mock, MagicMock, ANY
 from hexbytes import HexBytes
 
 from blockcrawler.core.bus import DataBus, DataPackage, ConsumerError
-from blockcrawler.core.entities import BlockChain, HexInt
-from blockcrawler.core.services import BlockTimeService
+from blockcrawler.core.entities import BlockChain
+from blockcrawler.evm.services import BlockTimeService
 from blockcrawler.evm.data_packages import (
     EvmBlockDataPackage,
     EvmTransactionHashDataPackage,
@@ -27,13 +27,13 @@ from blockcrawler.evm.types import (
     EvmTransactionReceipt,
     EvmLog,
     EvmTransaction,
-    Address,
     Erc165InterfaceID,
+    Erc165Functions,
 )
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.evm.transformers import (
     EvmTransactionToContractEvmTransactionReceiptTransformer,
 )
-from blockcrawler.evm.util import Erc165Functions
 
 
 class BlockIdToEvmBlockBatchTransformerTestCase(IsolatedAsyncioTestCase):

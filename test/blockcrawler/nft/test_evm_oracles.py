@@ -4,9 +4,8 @@ from unittest.mock import Mock
 import ddt
 from hexbytes import HexBytes
 
-from blockcrawler.core.entities import HexInt
-from blockcrawler.evm.types import EvmLog
-from blockcrawler.evm.util import Erc721Events, Erc1155Events
+from blockcrawler.core.types import HexInt
+from blockcrawler.evm.types import EvmLog, Erc721Events, Erc1155Events
 from blockcrawler.nft.entities import TokenTransactionType
 from blockcrawler.nft.evm.oracles import TokenTransactionTypeOracle, LogVersionOracle
 

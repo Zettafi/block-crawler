@@ -31,10 +31,10 @@ from blockcrawler.nft.evm.transformers import (
     Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer,
 )
 from blockcrawler.core.bus import ParallelDataBus
-from blockcrawler.core.entities import HexInt
-from blockcrawler.core.services import BlockTimeService, BlockTimeCache
+from blockcrawler.core.types import HexInt
+from blockcrawler.evm.services import BlockTimeService, BlockTimeCache
 from blockcrawler.core.stats import StatsService
-from blockcrawler.data.models import BlockCrawlerConfig, Tokens
+from blockcrawler.nft.data.models import BlockCrawlerConfig, Tokens
 from blockcrawler.evm.producers import BlockIDProducer
 from blockcrawler.evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient
 from blockcrawler.evm.transformers import (
@@ -398,7 +398,6 @@ async def load_evm_contracts_by_block(
             await data_bus.register(NftCollectionPersistenceConsumer(data_service))
             await data_bus.register(
                 CollectionToEverythingElseErc721CollectionBasedConsumer(
-                    data_bus=data_bus,
                     data_service=data_service,
                     rpc_client=rpc_client,
                     block_time_service=block_time_service,
@@ -410,7 +409,6 @@ async def load_evm_contracts_by_block(
             )
             await data_bus.register(
                 CollectionToEverythingElseErc1155CollectionBasedConsumer(
-                    data_bus=data_bus,
                     data_service=data_service,
                     rpc_client=rpc_client,
                     block_time_service=block_time_service,

@@ -16,9 +16,10 @@ import click
 
 from blockcrawler import LOGGER_NAME
 from blockcrawler.core.click import BlockChainParamType, HexIntParamType
-from blockcrawler.core.entities import BlockChain, HexInt
+from blockcrawler.core.entities import BlockChain
+from blockcrawler.core.types import HexInt
 from blockcrawler.core.rpc import RpcClient
-from blockcrawler.core.services import MemoryBlockTimeCache
+from blockcrawler.evm.services import MemoryBlockTimeCache
 from blockcrawler.core.stats import StatsService
 from blockcrawler.nft import data_services
 from blockcrawler.nft.bin.commands import (

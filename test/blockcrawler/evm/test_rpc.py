@@ -20,15 +20,12 @@ from blockcrawler.evm.types import (
     EvmTransactionReceipt,
     EvmLog,
     EvmBlock,
-    HexInt,
-    Address,
     EvmTransaction,
-)
-from blockcrawler.evm.util import (
-    Erc721Functions,
     Erc165Functions,
+    Erc721Functions,
     Erc721MetadataFunctions,
 )
+from blockcrawler.core.types import Address, HexInt
 
 
 class EthCallTestCase(TestCase):

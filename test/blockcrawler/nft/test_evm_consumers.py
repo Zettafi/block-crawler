@@ -5,13 +5,13 @@ import ddt
 from eth_abi import encode
 from hexbytes import HexBytes
 
-from blockcrawler.core.bus import DataBus, DataPackage
-from blockcrawler.core.entities import HexInt, BlockChain
+from blockcrawler.core.bus import DataPackage
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
-from blockcrawler.core.services import BlockTimeService
+from blockcrawler.evm.services import BlockTimeService
 from blockcrawler.evm.rpc import EvmRpcClient, EthCall
-from blockcrawler.evm.types import Address, EvmLog
-from blockcrawler.evm.util import Erc1155Events, Erc721Events, Erc721MetadataFunctions
+from blockcrawler.evm.types import EvmLog, Erc721MetadataFunctions, Erc721Events, Erc1155Events
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
 )
@@ -35,15 +35,13 @@ from blockcrawler.nft.evm.oracles import TokenTransactionTypeOracle, LogVersionO
 @ddt.ddt
 class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__data_bus = AsyncMock(DataBus)
         self.__rpc_client = AsyncMock(EvmRpcClient)
         self.__max_block_height = HexInt(9999)
         self.__block_time_service = AsyncMock(BlockTimeService)
         self.__token_transaction_type_oracle = MagicMock(TokenTransactionTypeOracle)
         self.__log_version_oracle = MagicMock(LogVersionOracle)
         self.__data_service = AsyncMock(DataService)
-        self.__transformer = CollectionToEverythingElseErc721CollectionBasedConsumer(
-            self.__data_bus,
+        self.__consumer = CollectionToEverythingElseErc721CollectionBasedConsumer(
             self.__data_service,
             self.__rpc_client,
             self.__block_time_service,
@@ -96,18 +94,18 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         self.__rpc_client.call.return_value = ("Metadata URI",)
 
     async def test_does_nothing_with_non_collection_data_packages(self):
-        await self.__transformer.receive(DataPackage())
+        await self.__consumer.receive(DataPackage())
         self.assertEqual([], self.__data_service.mock_calls, "Data Service should have 0 calls")
         self.assertEqual([], self.__rpc_client.mock_calls, "RPC Client should have 0 calls")
 
     async def test_does_nothing_if_not_erc721_specification(self):
         self.__data_package.collection.specification = EthereumCollectionType.ERC1155
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.assertEqual([], self.__data_service.mock_calls, "Data Service should have 0 calls")
         self.assertEqual([], self.__rpc_client.mock_calls, "RPC Client should have 0 calls")
 
     async def test_gets_logs_from_collection_block_created_to_max_block_height(self):
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__rpc_client.get_logs.assert_called_once_with(
             from_block=self.__data_package.collection.block_created,
             to_block=self.__max_block_height,
@@ -117,7 +115,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         )
 
     async def test_sends_log_block_numbers_to_block_time_service(self):
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__block_time_service.get_block_timestamp.assert_has_awaits(
             (
                 call(HexInt("0x12")),
@@ -126,7 +124,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         )
 
     async def test_sends_log_to_log_version_oracle(self):
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__log_version_oracle.version_from_log.assert_has_calls(
             (call(log) for log in self.__logs)
         )
@@ -170,7 +168,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
                 attribute_version=self.__log_version_oracle.version_from_log.return_value,
             ),
         ]
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_transfer_batch.assert_awaited_once_with(expected)
 
     async def test_ignores_erc20_transfer_logs(self):
@@ -181,7 +179,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         for log in self.__logs:
             log.topics.pop()  # ERC-20 has no token ID topic
 
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.assertEqual([], self.__data_service.mock_calls, "Data Service should have 0 calls")
         self.assertEqual(
             [],
@@ -248,7 +246,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
             attribute_version=self.__log_version_oracle.version_from_log.return_value,
             metadata_url="Metadata URI",
         )
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_batch.assert_called_once_with([expected])
 
     async def test_tries_to_get_token_uri_from_contract_when_tx_is_mint(self):
@@ -256,7 +254,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
             TokenTransactionType.MINT,
             TokenTransactionType.TRANSFER,
         ]
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__rpc_client.call.assert_awaited_once_with(
             EthCall(
                 from_=None,
@@ -277,7 +275,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         self.__logs.pop()
         self.__token_transaction_type_oracle.type_from_log.return_value = TokenTransactionType.MINT
         self.__rpc_client.call.side_effect = RpcServerError(None, None, error_code, None)
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__rpc_client.call.assert_awaited_once()
         self.__data_service.write_token_batch.assert_awaited_once_with(
             [
@@ -301,7 +299,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         self.__logs.pop()
         self.__token_transaction_type_oracle.type_from_log.return_value = TokenTransactionType.MINT
         self.__rpc_client.call.side_effect = RpcDecodeError
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__rpc_client.call.assert_awaited_once()
         self.__data_service.write_token_batch.assert_awaited_once_with(
             [
@@ -340,7 +338,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
             metadata_url="Metadata URI",
         )
 
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_batch.assert_awaited_once_with([expected])
 
     async def test_writes_token_owner_records_for_the_last_owner_of_the_token(self):
@@ -348,7 +346,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
             TokenTransactionType.MINT,
             TokenTransactionType.TRANSFER,
         ]
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_owner_batch.assert_awaited_once_with(
             [
                 TokenOwner(
@@ -367,14 +365,13 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
             TokenTransactionType.MINT,
             TokenTransactionType.BURN,
         ]
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_owner_batch.assert_not_called()
 
 
 # noinspection PyDataclass
 class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__data_bus = AsyncMock(DataBus)
         self.__data_service = AsyncMock(DataService)
         self.__rpc_client = AsyncMock(EvmRpcClient)
         self.__max_block_height = HexInt(9999)
@@ -382,8 +379,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
         self.__token_transaction_type_oracle = MagicMock(TokenTransactionTypeOracle)
         self.__token_transaction_type_oracle.return_value = TokenTransactionType.MINT
         self.__log_version_oracle = MagicMock(LogVersionOracle)
-        self.__transformer = CollectionToEverythingElseErc1155CollectionBasedConsumer(
-            self.__data_bus,
+        self.__consumer = CollectionToEverythingElseErc1155CollectionBasedConsumer(
             self.__data_service,
             self.__rpc_client,
             self.__block_time_service,
@@ -421,18 +417,18 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
         self.__rpc_client.get_logs.return_value.__aiter__.return_value = self.__logs
 
     async def test_does_nothing_with_non_collection_data_packages(self):
-        await self.__transformer.receive(DataPackage())
+        await self.__consumer.receive(DataPackage())
         self.assertEqual([], self.__data_service.mock_calls, "Data Service should have 0 calls")
         self.assertEqual([], self.__rpc_client.mock_calls, "RPC Client should have 0 calls")
 
     async def test_does_nothing_if_collection_is_not_erc1155_specification(self):
         self.__data_package.collection.specification = EthereumCollectionType.ERC721
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.assertEqual([], self.__data_service.mock_calls, "Data Service should have 0 calls")
         self.assertEqual([], self.__rpc_client.mock_calls, "RPC Client should have 0 calls")
 
     async def test_gets_logs_from_collection_block_created_to_max_block_height(self):
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__rpc_client.get_logs.assert_called_once_with(
             from_block=self.__data_package.collection.block_created,
             to_block=self.__max_block_height,
@@ -448,11 +444,11 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
         )
 
     async def test_sends_log_block_numbers_to_block_time_service(self):
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__block_time_service.get_block_timestamp.assert_awaited_once_with(HexInt("0x12"))
 
     async def test_sends_log_to_log_version_oracle(self):
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__log_version_oracle.version_from_log.assert_called_once_with(self.__logs[0])
 
     async def test_writes_nft_token_transfers_with_data_service_for_transfer_single(self):
@@ -473,7 +469,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
             log_index=HexInt("0x10"),
             attribute_version=self.__log_version_oracle.version_from_log.return_value,
         )
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_transfer_batch.assert_awaited_once_with([expected])
 
     async def test_writes_nft_token_transfers_with_data_service_for_transfer_batch(self):
@@ -531,7 +527,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
                 attribute_version=self.__log_version_oracle.version_from_log.return_value,
             ),
         ]
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_transfer_batch.assert_awaited_once_with(expected)
 
     async def test_write_token_with_data_service_accounting_for_all_types(self):
@@ -621,7 +617,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
                 metadata_url=None,
             ),
         ]
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_batch.assert_called_once_with(expected)
 
     async def test_updates_token_with_metadata_uri(self):
@@ -659,10 +655,10 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
             ),
         ]
 
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_batch.assert_awaited_once_with(expected)
 
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
 
     async def test_writes_token_owner_records_accounting_for_transfers_and_burns(self):
         self.__rpc_client.get_logs.return_value.__aiter__.return_value = [
@@ -749,7 +745,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
             ),
         ]
 
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_owner_batch.assert_awaited_once_with(expected)
 
     async def test_writes_token_owner_records_properly_for_burn_as_first_transfer(self):
@@ -804,7 +800,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
             ),
         ]
 
-        await self.__transformer.receive(self.__data_package)
+        await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_owner_batch.assert_awaited_once_with(expected)
         self.assertIsInstance(
             self.__data_service.write_token_owner_batch.call_args.args[0][0].quantity,

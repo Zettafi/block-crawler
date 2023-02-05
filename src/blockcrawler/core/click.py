@@ -2,8 +2,8 @@ import typing as t
 
 from click import ParamType, Parameter, Context
 
-from blockcrawler.core.entities import BlockChain, HexInt
-from blockcrawler.evm.types import Address
+from blockcrawler.core.entities import BlockChain
+from blockcrawler.core.types import Address, HexInt
 
 
 class BlockChainParamType(ParamType):

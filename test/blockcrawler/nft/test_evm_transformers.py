@@ -8,7 +8,7 @@ from eth_abi.exceptions import NonEmptyPaddingBytes
 from hexbytes import HexBytes
 
 from blockcrawler.core.bus import DataBus, DataPackage, ConsumerError
-from blockcrawler.core.entities import HexInt, BlockChain
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError
 from blockcrawler.evm.data_packages import EvmLogDataPackage
 from blockcrawler.evm.data_packages import (
@@ -17,12 +17,9 @@ from blockcrawler.evm.data_packages import (
 from blockcrawler.evm.rpc import EvmRpcClient, EthCall
 from blockcrawler.evm.types import (
     EvmBlock,
-    Address,
     EvmTransactionReceipt,
     Erc165InterfaceID,
     EvmLog,
-)
-from blockcrawler.evm.util import (
     Erc165Functions,
     Erc721MetadataFunctions,
     Erc721EnumerableFunctions,
@@ -30,6 +27,7 @@ from blockcrawler.evm.util import (
     Erc721Events,
     Erc1155Events,
 )
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     TokenTransferDataPackage,
     TokenMetadataUriUpdatedDataPackage,

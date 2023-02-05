@@ -8,7 +8,7 @@ import aioboto3
 import click
 from botocore.exceptions import ConnectionError, ClientError
 
-from blockcrawler.data.models import (
+from blockcrawler.nft.data.models import (
     Collections,
     TokenTransfers,
     Tokens,

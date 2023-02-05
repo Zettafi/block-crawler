@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from hexbytes import HexBytes
 
 from blockcrawler.core.bus import DataPackage
-from blockcrawler.core.entities import BlockChain, HexInt
+from blockcrawler.core.entities import BlockChain
+from blockcrawler.core.types import HexInt
 from blockcrawler.evm.types import EvmBlock, EvmTransactionReceipt, EvmLog, EvmTransaction
 
 

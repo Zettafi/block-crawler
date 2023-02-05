@@ -1,7 +1,8 @@
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, call, Mock
 
-from blockcrawler.core.entities import BlockChain, HexInt
+from blockcrawler.core.entities import BlockChain
+from blockcrawler.core.types import HexInt
 from blockcrawler.core.bus import DataBus
 from blockcrawler.evm.producers import BlockIDProducer
 from blockcrawler.evm.data_packages import EvmBlockIDDataPackage

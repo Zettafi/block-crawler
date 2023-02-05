@@ -2,9 +2,9 @@ import unittest
 
 from click import BadParameter
 
-from blockcrawler.core.entities import BlockChain, HexInt
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.click import BlockChainParamType, HexIntParamType, AddressParamType
-from blockcrawler.evm.types import Address
+from blockcrawler.core.types import Address, HexInt
 
 
 class BlockChainParamTypeTestCase(unittest.TestCase):

@@ -1,6 +1,7 @@
 import asyncio
 
-from blockcrawler.core.entities import BlockChain, HexInt
+from blockcrawler.core.entities import BlockChain
+from blockcrawler.core.types import HexInt
 from blockcrawler.core.bus import Producer, DataBus
 from blockcrawler.evm.data_packages import EvmBlockIDDataPackage
 
