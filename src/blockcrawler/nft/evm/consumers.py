@@ -420,7 +420,6 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
             return
 
         try:
-
             tokens: Dict[HexInt, Token] = {}
             token_transfers: List[TokenTransfer] = []
             token_owners: Dict[HexInt, Dict[Address, TokenOwner]] = {}
@@ -438,9 +437,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                 address=data_package.collection.collection_id,
                 block_range_size=100_000,
             ):
-
                 if log.topics[0] == Erc1155Events.TRANSFER_SINGLE.event_signature_hash:
-
                     from_address = Address(
                         decode(
                             ["address"],

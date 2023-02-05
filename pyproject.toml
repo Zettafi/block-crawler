@@ -2,6 +2,16 @@
 name = "block-crawler"
 version = "0.1.0"
 description = "Crawls blocks from a blockchain node, parses the blocks for data, and populates the NFT database"
+readme = "README.md"
+requires-python = ">=3.8,<3.11"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Adam L. Englander", email = "adam@zetta.fi"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+
 dependencies = [
     "aioboto3~=9.6",
     "botocore~=1.24",
@@ -18,8 +28,20 @@ dependencies = [
     "psutil~=5.9",
 ]
 
+[project.urls]
+Documentation = "https://github.com/block-crawler/block-crawler/docs/"
+"Source Code" = "https://github.com/block-crawler/block-crawler"
+"Issue Tracker" = "https://github.com/block-crawler/block-crawler/issues/"
+
+[project.scripts]
+block-crawler = "blockcrawler.__main__:main"
+
 [project.optional-dependencies]
 dev = [
+    # runtime tools
+    "pre-commit~=3.0",
+    "tox~=4.4",
+
     # static analysis
     "black~=22.6",
     "flake8~=4.0",
@@ -35,6 +57,10 @@ dev = [
 
     # configuration
     "python-dotenv~=0.20",
+]
+
+docs = [
+    "sphinx~=6.1"
 ]
 
 [build-system]

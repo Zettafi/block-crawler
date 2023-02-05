@@ -114,7 +114,6 @@ class EvmTransactionToContractEvmTransactionReceiptTransformer(Transformer):
         self.__rpc_client = rpc_client
 
     async def receive(self, data_package: DataPackage):
-
         if (
             not isinstance(data_package, EvmTransactionDataPackage)
             or data_package.transaction.to_ is not None

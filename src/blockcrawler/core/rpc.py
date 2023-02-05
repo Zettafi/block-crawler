@@ -185,7 +185,6 @@ class RpcClient:
                         ].match(
                             response["error"]["message"]
                         ):
-
                             if (
                                 "data" in response["error"]
                                 and "backoff_seconds" in response["error"]["data"]

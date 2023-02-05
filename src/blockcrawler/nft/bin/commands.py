@@ -8,21 +8,21 @@ import aioboto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from .consumers import (
+from blockcrawler.nft.consumers import (
     NftCollectionPersistenceConsumer,
     NftTokenMintPersistenceConsumer,
     NftTokenTransferPersistenceConsumer,
     NftTokenQuantityUpdatingConsumer,
     NftMetadataUriUpdatingConsumer,
 )
-from .data_services.dynamodb import DynamoDbDataService
-from .entities import BlockChain
-from .evm.consumers import (
+from blockcrawler.nft.data_services.dynamodb import DynamoDbDataService
+from blockcrawler.nft.entities import BlockChain
+from blockcrawler.nft.evm.consumers import (
     CollectionToEverythingElseErc721CollectionBasedConsumer,
     CollectionToEverythingElseErc1155CollectionBasedConsumer,
 )
-from .evm.oracles import LogVersionOracle, TokenTransactionTypeOracle
-from .evm.transformers import (
+from blockcrawler.nft.evm.oracles import LogVersionOracle, TokenTransactionTypeOracle
+from blockcrawler.nft.evm.transformers import (
     EvmTransactionReceiptToNftCollectionTransformer,
     EvmLogErc721TransferToNftTokenTransferTransformer,
     EvmLogErc1155TransferSingleToNftTokenTransferTransformer,
@@ -30,14 +30,14 @@ from .evm.transformers import (
     EvmLogErc1155UriEventToNftTokenMetadataUriUpdatedTransformer,
     Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer,
 )
-from ..core.bus import ParallelDataBus
-from ..core.entities import HexInt
-from ..core.services import BlockTimeService, BlockTimeCache
-from ..core.stats import StatsService
-from ..data.models import BlockCrawlerConfig, Tokens
-from ..evm.producers import BlockIDProducer
-from ..evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient
-from ..evm.transformers import (
+from blockcrawler.core.bus import ParallelDataBus
+from blockcrawler.core.entities import HexInt
+from blockcrawler.core.services import BlockTimeService, BlockTimeCache
+from blockcrawler.core.stats import StatsService
+from blockcrawler.data.models import BlockCrawlerConfig, Tokens
+from blockcrawler.evm.producers import BlockIDProducer
+from blockcrawler.evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient
+from blockcrawler.evm.transformers import (
     BlockIdToEvmBlockTransformer,
     EvmBlockToEvmTransactionHashTransformer,
     EvmTransactionHashToEvmTransactionReceiptTransformer,
@@ -326,13 +326,6 @@ async def set_last_block_id_for_block_chain(
         )
 
 
-async def get_block(evm_node_uri, stats_service: StatsService):
-    rpc = EvmRpcClient(evm_node_uri, stats_service)
-    async with rpc:
-        block_number = await rpc.get_block_number()
-    return block_number.int_value
-
-
 async def load_evm_contracts_by_block(
     starting_block: HexInt,
     ending_block: HexInt,
@@ -374,7 +367,7 @@ async def load_evm_contracts_by_block(
         )
 
         rpc_clients: List[EvmRpcClient] = []
-        for (uri, instances) in archive_nodes:
+        for uri, instances in archive_nodes:
             for _ in range(instances):
                 rpc_clients.append(EvmRpcClient(uri, stats_service, rpc_requests_per_second))
         async with ConnectionPoolingEvmRpcClient(rpc_clients) as rpc_client:

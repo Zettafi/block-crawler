@@ -150,7 +150,6 @@ class NftMetadataUriUpdatingConsumer(Consumer):
             f"{data_package.blockchain.value}" f"::{data_package.collection_id}"
         )
         try:
-
             await self.__tokens_table.update_item(
                 Key={
                     "blockchain_collection_id": blockchain_collection_id,

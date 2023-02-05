@@ -350,7 +350,6 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
 
     @patch("random.randint")
     async def test_reconnect(self, randint):
-
         errored = False
 
         async def send_json_side_effect(request):

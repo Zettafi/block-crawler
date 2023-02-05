@@ -5,8 +5,9 @@ from botocore.exceptions import ClientError
 
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.stats import StatsService
+from blockcrawler.evm.bin import get_block
 from blockcrawler.evm.rpc import EvmRpcClient
-from blockcrawler.nft.commands import get_block, get_data_version
+from blockcrawler.nft.bin.commands import get_data_version
 from blockcrawler.evm.types import HexInt
 
 

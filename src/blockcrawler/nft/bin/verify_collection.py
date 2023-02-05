@@ -30,6 +30,7 @@ from blockcrawler.evm.util import (
     Erc1155Events,
     Erc1155MetadataUriFunctions,
 )
+from .block_crawler import nft
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
@@ -76,7 +77,6 @@ class RpcService:
 
     async def get_token_owner(self, token_id: int):
         if token_id not in self.__token_owners:
-
             (self.__token_owners[token_id],) = await self.__rpc_client.call(
                 EthCall(
                     from_=None,
@@ -293,7 +293,7 @@ class StatsWriter:
         )
 
 
-@click.command("verify")
+@nft.command("verify")
 @click.argument(
     "BLOCKCHAIN",
     required=True,
@@ -345,7 +345,7 @@ class StatsWriter:
     show_envvar=True,
     show_default=True,
 )
-def main(
+def verify(
     blockchain: BlockChain,
     collection_id: Address,
     block_height: HexInt,
@@ -1019,7 +1019,7 @@ async def verify_transfers(
                     and HexInt(item["log_index"]) == log.log_index
                 ]
                 review_items = []
-                for (index, item) in items:
+                for index, item in items:
                     review_items.append(item)
                     del transfer_items[index]
                 tasks.append(
@@ -1140,4 +1140,4 @@ async def check_for_erc721_owner_discrepancy(
 
 if __name__ == "__main__":
     load_dotenv()
-    main()
+    verify()

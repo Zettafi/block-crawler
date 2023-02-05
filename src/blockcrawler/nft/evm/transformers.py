@@ -59,7 +59,6 @@ class EvmTransactionReceiptToNftCollectionTransformer(Transformer):
             return
 
         try:
-
             supports_erc721_interface_coro = self.__rpc_client.call(
                 EthCall(
                     None,
@@ -290,7 +289,6 @@ class EvmLogErc1155TransferSingleToNftTokenTransferTransformer(
         )
 
     def _parse_transfer_data(self, data_package):
-
         from_address = decode(
             ["address"],
             data_package.log.topics[1],

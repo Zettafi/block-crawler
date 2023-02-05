@@ -21,12 +21,11 @@ from blockcrawler.core.rpc import RpcClient
 from blockcrawler.core.services import MemoryBlockTimeCache
 from blockcrawler.core.stats import StatsService
 from blockcrawler.nft import data_services
-from blockcrawler.nft.commands import (
+from blockcrawler.nft.bin.commands import (
     crawl_evm_blocks,
     load_evm_contracts_by_block,
     listen_for_and_process_new_evm_blocks,
     set_last_block_id_for_block_chain,
-    get_block,
 )
 
 try:  # If dotenv in installed, use it load env vars
@@ -39,11 +38,14 @@ except ModuleNotFoundError:
 
 
 @click.group
-def block_crawler():
+def nft():
+    """
+    Loading and verifying NFTs
+    """
     pass
 
 
-@block_crawler.command()
+@nft.command()
 @click.argument("STARTING_BLOCK", type=HexInt)
 @click.argument("ENDING_BLOCK", type=HexInt)
 @click.option(
@@ -151,7 +153,7 @@ def crawl(
         pass
 
 
-@block_crawler.command()
+@nft.command()
 @click.option(
     "--blockchain",
     envvar="BLOCKCHAIN",
@@ -252,7 +254,7 @@ def tail(
         pass
 
 
-@block_crawler.command()
+@nft.command()
 @click.argument("BLOCKCHAIN", type=BlockChainParamType())
 @click.argument("STARTING_BLOCK", type=HexIntParamType())
 @click.argument("ENDING_BLOCK", type=HexIntParamType())
@@ -433,7 +435,7 @@ def load(
         )
 
 
-@block_crawler.command()
+@nft.command()
 @click.argument("LAST_BLOCK_ID", type=HexInt)
 @click.option(
     "--dynamodb-endpoint-url",
@@ -460,23 +462,6 @@ def seed(blockchain, last_block_id: HexInt, dynamodb_endpoint_url, table_prefix)
             blockchain.value, last_block_id, dynamodb_endpoint_url, table_prefix
         )
     )
-
-
-@block_crawler.command()
-@click.option(
-    "--evm-archive-node-uri",
-    envvar="EVM_ARCHIVE_NODE_URI",
-    help="URI to access the archive node EVM RPC HTTP server",
-)
-def block_number(evm_archive_node_uri):
-    """
-    Get the current block for a blockchain.
-    """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    stats_service = StatsService()
-    current_block_number = loop.run_until_complete(get_block(evm_archive_node_uri, stats_service))
-    click.echo(current_block_number)
 
 
 @dataclasses.dataclass
@@ -558,4 +543,4 @@ class StatsWriter:
 
 
 if __name__ == "__main__":
-    block_crawler()
+    nft()

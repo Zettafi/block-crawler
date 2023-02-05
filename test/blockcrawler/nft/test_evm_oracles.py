@@ -13,7 +13,6 @@ from blockcrawler.nft.evm.oracles import TokenTransactionTypeOracle, LogVersionO
 
 @ddt.ddt
 class TransactionTypeOracleTestCase(TestCase):
-
     LOG_DATA = (
         # 0 address to non-contract address is mint
         (

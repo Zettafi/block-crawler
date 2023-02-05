@@ -272,7 +272,6 @@ class EvmRpcClient(RpcClient):
 
 
 class ConnectionPoolingEvmRpcClient(EvmRpcClient):
-
     # noinspection PyMissingConstructor
     def __init__(
         self,
