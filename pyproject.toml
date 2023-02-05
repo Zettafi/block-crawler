@@ -41,6 +41,9 @@ dev = [
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.coverage.run]
 branch=true
 
@@ -57,7 +60,7 @@ python_version = 3.8
 
 [[tool.mypy.overrides]]
 module = [
-    "mypy-ddt",
-    "mypy-boto3.*"
+    "ddt",
+    "boto3.*"
 ]
 ignore_missing_imports = true

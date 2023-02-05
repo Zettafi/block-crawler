@@ -14,14 +14,14 @@ from typing import Optional, List, Tuple
 
 import click
 
-from blockrail.blockcrawler import LOGGER_NAME
-from blockrail.blockcrawler.core.click import BlockChainParamType, HexIntParamType
-from blockrail.blockcrawler.core.entities import BlockChain, HexInt
-from blockrail.blockcrawler.core.rpc import RpcClient
-from blockrail.blockcrawler.core.services import MemoryBlockTimeCache
-from blockrail.blockcrawler.core.stats import StatsService
-from blockrail.blockcrawler.nft import data_services
-from blockrail.blockcrawler.nft.commands import (
+from blockcrawler import LOGGER_NAME
+from blockcrawler.core.click import BlockChainParamType, HexIntParamType
+from blockcrawler.core.entities import BlockChain, HexInt
+from blockcrawler.core.rpc import RpcClient
+from blockcrawler.core.services import MemoryBlockTimeCache
+from blockcrawler.core.stats import StatsService
+from blockcrawler.nft import data_services
+from blockcrawler.nft.commands import (
     crawl_evm_blocks,
     load_evm_contracts_by_block,
     listen_for_and_process_new_evm_blocks,
