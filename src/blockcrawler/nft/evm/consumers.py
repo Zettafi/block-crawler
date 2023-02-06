@@ -442,6 +442,8 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
             return
 
         try:
+            log_batch: List[Awaitable] = []
+            token_xfr_batch_write_tasks: List[Task] = []
             tokens: Dict[HexInt, Token] = {}
             token_transfers: List[TokenTransfer] = []
             token_owners: Dict[HexInt, Dict[Address, TokenOwner]] = {}
@@ -459,131 +461,53 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                 address=data_package.collection.collection_id,
                 block_range_size=100_000,
             ):
-                if log.topics[0] == Erc1155Events.TRANSFER_SINGLE.event_signature_hash:
-                    from_address = Address(
-                        decode(
-                            ["address"],
-                            log.topics[2],
-                        )[0]
-                    )
-                    to_address = Address(
-                        decode(
-                            ["address"],
-                            log.topics[3],
-                        )[0]
-                    )
-                    token_id, quantity = (
-                        HexInt(decoded)
-                        for decoded in decode(
-                            ["uint256", "uint256"],
-                            log.data,
+                await self.__process_log_entry(
+                    data_package, log, token_owners, token_transfers, tokens
+                )
+                if len(log_batch) >= self._write_batch_size:
+                    await asyncio.gather(*log_batch)
+                    log_batch.clear()
+
+                    await self._wait_for_ready_to_add_batch_task(token_xfr_batch_write_tasks)
+                    token_xfr_batch_write_tasks.append(
+                        asyncio.create_task(
+                            self.__data_service.write_token_transfer_batch(token_transfers[:])
                         )
                     )
-                    transaction_type = self.__token_transaction_type_oracle.type_from_log(log)
-                    await self._process_token_and_transfers(
-                        tokens=tokens,
-                        token_transfers=token_transfers,
-                        collection=data_package.collection,
-                        log=log,
-                        transaction_type=transaction_type,
-                        from_address=from_address,
-                        to_address=to_address,
-                        token_id=token_id,
-                        quantity=quantity,
-                    )
-                    await self.__process_token_owner(
-                        token_owners=token_owners,
-                        collection=data_package.collection,
-                        from_address=from_address,
-                        to_address=to_address,
-                        token_id=token_id,
-                        quantity=quantity,
-                        transaction_type=transaction_type,
-                    )
+                    await asyncio.sleep(0)  # Start processing token transfer saves to clear memory
+                    token_transfers.clear()
 
-                elif log.topics[0] == Erc1155Events.TRANSFER_BATCH.event_signature_hash:
-                    from_address = Address(
-                        decode(
-                            ["address"],
-                            log.topics[2],
-                        )[0]
-                    )
-                    to_address = Address(
-                        decode(
-                            ["address"],
-                            log.topics[3],
-                        )[0]
-                    )
-                    token_ids, quantities = decode(
-                        ["uint256[]", "uint256[]"],
-                        log.data,
-                    )
-                    transaction_type = self.__token_transaction_type_oracle.type_from_log(log)
+            if log_batch:  # Gather any remaining log batch entries
+                await asyncio.gather(*log_batch)
 
-                    for token_id, quantity in zip(token_ids, quantities):
-                        await self._process_token_and_transfers(
-                            tokens=tokens,
-                            token_transfers=token_transfers,
-                            collection=data_package.collection,
-                            log=log,
-                            transaction_type=transaction_type,
-                            from_address=from_address,
-                            to_address=to_address,
-                            token_id=HexInt(cast(int, token_id)),
-                            quantity=HexInt(cast(int, quantity)),
-                        )
-                        await self.__process_token_owner(
-                            token_owners=token_owners,
-                            collection=data_package.collection,
-                            from_address=from_address,
-                            to_address=to_address,
-                            token_id=HexInt(cast(int, token_id)),
-                            quantity=HexInt(cast(int, quantity)),
-                            transaction_type=transaction_type,
-                        )
-
-                elif log.topics[0] == Erc1155Events.URI.event_signature_hash:
-                    token_id = HexInt(
-                        decode(
-                            ["uint256"],
-                            log.topics[1],
-                        )[0]
+            if token_transfers:  # Write any remaining token transfers
+                await self._wait_for_ready_to_add_batch_task(token_xfr_batch_write_tasks)
+                token_xfr_batch_write_tasks.append(
+                    asyncio.create_task(
+                        self.__data_service.write_token_transfer_batch(token_transfers)
                     )
-                    uri = decode(
-                        ["string"],
-                        log.data,
-                    )[0]
+                )
 
-                    if token_id in tokens:
-                        token = tokens[token_id]
-                        tokens[token_id] = Token(
-                            blockchain=token.blockchain,
-                            collection_id=token.collection_id,
-                            token_id=token.token_id,
-                            data_version=token.data_version,
-                            original_owner=token.original_owner,
-                            current_owner=token.current_owner,
-                            mint_block=token.mint_block,
-                            mint_date=token.mint_date,
-                            quantity=token.quantity,
-                            attribute_version=token.attribute_version,
-                            metadata_url=uri,
-                        )
+            cleaned_token_owners = []
+            for _token_owners in token_owners.values():
+                for token_owner in _token_owners.values():
+                    if token_owner.quantity != 0:
+                        cleaned_token_owners.append(token_owner)
 
-            batches = []
-            if tokens:
-                token_batch = [token for token in tokens.values()]
-                batches.append(self.__data_service.write_token_batch(token_batch))
-            if token_transfers:
-                batches.append(self.__data_service.write_token_transfer_batch(token_transfers))
-            if token_owners:
-                token_owners_data: List[TokenOwner] = []
-                for oto in token_owners.values():
-                    token_owners_data.extend(
-                        [value for value in oto.values() if value.quantity != 0]
-                    )
-                batches.append(self.__data_service.write_token_owner_batch(token_owners_data))
-            await asyncio.gather(*batches)
+            write_token_owners_task = asyncio.create_task(
+                self._process_batches(
+                    cleaned_token_owners, self.__data_service.write_token_owner_batch
+                )
+            )
+
+            tokens_list = [token for _, token in tokens.items()]
+            write_tokens_task = asyncio.create_task(
+                self._process_batches(tokens_list, self.__data_service.write_token_batch)
+            )
+
+            await asyncio.gather(
+                *token_xfr_batch_write_tasks, write_token_owners_task, write_tokens_task
+            )
 
         except Exception as e:
             raise ConsumerError(
@@ -592,6 +516,125 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                 f"created in block {data_package.collection.block_created} "
                 f"-- {e}"
             )
+
+    async def __process_log_entry(
+        self,
+        data_package: CollectionDataPackage,
+        log: EvmLog,
+        token_owners: Dict[HexInt, Dict[Address, TokenOwner]],
+        token_transfers: List[TokenTransfer],
+        tokens: Dict[HexInt, Token],
+    ):
+        if log.topics[0] == Erc1155Events.TRANSFER_SINGLE.event_signature_hash:
+            from_address = Address(
+                decode(
+                    ["address"],
+                    log.topics[2],
+                )[0]
+            )
+            to_address = Address(
+                decode(
+                    ["address"],
+                    log.topics[3],
+                )[0]
+            )
+            token_id, quantity = (
+                HexInt(decoded)
+                for decoded in decode(
+                    ["uint256", "uint256"],
+                    log.data,
+                )
+            )
+            transaction_type = self.__token_transaction_type_oracle.type_from_log(log)
+            await self._process_token_and_transfers(
+                tokens=tokens,
+                token_transfers=token_transfers,
+                collection=data_package.collection,
+                log=log,
+                transaction_type=transaction_type,
+                from_address=from_address,
+                to_address=to_address,
+                token_id=token_id,
+                quantity=quantity,
+            )
+            await self.__process_token_owner(
+                token_owners=token_owners,
+                collection=data_package.collection,
+                from_address=from_address,
+                to_address=to_address,
+                token_id=token_id,
+                quantity=quantity,
+                transaction_type=transaction_type,
+            )
+
+        elif log.topics[0] == Erc1155Events.TRANSFER_BATCH.event_signature_hash:
+            from_address = Address(
+                decode(
+                    ["address"],
+                    log.topics[2],
+                )[0]
+            )
+            to_address = Address(
+                decode(
+                    ["address"],
+                    log.topics[3],
+                )[0]
+            )
+            token_ids, quantities = decode(
+                ["uint256[]", "uint256[]"],
+                log.data,
+            )
+            transaction_type = self.__token_transaction_type_oracle.type_from_log(log)
+
+            for token_id, quantity in zip(token_ids, quantities):
+                await self._process_token_and_transfers(
+                    tokens=tokens,
+                    token_transfers=token_transfers,
+                    collection=data_package.collection,
+                    log=log,
+                    transaction_type=transaction_type,
+                    from_address=from_address,
+                    to_address=to_address,
+                    token_id=HexInt(cast(int, token_id)),
+                    quantity=HexInt(cast(int, quantity)),
+                )
+                await self.__process_token_owner(
+                    token_owners=token_owners,
+                    collection=data_package.collection,
+                    from_address=from_address,
+                    to_address=to_address,
+                    token_id=HexInt(cast(int, token_id)),
+                    quantity=HexInt(cast(int, quantity)),
+                    transaction_type=transaction_type,
+                )
+
+        elif log.topics[0] == Erc1155Events.URI.event_signature_hash:
+            token_id = HexInt(
+                decode(
+                    ["uint256"],
+                    log.topics[1],
+                )[0]
+            )
+            uri = decode(
+                ["string"],
+                log.data,
+            )[0]
+
+            if token_id in tokens:
+                token = tokens[token_id]
+                tokens[token_id] = Token(
+                    blockchain=token.blockchain,
+                    collection_id=token.collection_id,
+                    token_id=token.token_id,
+                    data_version=token.data_version,
+                    original_owner=token.original_owner,
+                    current_owner=token.current_owner,
+                    mint_block=token.mint_block,
+                    mint_date=token.mint_date,
+                    quantity=token.quantity,
+                    attribute_version=token.attribute_version,
+                    metadata_url=uri,
+                )
 
     @staticmethod
     async def __process_token_owner(

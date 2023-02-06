@@ -10,7 +10,14 @@ from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
 from blockcrawler.evm.services import BlockTimeService
 from blockcrawler.evm.rpc import EvmRpcClient, EthCall
-from blockcrawler.evm.types import EvmLog, Erc721MetadataFunctions, Erc721Events, Erc1155Events
+from blockcrawler.evm.types import (
+    EvmLog,
+    Erc721MetadataFunctions,
+    Erc721Events,
+    Erc1155Events,
+    Erc165Functions,
+    Erc165InterfaceID,
+)
 from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
@@ -249,19 +256,47 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_batch.assert_called_once_with([expected])
 
-    async def test_tries_to_get_token_uri_from_contract_when_tx_is_mint(self):
+    async def test_tries_to_get_token_uri_from_contract_when_tx_is_mint_and_supported(self):
         self.__token_transaction_type_oracle.type_from_log.side_effect = [
             TokenTransactionType.MINT,
             TokenTransactionType.TRANSFER,
         ]
         await self.__consumer.receive(self.__data_package)
+        self.__rpc_client.call.assert_has_awaits(
+            [
+                call(
+                    EthCall(
+                        from_=None,
+                        to="collection",
+                        function=Erc165Functions.SUPPORTS_INTERFACE,
+                        parameters=[Erc165InterfaceID.ERC721_METADATA.bytes],
+                    )
+                ),
+                call(
+                    EthCall(
+                        from_=None,
+                        to="collection",
+                        function=Erc721MetadataFunctions.TOKEN_URI,
+                        parameters=[0x13],
+                        block=HexInt("0x12"),
+                    )
+                ),
+            ]
+        )
+
+    async def test_does_not_try_to_get_token_uri_from_contract_when_not_supported(self):
+        self.__token_transaction_type_oracle.type_from_log.side_effect = [
+            TokenTransactionType.MINT,
+            TokenTransactionType.TRANSFER,
+        ]
+        self.__rpc_client.call.return_value = (False,)
+        await self.__consumer.receive(self.__data_package)
         self.__rpc_client.call.assert_awaited_once_with(
             EthCall(
                 from_=None,
                 to="collection",
-                function=Erc721MetadataFunctions.TOKEN_URI,
-                parameters=[0x13],
-                block="0x12",
+                function=Erc165Functions.SUPPORTS_INTERFACE,
+                parameters=[Erc165InterfaceID.ERC721_METADATA.bytes],
             )
         )
 
@@ -271,12 +306,17 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
     )
     async def test_does_not_error_when_getting_token_uri_from_contract_and_not_supported(
         self, error_code
-    ):  # noqa: E501
+    ):
+        def _call_side_effect(eth_call: EthCall) -> tuple:
+            if eth_call.function == Erc165Functions.SUPPORTS_INTERFACE:
+                return (True,)
+            raise RpcServerError(None, None, error_code, None)
+
         self.__logs.pop()
         self.__token_transaction_type_oracle.type_from_log.return_value = TokenTransactionType.MINT
-        self.__rpc_client.call.side_effect = RpcServerError(None, None, error_code, None)
+        self.__rpc_client.call.side_effect = _call_side_effect
         await self.__consumer.receive(self.__data_package)
-        self.__rpc_client.call.assert_awaited_once()
+        self.__rpc_client.call.assert_awaited()
         self.__data_service.write_token_batch.assert_awaited_once_with(
             [
                 Token(
@@ -296,11 +336,16 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         )
 
     async def test_does_not_error_when_token_uri_response_from_contract_wont_decode(self):
+        def _call_side_effect(eth_call: EthCall) -> tuple:
+            if eth_call.function == Erc165Functions.SUPPORTS_INTERFACE:
+                return (True,)
+            raise RpcDecodeError
+
         self.__logs.pop()
         self.__token_transaction_type_oracle.type_from_log.return_value = TokenTransactionType.MINT
-        self.__rpc_client.call.side_effect = RpcDecodeError
+        self.__rpc_client.call.side_effect = _call_side_effect
         await self.__consumer.receive(self.__data_package)
-        self.__rpc_client.call.assert_awaited_once()
+        self.__rpc_client.call.assert_awaited()
         self.__data_service.write_token_batch.assert_awaited_once_with(
             [
                 Token(
