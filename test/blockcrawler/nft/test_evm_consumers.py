@@ -118,7 +118,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
             to_block=self.__max_block_height,
             address=self.__data_package.collection.collection_id,
             topics=[Erc721Events.TRANSFER.event_signature_hash.hex()],
-            block_range_size=100_000,
+            starting_block_range_size=100_000,
         )
 
     async def test_sends_log_block_numbers_to_block_time_service(self):
@@ -485,7 +485,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
                     Erc1155Events.URI.event_signature_hash.hex(),
                 ]
             ],
-            block_range_size=100_000,
+            starting_block_range_size=100_000,
         )
 
     async def test_sends_log_block_numbers_to_block_time_service(self):

@@ -507,9 +507,9 @@ async def verify_collection(
             contract_symbol = None
 
         if await rpc_service.contract_supports_erc721():
-            specification = "ERC721"
+            specification = "ERC-721"
         elif await rpc_service.contract_supports_erc1155():
-            specification = "ERC1155"
+            specification = "ERC-1155"
         else:
             specification = "UNKNOWN"
 

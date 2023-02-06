@@ -219,19 +219,19 @@ class EvmRpcClient(RpcClient):
         from_block: HexInt,
         to_block: HexInt,
         address: Address,
-        block_range_size: Optional[int] = None,
+        starting_block_range_size: Optional[int] = None,
     ) -> AsyncIterable[EvmLog]:
-        if not block_range_size:
-            block_range_size = to_block.int_value - from_block.int_value + 1
+        if not starting_block_range_size:
+            starting_block_range_size = to_block.int_value - from_block.int_value + 1
         current_block = from_block
+        block_range_size = starting_block_range_size
         while current_block <= to_block:
-            current_block_range_size = block_range_size
             processed = False
             while not processed:
-                end_block = current_block + current_block_range_size - 1
+                end_block = current_block + block_range_size - 1
                 if end_block > to_block:
                     end_block = to_block
-                    current_block_range_size = 1 + end_block - current_block
+                    block_range_size = 1 + end_block - current_block
                 try:
                     logs = await self.send(
                         "eth_getLogs",
@@ -261,10 +261,11 @@ class EvmRpcClient(RpcClient):
                     if e.error_code in (
                         -32005,  # Infura
                         -32602,  # Alchemy
+                        -32000,  # Alchemy generic server error which means timeout in the context
                     ):
-                        old_block_range_size = current_block_range_size
-                        current_block_range_size = math.floor(current_block_range_size / 10)
-                        if old_block_range_size <= current_block_range_size:
+                        old_block_range_size = block_range_size
+                        block_range_size = math.floor(block_range_size / 10)
+                        if old_block_range_size <= block_range_size:
                             raise
                     else:
                         raise

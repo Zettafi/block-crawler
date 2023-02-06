@@ -210,7 +210,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                 from_block=data_package.collection.block_created,
                 to_block=self.__max_block_height,
                 address=data_package.collection.collection_id,
-                block_range_size=100_000,
+                starting_block_range_size=100_000,
             ):
                 if len(log.topics) != 4:
                     continue  # Ignore other same signature events such as ERC-20 Transfer
@@ -459,7 +459,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                 from_block=data_package.collection.block_created,
                 to_block=self.__max_block_height,
                 address=data_package.collection.collection_id,
-                block_range_size=100_000,
+                starting_block_range_size=100_000,
             ):
                 log_batch.append(
                     self.__process_log_entry(

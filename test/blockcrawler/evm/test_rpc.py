@@ -868,8 +868,9 @@ class GetLogsTestCase(BaseRPCClientTestCase):
         )
 
     @ddt.data(
-        -32005,  # Infura
-        -32602,  # Alchemy
+        -32005,  # Infura too many logs
+        -32602,  # Alchemy too many logs
+        -32000,  # Alchemy timeout
     )
     async def test_reduces_block_range_until_one_and_errors_when_to_many_records_error_returned(
         self,
