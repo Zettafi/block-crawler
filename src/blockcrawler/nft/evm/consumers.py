@@ -461,8 +461,10 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
                 address=data_package.collection.collection_id,
                 block_range_size=100_000,
             ):
-                await self.__process_log_entry(
-                    data_package, log, token_owners, token_transfers, tokens
+                log_batch.append(
+                    self.__process_log_entry(
+                        data_package, log, token_owners, token_transfers, tokens
+                    )
                 )
                 if len(log_batch) >= self._write_batch_size:
                     await asyncio.gather(*log_batch)
