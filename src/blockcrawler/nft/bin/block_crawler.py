@@ -1,6 +1,5 @@
 import asyncio
 import csv
-import dataclasses
 import logging
 import math
 import os
@@ -22,6 +21,7 @@ from blockcrawler.core.rpc import RpcClient
 from blockcrawler.evm.services import MemoryBlockTimeCache
 from blockcrawler.core.stats import StatsService
 from blockcrawler.nft import data_services
+from blockcrawler.nft.bin import BlockBoundTracker
 from .commands import (
     crawl_evm_blocks,
     load_evm_contracts_by_block,
@@ -467,12 +467,6 @@ def seed(blockchain, last_block_id: HexInt, dynamodb_endpoint_url, table_prefix)
             blockchain.value, last_block_id, dynamodb_endpoint_url, table_prefix
         )
     )
-
-
-@dataclasses.dataclass
-class BlockBoundTracker:
-    low: Optional[HexInt] = HexInt(0)
-    high: Optional[HexInt] = HexInt(0)
 
 
 class StatsWriter:

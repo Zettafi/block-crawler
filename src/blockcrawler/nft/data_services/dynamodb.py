@@ -258,11 +258,13 @@ class DynamoDbDataService(DataService):
             )
             or (
                 self.__maximum_table_items_per_second
+                and table in self.__table_items_this_second
                 and self.__table_items_this_second[table]
                 > self.__maximum_table_items_per_second + self.__parallel_batches
             )
             or (
                 self.__maximum_partition_items_per_second
+                and partition in self.__partition_items_this_second
                 and self.__partition_items_this_second[partition] + self.__parallel_batches
                 > self.__maximum_partition_items_per_second
             )

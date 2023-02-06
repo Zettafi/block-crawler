@@ -9,6 +9,7 @@ import aioboto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from blockcrawler.nft.bin import BlockBoundTracker
 from blockcrawler.nft.consumers import (
     NftCollectionPersistenceConsumer,
     NftTokenMintPersistenceConsumer,
@@ -344,7 +345,7 @@ async def load_evm_contracts_by_block(
     dynamodb_timeout: float,
     table_prefix: str,
     dynamodb_parallel_batches: int,
-    block_bound_tracker,
+    block_bound_tracker: BlockBoundTracker,
 ) -> None:
     session = aioboto3.Session()
 
@@ -429,9 +430,12 @@ async def load_evm_contracts_by_block(
             if ending_block == starting_block:
                 blocks: Iterable = [starting_block]
             else:
-                blocks = range(
-                    ending_block.int_value, starting_block.int_value, -1 * block_chunk_size
-                )
+                blocks = [
+                    HexInt(block_number)
+                    for block_number in range(
+                        ending_block.int_value, starting_block.int_value, -1 * block_chunk_size
+                    )
+                ]
 
             for block_chunk_start in blocks:
                 block_chunk_end = block_chunk_start - block_chunk_size + 1
