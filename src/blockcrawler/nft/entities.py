@@ -11,8 +11,8 @@ CollectionType = NewType("CollectionType", str)
 
 
 class EthereumCollectionType:
-    ERC721 = CollectionType("ERC721")
-    ERC1155 = CollectionType("ERC1155")
+    ERC721 = CollectionType("ERC-721")
+    ERC1155 = CollectionType("ERC-1155")
 
 
 @dataclass(unsafe_hash=True, frozen=True)
