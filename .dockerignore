@@ -1,4 +1,11 @@
+.venv
+.tox
+.mypy_cache
+bin
 build
+Dockerfile
 .env
 .env.*
-Dockerfile
+**/*.csv
+**/*.egg-info
+**/*.pyc

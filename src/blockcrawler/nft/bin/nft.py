@@ -89,7 +89,7 @@ def nft(
     rpc_requests_per_second: Optional[int],
     dynamodb_timeout: float,
     dynamodb_endpoint_url: str,
-    table_prefix: str,
+    dynamodb_table_prefix: str,
     log_file: List[pathlib.Path],
     debug: bool,
 ):
@@ -117,7 +117,7 @@ def nft(
         blockchain=blockchain,
         dynamodb_timeout=dynamodb_timeout,
         dynamodb_endpoint_url=dynamodb_endpoint_url,
-        table_prefix=table_prefix,
+        table_prefix=dynamodb_table_prefix,
         logger=logger,
     )
 

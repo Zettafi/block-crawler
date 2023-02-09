@@ -10,7 +10,6 @@ import click
 from boto3.dynamodb.conditions import Key, ConditionBase
 from boto3.dynamodb.table import TableResource
 from botocore.config import Config as BotoConfig
-from dotenv import load_dotenv
 from eth_abi import decode, encode
 from hexbytes import HexBytes
 
@@ -35,6 +34,13 @@ from blockcrawler.evm.types import (
     Erc1155Events,
 )
 from blockcrawler.nft.bin import Config
+
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    pass
+
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 

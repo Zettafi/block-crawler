@@ -33,6 +33,7 @@ def tail(
     Listen for incoming blocks in the blockchain, parse the data we want to collect
     and store that data in the database
     """
+    config.logger.info("Process initializing")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -51,4 +52,6 @@ def tail(
             )
         )
     except KeyboardInterrupt:
-        pass
+        config.logger.info("Process halted from user intervention")
+    finally:
+        config.logger.info("Process complete")

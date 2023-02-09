@@ -1,5 +1,4 @@
 import asyncio
-import datetime
 import time
 from logging import Logger
 from typing import Union, Dict, cast, Optional, Iterable
@@ -261,7 +260,9 @@ async def listen_for_and_process_new_evm_blocks(
                 data_version=data_version,
             )
 
-            last_block_table = await dynamodb.Table(BlockCrawlerConfig.table_name)
+            last_block_table = await dynamodb.Table(
+                f"{table_prefix}{BlockCrawlerConfig.table_name}"
+            )
             last_block_result = await last_block_table.get_item(
                 Key={"blockchain": blockchain.value}
             )
@@ -270,13 +271,18 @@ async def listen_for_and_process_new_evm_blocks(
                     int(last_block_result.get("Item").get("last_block_id"))
                 )
             except AttributeError:
-                exit(
+                logger.error(
                     "Unable to determine the last block number processed. "
                     "Are you starting fresh and forgot to seed?"
                 )
+                exit(1)
 
             process_time: float = 0.0
             caught_up = False
+            logger.info(
+                f"Starting tail of {blockchain.value} trailing {trail_blocks} blocks "
+                f"with {process_interval} sec interval"
+            )
             while True:
                 # TODO: Gracefully handle shutdown
                 block_number = await evm_rpc_client.get_block_number()
@@ -285,7 +291,7 @@ async def listen_for_and_process_new_evm_blocks(
                     start_block = last_block_processed + 1
                     block_ids = current_block_number - start_block + 1
                     if not caught_up and block_ids > 1:
-                        print(f"Catching up {block_ids} blocks")
+                        logger.info(f"Catching up {block_ids.int_value} blocks")
                     start = time.perf_counter()
                     block_id_producer = BlockIDProducer(
                         blockchain, start_block, current_block_number
@@ -295,11 +301,10 @@ async def listen_for_and_process_new_evm_blocks(
 
                     end = time.perf_counter()
                     process_time = end - start
-                    print(
-                        datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S%z")
-                        + f" - {start_block}:{current_block_number}"
+                    logger.info(
+                        f" - {start_block.int_value}:{current_block_number.int_value}"
                         f" - {process_time:0.3f}s"
-                        f" - blk:{block_ids:,}"
+                        f" - blk:{block_ids.int_value:,}"
                     )
                     last_block_processed = current_block_number
 
@@ -309,6 +314,11 @@ async def listen_for_and_process_new_evm_blocks(
                         last_block_processed,
                         dynamodb_endpoint_url,
                         table_prefix,
+                    )
+                else:
+                    logger.warning(
+                        f"No blocks to process -- current: {current_block_number.int_value}"
+                        f" -- last processed: {last_block_processed.int_value}"
                     )
                 caught_up = True
                 await asyncio.sleep(process_interval - process_time)
