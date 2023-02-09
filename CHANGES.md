@@ -1,6 +1,4 @@
-# Version 1.0.0
-
-Unreleased
+# Version 0.1.0
 
 - Data Bus
 - Multi-Source/Connection High-Performance RPC Client
@@ -16,3 +14,7 @@ Unreleased
 - EVM Commands
   - function-digest - Get ABI function digest for function definition
   - block-number - Get the current block height of a node
+
+# Version 0.1.1
+
+ - Bug fix for nft load command

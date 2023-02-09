@@ -11,7 +11,7 @@ import click
 import math
 
 from blockcrawler import LOGGER_NAME
-from blockcrawler.core.click import BlockChainParamType, HexIntParamType
+from blockcrawler.core.click import HexIntParamType
 from blockcrawler.core.rpc import RpcClient
 from blockcrawler.core.stats import StatsService
 from blockcrawler.core.types import HexInt
@@ -22,7 +22,6 @@ from blockcrawler.nft.bin.commands import load_evm_contracts_by_block
 
 
 @click.command()
-@click.argument("BLOCKCHAIN", type=BlockChainParamType())
 @click.argument("STARTING_BLOCK", type=HexIntParamType())
 @click.argument("ENDING_BLOCK", type=HexIntParamType())
 @click.argument("BLOCK_HEIGHT", type=HexIntParamType())
