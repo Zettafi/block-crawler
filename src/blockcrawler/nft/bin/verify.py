@@ -5,15 +5,16 @@ from asyncio import CancelledError, Task
 from typing import Dict, Union, List, Awaitable, Optional, Tuple
 
 import aioboto3
+import boto3
 import click
 from boto3.dynamodb.conditions import Key, ConditionBase
 from boto3.dynamodb.table import TableResource
-from botocore.config import Config
+from botocore.config import Config as BotoConfig
 from dotenv import load_dotenv
 from eth_abi import decode, encode
 from hexbytes import HexBytes
 
-from blockcrawler.core.click import HexIntParamType, BlockChainParamType, AddressParamType
+from blockcrawler.core.click import HexIntParamType, AddressParamType
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError, RpcClient
 from blockcrawler.core.stats import StatsService
@@ -33,6 +34,7 @@ from blockcrawler.evm.types import (
     Erc721Events,
     Erc1155Events,
 )
+from blockcrawler.nft.bin import Config
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
@@ -297,11 +299,6 @@ class StatsWriter:
 
 @click.command
 @click.argument(
-    "BLOCKCHAIN",
-    required=True,
-    type=BlockChainParamType(),
-)
-@click.argument(
     "COLLECTION_ID",
     type=AddressParamType(),
 )
@@ -309,53 +306,11 @@ class StatsWriter:
     "BLOCK_HEIGHT",
     type=HexIntParamType(),
 )
-@click.option(
-    "--evm-rpc-node",
-    envvar="EVM_RPC_NODE",
-    help="RPC Node URI",
-    required=True,
-    show_envvar=True,
-)
-@click.option(
-    "--rpc-requests-per-second",
-    envvar="RPC_REQUESTS_PER_SECOND",
-    help="The maximum number of requests to process per second",
-    default=100,
-    type=int,
-    show_envvar=True,
-)
-@click.option(
-    "--dynamodb-endpoint-url",
-    envvar="AWS_DYNAMODB_ENDPOINT_URL",
-    help="Override URL for connecting to Amazon DynamoDB",
-    type=str,
-    required=False,
-    show_envvar=True,
-)
-@click.option(
-    "--table-prefix",
-    envvar="TABLE_PREFIX",
-    help="Prefix for table names",
-    default="",
-)
-@click.option(
-    "--dynamodb-timeout",
-    envvar="DYNAMODB_TIMEOUT",
-    default=5.0,
-    help="Maximum time in seconds to wait for connect or response from DynamoDB",
-    type=float,
-    show_envvar=True,
-    show_default=True,
-)
+@click.pass_obj
 def verify(
-    blockchain: BlockChain,
+    config: Config,
     collection_id: Address,
     block_height: HexInt,
-    dynamodb_endpoint_url: str,
-    dynamodb_timeout: float,
-    table_prefix: str,
-    evm_rpc_node: str,
-    rpc_requests_per_second: int,
 ):
     """
     Verify a collection in databases against an EVM archive node in a BLOCKCHAIN by
@@ -365,23 +320,22 @@ def verify(
     COLLECTION_ID: The collection ID of the NFT collection you wish to verify
     BLOCK_HEIGHT: Block height at which you wush tio verify the data.
     """
-    stats = StatsService()
-    stats_writer = StatsWriter(stats)
+    stats_writer = StatsWriter(config.stats_service)
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     stats_task = loop.create_task(stats_writer.loop(1))
     try:
         loop.run_until_complete(
             run(
-                blockchain=blockchain,
+                blockchain=config.blockchain,
                 collection_id=collection_id,
                 block_height=block_height,
-                dynamodb_endpoint_url=dynamodb_endpoint_url,
-                dynamodb_timeout=dynamodb_timeout,
-                table_prefix=table_prefix,
-                evm_rpc_node=evm_rpc_node,
-                rpc_requests_per_second=rpc_requests_per_second,
-                stats_service=stats,
+                boto3_session=aioboto3.Session(),
+                dynamodb_endpoint_url=config.dynamodb_endpoint_url,
+                dynamodb_timeout=config.dynamodb_timeout,
+                table_prefix=config.table_prefix,
+                evm_rpc_client=config.evm_rpc_client,
+                stats_service=config.stats_service,
             ),
         )
     except KeyboardInterrupt:
@@ -396,24 +350,21 @@ async def run(
     blockchain: BlockChain,
     collection_id: Address,
     block_height: HexInt,
+    boto3_session: boto3.Session,
     dynamodb_endpoint_url: str,
     dynamodb_timeout: float,
     table_prefix: str,
-    evm_rpc_node: str,
-    rpc_requests_per_second: int,
+    evm_rpc_client: EvmRpcClient,
     stats_service: StatsService,
 ):
-    config = Config(connect_timeout=dynamodb_timeout, read_timeout=dynamodb_timeout)
-    dynamodb_resource_kwargs: Dict[str, Union[str, Config]] = dict(config=config)
+    config = BotoConfig(connect_timeout=dynamodb_timeout, read_timeout=dynamodb_timeout)
+    dynamodb_resource_kwargs: Dict[str, Union[str, BotoConfig]] = dict(config=config)
     if dynamodb_endpoint_url is not None:  # This would only be in non-deployed environments
         dynamodb_resource_kwargs["endpoint_url"] = dynamodb_endpoint_url
-    session = aioboto3.Session()
-    async with EvmRpcClient(
-        evm_rpc_node, stats_service, requests_per_second=rpc_requests_per_second
-    ) as rpc_client:
-        rpc_service = RpcService(rpc_client, block_height, collection_id)
-        block_time_service = BlockTimeService(MemoryBlockTimeCache(), rpc_client)
-        async with session.resource(
+    async with evm_rpc_client:
+        rpc_service = RpcService(evm_rpc_client, block_height, collection_id)
+        block_time_service = BlockTimeService(MemoryBlockTimeCache(), evm_rpc_client)
+        async with boto3_session.resource(
             "dynamodb", **dynamodb_resource_kwargs
         ) as dynamodb:  # type: ignore
             # noinspection PyTypeChecker
@@ -633,7 +584,7 @@ async def verify_tokens(
             "the number of token records"
         )
     await asyncio.gather(*tasks)
-    return VerifyResult(name="Tokens", passed=True, errors=errors, warnings=warnings)
+    return VerifyResult(name="Tokens", passed=len(errors) == 0, errors=errors, warnings=warnings)
 
 
 async def get_table_items(table: TableResource, key_condition_expression: ConditionBase):
@@ -1051,7 +1002,7 @@ async def verify_transfers(
             f"{transfer_item['log_index']} is not in Transfer Logs from RPC"
         )
 
-    return VerifyResult(name="Transfers", passed=True, errors=errors, warnings=warnings)
+    return VerifyResult(name="Transfers", passed=len(errors) == 0, errors=errors, warnings=warnings)
 
 
 async def verify_owners(

@@ -2,8 +2,8 @@ import sys
 
 import click
 
-from blockcrawler.nft.bin.reset import reset
-from .nft.bin.block_crawler import nft
+from .nft.bin.reset import reset_db
+from .nft.bin.nft import nft
 from .evm.bin import evm
 
 
@@ -15,7 +15,7 @@ def dev():
     pass
 
 
-dev.add_command(reset)
+dev.add_command(reset_db)
 
 
 @click.group

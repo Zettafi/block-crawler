@@ -1,7 +1,7 @@
 import asyncio
 from abc import ABC
 from asyncio import Task
-from typing import List, Dict, cast, Tuple, Awaitable
+from typing import List, Dict, cast, Tuple, Awaitable, Callable, Any
 
 from eth_abi import decode
 
@@ -149,10 +149,10 @@ class CollectionToEverythingElseCollectionBasedConsumerBaseClass(Consumer, ABC):
                 if task.done():
                     batch_tasks.remove(task)
 
-    async def _process_batches(self, items, processor):
-        tasks = []
-        batch_items: List[Token] = []
-        batch_items_batches: List[List[Token]] = []
+    async def _process_batches(self, items: List[Any], processor: Callable):
+        tasks: List[Task] = []
+        batch_items: List[Any] = []
+        batch_items_batches: List[List[Any]] = []
         for token in items:
             batch_items.append(token)
             if len(batch_items) >= self._write_batch_size:

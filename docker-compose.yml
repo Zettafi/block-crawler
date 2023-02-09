@@ -17,9 +17,8 @@ services:
      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:?err}
      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:?err}
      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:?err}
-     - AWS_DYNAMODB_REGION=${AWS_DYNAMODB_REGION:?err}
     entrypoint: ""
     command: >
       bash -c "echo \"Preparing environment...\"
-      && python bin/reset.py --retry http://block-crawler-dynamodb:8000 db
+      && python -m blockcrawler dev reset --retry http://block-crawler-dynamodb:8000 db
       && echo OK"

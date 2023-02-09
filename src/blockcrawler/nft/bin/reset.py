@@ -24,10 +24,8 @@ except ModuleNotFoundError:
     pass
 
 
-async def reset_db_async(endpoint_url, region, table_prefix, retry):
+async def reset_db_async(endpoint_url, table_prefix, retry):
     resource_kwargs = dict(endpoint_url=endpoint_url)
-    if region is not None:
-        resource_kwargs["region_name"] = region
     session = aioboto3.Session()
     async with session.resource("dynamodb", **resource_kwargs) as dynamodb:
         retrying = True
@@ -101,68 +99,21 @@ async def reset_s3_async(
                 raise
 
 
-@click.group()
-@click.pass_context
-@click.argument("endpoint_url")
+@click.command()
+@click.argument("ENDPOINT_URL")
 @click.option("--retry/--no-retry", default=False)
-def reset(ctx, endpoint_url, retry):
-    """
-    Simple program that initiates/resets a local database. Do not perform
-    this with credentials.
-    """
-    ctx.ensure_object(dict)
-    ctx.obj["endpoint_url"] = endpoint_url
-    ctx.obj["retry"] = retry
-
-
-@reset.command()
 @click.option(
-    "--region",
-    envvar="AWS_DYNAMODB_REGION",
-    help="AWS region for DynamoDB",
+    "--dynamodb-table-prefix",
+    envvar="AWS_DYNAMODB_TABLE_PREFIX",
+    help="Prefix for DynamoDB table names",
+    default="",
 )
-@click.option(
-    "--table-prefix", envvar="TABLE_PREFIX", help="Prefix for DynamoDB table names", default=""
-)
-@click.pass_context
-def db(ctx, region, table_prefix):
-    endpoint_url = ctx.obj["endpoint_url"]
-    retry = ctx.obj["retry"]
+def reset_db(endpoint_url, dynamodb_table_prefix, retry):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(reset_db_async(endpoint_url, region, table_prefix, retry))
+    loop.run_until_complete(reset_db_async(endpoint_url, dynamodb_table_prefix, retry))
     click.echo(click.style("DB has been reset", fg="green"))
 
 
-@reset.command()
-@click.option(
-    "--metadata-bucket",
-    envvar="AWS_S3_METADATA_BUCKET",
-    help="S3 bucket to store metadata files",
-    required=True,
-)
-@click.option(
-    "--region",
-    envvar="AWS_S3_REGION",
-    help="AWS region for S3",
-)
-@click.option(
-    "--concurrent-deletes",
-    envvar="CONCURRENT_DELETES",
-    help="The maximum number of concurrent delete operations",
-    default=100,
-)
-@click.pass_context
-def s3(ctx, metadata_bucket, region, concurrent_deletes):
-    endpoint_url = ctx.obj["endpoint_url"]
-    retry = ctx.obj["retry"]
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(
-        reset_s3_async(endpoint_url, metadata_bucket, region, concurrent_deletes, retry)
-    )
-    click.echo(click.style("S3 has been reset", fg="green"))
-
-
 if __name__ == "__main__":
-    reset()
+    reset_db()
