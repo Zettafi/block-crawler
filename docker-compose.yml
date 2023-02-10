@@ -20,5 +20,5 @@ services:
     entrypoint: ""
     command: >
       bash -c "echo \"Preparing environment...\"
-      && python -m blockcrawler dev reset --retry http://block-crawler-dynamodb:8000 db
+      && python -m blockcrawler dev reset-db --retry http://block-crawler-dynamodb:8000
       && echo OK"
