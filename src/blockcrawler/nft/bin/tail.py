@@ -1,4 +1,6 @@
 import asyncio
+import signal
+import time
 
 import aioboto3
 import click
@@ -36,6 +38,9 @@ def tail(
     config.logger.info("Process initializing")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    for signame in ["SIGTERM", "SIGHUP", "SIGBREAK", "SIGQUIT", "SIGINT"]:
+        if hasattr(signal, signame):
+            signal.signal(getattr(signal, signame), signal_to_exception)
     try:
         loop.run_until_complete(
             listen_for_and_process_new_evm_blocks(
@@ -51,7 +56,18 @@ def tail(
                 process_interval=process_interval,
             )
         )
-    except KeyboardInterrupt:
-        config.logger.info("Process halted from user intervention")
+    except SignalRaisedException as e:
+        config.logger.info(f"Process interrupted by signal: {e}")
     finally:
+        while loop.is_running():
+            time.sleep(0.001)
         config.logger.info("Process complete")
+
+
+class SignalRaisedException(Exception):
+    pass
+
+
+def signal_to_exception(signum: int, _):
+    signame = signal.Signals(signum).name
+    raise SignalRaisedException(signame)
