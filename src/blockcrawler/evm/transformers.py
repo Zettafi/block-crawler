@@ -92,7 +92,7 @@ class EvmTransactionHashToEvmTransactionReceiptTransformer(Transformer):
         await self._get_data_bus().send(receipt_data_package)
 
 
-class EvmTransactionReceiptToLogTransformer(Transformer):
+class EvmTransactionReceiptToEvmLogTransformer(Transformer):
     async def receive(self, data_package: DataPackage):
         if not isinstance(data_package, EvmTransactionReceiptDataPackage):
             return

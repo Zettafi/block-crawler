@@ -19,7 +19,7 @@ from blockcrawler.evm.transformers import (
     BlockIdToEvmBlockTransformer,
     EvmBlockToEvmTransactionHashTransformer,
     EvmTransactionHashToEvmTransactionReceiptTransformer,
-    EvmTransactionReceiptToLogTransformer,
+    EvmTransactionReceiptToEvmLogTransformer,
     EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer,
 )
 from blockcrawler.evm.types import (
@@ -124,10 +124,10 @@ class EvmTransactionHashToEvmTransactionReceiptBatchTransformerTestCase(Isolated
         )
 
 
-class EvmTransactionReceiptToLogTransformerTestCase(IsolatedAsyncioTestCase):
+class EvmTransactionReceiptToEvmLogTransformerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__data_bus = AsyncMock(DataBus)
-        self.__transformer = EvmTransactionReceiptToLogTransformer(self.__data_bus)
+        self.__transformer = EvmTransactionReceiptToEvmLogTransformer(self.__data_bus)
 
     async def test_places_transformed_logs_on_data_bus(self):
         blockchain = Mock(BlockChain)

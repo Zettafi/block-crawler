@@ -21,6 +21,7 @@ from blockcrawler.evm.transformers import (
     EvmTransactionHashToEvmTransactionReceiptTransformer,
     EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer,
     EvmTransactionToContractEvmTransactionReceiptTransformer,
+    EvmTransactionReceiptToEvmLogTransformer,
 )
 from blockcrawler.nft.bin import BlockBoundTracker
 from blockcrawler.nft.consumers import (
@@ -29,8 +30,9 @@ from blockcrawler.nft.consumers import (
     NftTokenTransferPersistenceConsumer,
     NftTokenQuantityUpdatingConsumer,
     NftMetadataUriUpdatingConsumer,
+    CurrentOwnerPersistingConsumer,
 )
-from blockcrawler.nft.data.models import BlockCrawlerConfig, Tokens
+from blockcrawler.nft.data.models import BlockCrawlerConfig, Tokens, Owners
 from blockcrawler.nft.data_services.dynamodb import DynamoDbDataService
 from blockcrawler.nft.entities import BlockChain
 from blockcrawler.nft.evm.consumers import (
@@ -79,6 +81,7 @@ async def __evm_block_crawler_data_bus_factory(
         )
     )
     await data_bus.register(NftCollectionPersistenceConsumer(data_service))
+    await data_bus.register(EvmTransactionReceiptToEvmLogTransformer(data_bus))
     token_transaction_type_oracle = TokenTransactionTypeOracle()
     log_version_oracle = LogVersionOracle()
     await data_bus.register(
@@ -122,7 +125,6 @@ async def __evm_block_crawler_data_bus_factory(
             rpc_client=rpc_client,
         )
     )
-    await data_bus.register(NftMetadataUriUpdatingConsumer(tokens_table_resource))
     await data_bus.register(
         EvmLogErc1155UriEventToNftTokenMetadataUriUpdatedTransformer(
             data_bus=data_bus,
@@ -130,6 +132,9 @@ async def __evm_block_crawler_data_bus_factory(
             data_version=data_version,
         )
     )
+    await data_bus.register(NftMetadataUriUpdatingConsumer(tokens_table_resource))
+    owners_table_resource = await dynamodb.Table(table_prefix + Owners.table_name)
+    await data_bus.register(CurrentOwnerPersistingConsumer(owners_table_resource))
     return data_bus
 
 

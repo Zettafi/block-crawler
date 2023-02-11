@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Optional, cast, Tuple, List, Dict, Any
 
@@ -119,7 +120,7 @@ class NftTokenQuantityUpdatingConsumer(Consumer):
                 f" -- Cause {e}"
             )
 
-    @backoff.on_exception(backoff.expo, ClientError, max_tries=5)
+    @backoff.on_exception(backoff.expo, ClientError, max_tries=5, backoff_log_level=logging.DEBUG)
     async def __update_quantity(self, quantity, token_transfer):
         await self.__tokens_table.update_item(
             Key={
@@ -143,7 +144,7 @@ class NftMetadataUriUpdatingConsumer(Consumer):
 
         await self.__update_metadata_uri(data_package)
 
-    @backoff.on_exception(backoff.expo, ClientError, max_tries=5)  # TODO: Do not retry 404
+    @backoff.on_exception(backoff.expo, ClientError, max_tries=5, backoff_log_level=logging.DEBUG)
     async def __update_metadata_uri(self, data_package: TokenMetadataUriUpdatedDataPackage):
         blockchain_collection_id = (
             f"{data_package.blockchain.value}" f"::{data_package.collection_id}"
@@ -252,12 +253,14 @@ class NftTokenMetadataPersistingConsumer(Consumer):
         TooManyRequestsProtocolError,
         value=lambda r: r.retry_after,
         jitter=None,
+        backoff_log_level=logging.DEBUG,
     )
     @backoff.on_exception(
         backoff.expo,
         ProtocolTimeoutError,
         max_value=16,
         jitter=backoff.full_jitter,
+        backoff_log_level=logging.DEBUG,
     )
     def get_metadata(self, data_client, uri):
         return data_client.get(uri)
