@@ -38,30 +38,23 @@ def tail(
     config.logger.info("Process initializing")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    for signame in ["SIGTERM", "SIGHUP", "SIGBREAK", "SIGQUIT", "SIGINT"]:
-        if hasattr(signal, signame):
-            signal.signal(getattr(signal, signame), signal_to_exception)
-    try:
-        loop.run_until_complete(
-            listen_for_and_process_new_evm_blocks(
-                logger=config.logger,
-                stats_service=config.stats_service,
-                evm_rpc_client=config.evm_rpc_client,
-                boto3_session=aioboto3.Session(),
-                blockchain=config.blockchain,
-                dynamodb_endpoint_url=config.dynamodb_endpoint_url,
-                dynamodb_timeout=config.dynamodb_timeout,
-                table_prefix=config.table_prefix,
-                trail_blocks=trail_blocks,
-                process_interval=process_interval,
-            )
+    loop.run_until_complete(
+        listen_for_and_process_new_evm_blocks(
+            logger=config.logger,
+            stats_service=config.stats_service,
+            evm_rpc_client=config.evm_rpc_client,
+            boto3_session=aioboto3.Session(),
+            blockchain=config.blockchain,
+            dynamodb_endpoint_url=config.dynamodb_endpoint_url,
+            dynamodb_timeout=config.dynamodb_timeout,
+            table_prefix=config.table_prefix,
+            trail_blocks=trail_blocks,
+            process_interval=process_interval,
         )
-    except SignalRaisedException as e:
-        config.logger.info(f"Process interrupted by signal: {e}")
-    finally:
-        while loop.is_running():
-            time.sleep(0.001)
-        config.logger.info("Process complete")
+    )
+    while loop.is_running():
+        time.sleep(0.001)
+    config.logger.info("Process complete")
 
 
 class SignalRaisedException(Exception):

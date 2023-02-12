@@ -1,9 +1,14 @@
 import asyncio
+import logging
+import signal
 from abc import ABC
 from asyncio import Task
 from datetime import datetime
 from logging import Logger
-from typing import List, Optional, Coroutine
+from types import TracebackType
+from typing import List, Optional, Coroutine, Dict, Callable, Type, ContextManager, Union, Any
+
+import blockcrawler
 
 
 class ConsumerError(Exception):
@@ -97,6 +102,7 @@ class ParallelDataBus(DataBus):
     async def __aenter__(self):
         self.__logger.debug("STARTING TASK WATCHER")
         self.__task_watcher_task = asyncio.get_running_loop().create_task(self.__task_watcher())
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         self.__logger.debug("WAITING FOR CONSUMERS TO COMPLETE")
@@ -150,6 +156,81 @@ class ParallelDataBus(DataBus):
                         )
                     self.__tasks.pop(index)
             await asyncio.sleep(0)
+
+
+class SignalManager(ContextManager):
+    """
+    Context manager to manage signals and allow for graceful shutdown. Instantiating the
+    SignalManager will register its own internal signal handler for all signals in
+    the SIG_NAMES attribute tht are supported by the operating system. Entering the
+    context will register the internal signal handler, exiting the manager will restore
+    the original handler if the internal handler is still registered. The internal
+    handler will alter the state of the manager such that `interrupted` will be True
+    and `interrupting_signal` will return the name of hte interrupting signal.
+
+    Usage:
+
+    with SignalManager() as signal_manager:
+        i: int = 0
+        while not signal_manager.interrupted:
+            i += 1
+            print(i)
+            sleep(1.0)
+        print(signal_manager.interrupting_signal)
+
+    The above code will print an incrementing value every second until a signal occurs.
+     Once the signal occurs, it will exit the while loop and print which signal it was.
+    """
+
+    SIG_NAMES = [
+        "SIGABRT",  # Linux abort signal
+        "SIGBREAK",  # Windows keyboard interrupt (CTRL + BREAK)
+        "SIGHUP",  # Linux terminal hangup
+        "SIGINT",  # *nix keyboard interrupt (CTRL + C)
+        "SIGQUIT",  # Quit
+        "SIGTERM",  # Termination signal
+    ]
+
+    def __init__(self) -> None:
+        self.__logger = logging.getLogger(blockcrawler.LOGGER_NAME)
+        self.__interrupting_signal = None
+        self.__original_handlers: Dict[str, Union[Callable, int, Any]] = dict()
+
+    def __enter__(self) -> "SignalManager":
+        for sig_name in self.SIG_NAMES:
+            if hasattr(signal, sig_name):
+                self.__original_handlers[sig_name] = signal.signal(
+                    getattr(signal, sig_name), self.signal_handler
+                )
+        return self
+
+    def __exit__(
+        self,
+        __exc_type: Optional[Type[BaseException]],
+        __exc_value: Optional[BaseException],
+        __traceback: Optional[TracebackType],
+    ) -> Optional[bool]:
+        for sig_name, original_handler in self.__original_handlers.items():
+            sig = getattr(signal, sig_name)
+            if signal.getsignal(sig) == self.signal_handler:
+                signal.signal(sig, original_handler)
+        return None
+
+    def signal_handler(self, signum, _frame):
+        self.__interrupting_signal = signum
+        self.__logger.info(f"{self.interrupting_signal} signal received.")
+
+    @property
+    def interrupted(self):
+        return self.__interrupting_signal is not None
+
+    @property
+    def interrupting_signal(self):
+        return (
+            None
+            if self.__interrupting_signal is None
+            else signal.Signals(self.__interrupting_signal).name
+        )
 
 
 class DebugConsumer(Consumer):

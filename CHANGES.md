@@ -17,4 +17,13 @@
 
 # Version 0.1.1
 
- - Bug fix for nft load command
+- Bug fix for nft load command
+
+# Version 0.2.0
+
+- Add signal handler for graceful shutdown of nft tail command on interrupt
+
+# Version 0.3.0
+
+- Replace signal handler with Signal Manager to properly handle graceful shutdown of crawl and tail nft commands
+- Refactor tail to always process one block at a time to always allow for clean shutdown

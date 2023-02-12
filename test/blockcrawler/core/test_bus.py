@@ -1,13 +1,16 @@
+import signal
+import unittest
 from dataclasses import dataclass
 from logging import Logger
 from typing import Any
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch, ANY, call
 
 from blockcrawler.core.bus import (
     ParallelDataBus,
     DataPackage,
     Consumer,
+    SignalManager,
 )
 
 
@@ -71,3 +74,52 @@ class ParallelDataBusTestCase(IsolatedAsyncioTestCase):
             "SENDING DATA PACKAGE TO CONSUMER",
             extra=dict(consumer=self.__consumer, data_package=data_package),
         )
+
+
+class SignalManagerTestCase(unittest.TestCase):
+    @patch("blockcrawler.core.bus.signal")
+    def test_entering_context_manager_registers_handler_for_all_signals(self, signal_patch):
+        expected_calls = []
+        for a in ["SIGABRT", "SIGBREAK", "SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"]:
+            expected_calls.append(call(getattr(signal_patch, a), ANY))
+
+        with SignalManager():
+            pass
+
+        signal_patch.signal.assert_has_calls(expected_calls)
+
+    def test_exiting_context_manager_registers_original_handler_for_all_signals(self):
+        original_handlers = []
+        expected_handlers = []
+        signals = ["SIGABRT", "SIGBREAK", "SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"]
+        for sig_name in signals:
+            try:
+                sig = getattr(signal, sig_name)
+                handler = Mock()
+                orig_handler = signal.signal(sig, handler)
+                original_handlers.append((sig, orig_handler))
+                expected_handlers.append((sig, handler))
+            except AttributeError:  # signal not support by OS
+                pass
+
+        with SignalManager():
+            pass
+
+        for sig, handler in expected_handlers:
+            self.assertEqual(handler, signal.getsignal(sig))
+
+        for sig, handler in original_handlers:
+            signal.signal(sig, handler)
+
+    def test_handles_signals_properly(self):
+        try:
+            sig = signal.SIGINT
+        except AttributeError:
+            # SIGINT is not available on Windows but SIGBREAK is
+            sig = signal.SIGBREAK
+
+        with SignalManager() as sm:
+            signal.raise_signal(sig)
+
+            self.assertTrue(sm.interrupted)
+            self.assertEqual(sig.name, sm.interrupting_signal)

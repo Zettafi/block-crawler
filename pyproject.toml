@@ -1,6 +1,6 @@
 [project]
 name = "block-crawler"
-version = "0.2.0"
+version = "0.3.0"
 description = "Crawls blocks from a blockchain node, parses the blocks for data, and populates the NFT database"
 readme = "README.md"
 requires-python = ">=3.8,<3.11"

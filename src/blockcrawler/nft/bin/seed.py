@@ -3,13 +3,14 @@ import asyncio
 import aioboto3
 import click
 
+from blockcrawler.core.click import HexIntParamType
 from blockcrawler.core.types import HexInt
 from blockcrawler.nft.bin import Config
 from blockcrawler.nft.bin.commands import set_last_block_id_for_block_chain
 
 
 @click.command()
-@click.argument("LAST_BLOCK_ID", type=HexInt)
+@click.argument("LAST_BLOCK_ID", type=HexIntParamType())
 @click.pass_obj
 def seed(config: Config, last_block_id: HexInt):
     """

@@ -6,12 +6,14 @@ from typing import Union, Dict, cast, Optional, Iterable
 import aioboto3
 import boto3
 import math
+from boto3.dynamodb.table import TableResource
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from blockcrawler.core.bus import ParallelDataBus
+from blockcrawler.core.bus import ParallelDataBus, SignalManager
 from blockcrawler.core.stats import StatsService
 from blockcrawler.core.types import HexInt
+from blockcrawler.evm.data_packages import EvmBlockIDDataPackage
 from blockcrawler.evm.producers import BlockIDProducer
 from blockcrawler.evm.rpc import EvmRpcClient
 from blockcrawler.evm.services import BlockTimeService, BlockTimeCache
@@ -217,17 +219,21 @@ async def crawl_evm_blocks(
                         starting_block.int_value, ending_block.int_value, block_chunk_size
                     )
                 ]
+            with SignalManager() as signal_manager:
+                for block_chunk_start in blocks:
+                    block_chunk_end = block_chunk_start + block_chunk_size - 1
+                    if block_chunk_end > ending_block:
+                        block_chunk_end = ending_block
 
-            for block_chunk_start in blocks:
-                block_chunk_end = block_chunk_start + block_chunk_size - 1
-                if block_chunk_end > ending_block:
-                    block_chunk_end = ending_block
-
-                block_bound_tracker.low = block_chunk_start
-                block_bound_tracker.high = block_chunk_end
-                block_id_producer = BlockIDProducer(blockchain, block_chunk_start, block_chunk_end)
-                async with data_bus:
-                    await block_id_producer(data_bus)
+                    if signal_manager.interrupted:
+                        break
+                    block_bound_tracker.low = block_chunk_start
+                    block_bound_tracker.high = block_chunk_end
+                    block_id_producer = BlockIDProducer(
+                        blockchain, block_chunk_start, block_chunk_end
+                    )
+                    async with data_bus:
+                        await block_id_producer(data_bus)
 
 
 async def listen_for_and_process_new_evm_blocks(
@@ -265,7 +271,7 @@ async def listen_for_and_process_new_evm_blocks(
                 data_version=data_version,
             )
 
-            last_block_table = await dynamodb.Table(
+            last_block_table: TableResource = await dynamodb.Table(
                 f"{table_prefix}{BlockCrawlerConfig.table_name}"
             )
             last_block_result = await last_block_table.get_item(
@@ -277,56 +283,59 @@ async def listen_for_and_process_new_evm_blocks(
                 )
             except AttributeError:
                 logger.error(
-                    "Unable to determine the last block number processed. "
-                    "Are you starting fresh and forgot to seed?"
+                    f"Unable to retrieve last_block_id for blockchain "
+                    f"{blockchain.value} from {last_block_table.table_name}"
                 )
                 exit(1)
 
-            process_time: float = 0.0
-            caught_up = False
             logger.info(
                 f"Starting tail of {blockchain.value} trailing {trail_blocks} blocks "
                 f"with {process_interval} sec interval"
             )
-            while True:
-                # TODO: Gracefully handle shutdown
-                block_number = await evm_rpc_client.get_block_number()
-                current_block_number = block_number - trail_blocks
-                if last_block_processed < current_block_number:
-                    start_block = last_block_processed + 1
-                    block_ids = current_block_number - start_block + 1
-                    if not caught_up and block_ids > 1:
-                        logger.info(f"Catching up {block_ids.int_value} blocks")
-                    start = time.perf_counter()
-                    block_id_producer = BlockIDProducer(
-                        blockchain, start_block, current_block_number
-                    )
-                    async with data_bus:
-                        await block_id_producer(data_bus)
+            with SignalManager() as signal_manager:
+                block_processing = last_block_processed + 1  # Start processing the next block
+                current_block_number = block_processing  # Set equal to trigger get_block_number
+                total_process_time: float = float(
+                    process_interval
+                )  # Set equal to make initial delay 0
+                while not signal_manager.interrupted:
+                    if block_processing >= current_block_number:
+                        # If we've processed all the blocks we know of, see if new blocks exist
 
-                    end = time.perf_counter()
-                    process_time = end - start
-                    logger.info(
-                        f" - {start_block.int_value}:{current_block_number.int_value}"
-                        f" - {process_time:0.3f}s"
-                        f" - blk:{block_ids.int_value:,}"
-                    )
-                    last_block_processed = current_block_number
+                        # Determine the remaining portion of the interval
+                        sleep_time = process_interval - total_process_time
+                        if sleep_time > 0.0:
+                            # Sleep for the remaining portion of the interval
+                            await asyncio.sleep(sleep_time)
+                        total_process_time = 0.0
+                        block_number = await evm_rpc_client.get_block_number()
+                        current_block_number = block_number - trail_blocks
+                    if last_block_processed < current_block_number:
+                        start: float = time.perf_counter()
+                        async with data_bus:
+                            await data_bus.send(EvmBlockIDDataPackage(blockchain, block_processing))
+                        end: float = time.perf_counter()
+                        process_time: float = end - start
+                        total_process_time += process_time
+                        logger.info(
+                            f"{block_processing.int_value} [{current_block_number.int_value}]"
+                            f" - {process_time:0.3f}s"
+                        )
 
-                    await set_last_block_id_for_block_chain(
-                        boto3_session,
-                        cast(str, blockchain.value),
-                        last_block_processed,
-                        dynamodb_endpoint_url,
-                        table_prefix,
-                    )
-                else:
-                    logger.warning(
-                        f"No blocks to process -- current: {current_block_number.int_value}"
-                        f" -- last processed: {last_block_processed.int_value}"
-                    )
-                caught_up = True
-                await asyncio.sleep(process_interval - process_time)
+                        await set_last_block_id_for_block_chain(
+                            boto3_session,
+                            cast(str, blockchain.value),
+                            block_processing,
+                            dynamodb_endpoint_url,
+                            table_prefix,
+                        )
+                        block_processing += 1
+
+                    else:
+                        logger.warning(
+                            f"No blocks to process -- current: {current_block_number.int_value}"
+                            f" -- last processed: {last_block_processed.int_value}"
+                        )
 
 
 async def set_last_block_id_for_block_chain(

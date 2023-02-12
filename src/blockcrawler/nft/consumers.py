@@ -115,7 +115,7 @@ class NftTokenQuantityUpdatingConsumer(Consumer):
             raise ConsumerError(
                 f"Failed to add {quantity} to quantity for token "
                 f"{token_transfer.token_id.hex_value} in collection "
-                f"{token_transfer.collection_id}as no token with"
+                f"{token_transfer.collection_id} as no token with"
                 f" data version {token_transfer.data_version} exists: {token_transfer}"
                 f" -- Cause {e}"
             )
