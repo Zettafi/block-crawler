@@ -27,3 +27,6 @@
 
 - Replace signal handler with Signal Manager to properly handle graceful shutdown of crawl and tail nft commands
 - Refactor tail to always process one block at a time to always allow for clean shutdown
+
+# Version 0.4.0
+
