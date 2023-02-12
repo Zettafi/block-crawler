@@ -367,7 +367,7 @@ async def load_evm_contracts_by_block(
     stats_service: StatsService,
     block_time_cache: BlockTimeCache,
     evm_rpc_client: EvmRpcClient,
-    boto3_session: boto3.Session,
+    boto3_session: aioboto3.Session,
     blockchain: BlockChain,
     dynamodb_endpoint_url: Optional[str],
     dynamodb_timeout: float,

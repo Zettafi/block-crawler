@@ -962,12 +962,6 @@ async def verify_transfers(
         for task_errors in await asyncio.gather(*tasks):
             errors.extend(task_errors)
 
-        for transfer_item in transfer_items:
-            errors.append(
-                f"tokentransfers item with block_id {transfer_item['block_id']} and "
-                f"transaction_index {transfer_item['transaction_index']} and log_index "
-                f"{transfer_item['log_index']} is not in Transfer Logs from RPC"
-            )
     elif await rpc_service.contract_supports_erc1155():
         while transfer_logs:
             log = transfer_logs.pop(0)
