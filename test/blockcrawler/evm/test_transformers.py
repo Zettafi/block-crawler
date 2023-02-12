@@ -265,7 +265,7 @@ class EvmBlockIdToEvmBlockAndEvmTransactionTransformerTestCase(IsolatedAsyncioTe
             )
 
 
-class EvmTransactionToContractEvmTransactionTransformerTestCaste(IsolatedAsyncioTestCase):
+class EvmTransactionToContractEvmTransactionTransformerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__data_bus = AsyncMock(DataBus)
         self.__rpc_client = AsyncMock(EvmRpcClient)
@@ -292,17 +292,6 @@ class EvmTransactionToContractEvmTransactionTransformerTestCaste(IsolatedAsyncio
 
     async def test_does_not_get_transaction_receipt_when_transaction_to_is_not_null(self):
         self.__transaction.to_ = Address("Me")
-        await self.__transformer.receive(
-            EvmTransactionDataPackage(
-                MagicMock(BlockChain), self.__transaction, MagicMock(EvmBlock)
-            )
-        )
-        self.__rpc_client.get_transaction_receipt.assert_not_called()
-
-    async def test_does_not_get_transaction_receipt_when_push4_erc165_func_hash_not_in_input(self):
-        self.__transaction.input = HexBytes(
-            Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash
-        )
         await self.__transformer.receive(
             EvmTransactionDataPackage(
                 MagicMock(BlockChain), self.__transaction, MagicMock(EvmBlock)

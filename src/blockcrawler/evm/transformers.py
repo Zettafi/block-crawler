@@ -5,7 +5,6 @@ from blockcrawler.core.bus import (
     ConsumerError,
 )
 from blockcrawler.core.entities import BlockChain
-from blockcrawler.evm.services import BlockTimeService
 from blockcrawler.evm.data_packages import (
     EvmBlockDataPackage,
     EvmTransactionHashDataPackage,
@@ -15,7 +14,7 @@ from blockcrawler.evm.data_packages import (
     EvmTransactionDataPackage,
 )
 from blockcrawler.evm.rpc import EvmRpcClient
-from blockcrawler.evm.types import Erc165InterfaceID, Erc165Functions
+from blockcrawler.evm.services import BlockTimeService
 
 
 class BlockIdToEvmBlockTransformer(Transformer):
@@ -116,15 +115,8 @@ class EvmTransactionToContractEvmTransactionReceiptTransformer(Transformer):
         if (
             not isinstance(data_package, EvmTransactionDataPackage)
             or data_package.transaction.to_ is not None
-            # If there is a "to" address, it's not contrat creation
-            or Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash
-            not in data_package.transaction.input
-            # If it's ERC-721 or ERC-1165, it will have the ERC-165 function signature hash stored
-            or not (
-                Erc165InterfaceID.ERC721.bytes in data_package.transaction.input
-                or Erc165InterfaceID.ERC1155.bytes in data_package.transaction.input
-            )
         ):
+            # If not transaction package or has "to" address, it's not contract creation
             return
 
         receipt = await self.__rpc_client.get_transaction_receipt(data_package.transaction.hash)
