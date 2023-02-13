@@ -1,7 +1,7 @@
 import asyncio
 import time
 import unittest
-from logging import INFO, DEBUG
+from logging import DEBUG
 from typing import Optional
 from unittest.mock import patch, AsyncMock, ANY, Mock, call, MagicMock
 
@@ -199,7 +199,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
         self._ws.send_json.side_effect = side_effect
         self.__uuid1.return_value = "uuid"
 
-        with self.assertLogs(LOGGER_NAME) as cm:
+        with self.assertLogs(LOGGER_NAME, DEBUG) as cm:
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 await rpc_client.send("hello")
                 self.assertEqual(
@@ -212,7 +212,11 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                     ]
                 )
             self.assertIn(
-                f"INFO:{LOGGER_NAME}:uuid:Reconnecting to URI and replaying 1 requests.", cm.output
+                f"DEBUG:{LOGGER_NAME}:uuid:Reconnecting to URI and replaying 1 requests.", cm.output
+            )
+            self.assertIn(
+                f"DEBUG:{LOGGER_NAME}:uuid:Web Socket exception received: Exception('Hello')",
+                cm.output,
             )
 
     async def test_handles_connection_reset_from_send_json(self):
@@ -227,7 +231,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                 return await self._ws_feedback_loop(request)
 
         self._ws.send_json.side_effect = side_effect
-        with self.assertLogs(LOGGER_NAME, INFO):
+        with self.assertLogs(LOGGER_NAME, DEBUG):
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 self._ws = new_ws = AsyncMock()
                 new_ws.send_json.side_effect = self._ws_feedback_loop
@@ -252,7 +256,7 @@ class RPCClientTestCase(unittest.IsolatedAsyncioTestCase):
                 return await self._ws_response_json()
 
         self._ws.receive_json.side_effect = side_effect
-        with self.assertLogs(LOGGER_NAME, INFO):
+        with self.assertLogs(LOGGER_NAME, DEBUG):
             async with RpcClient("URI", self._stats_service) as rpc_client:
                 self._ws = self._get_ws_mock()
                 await rpc_client.send("hello")

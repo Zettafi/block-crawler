@@ -5,12 +5,12 @@ import re
 import time
 import uuid
 from asyncio import Future, Task, CancelledError
-from math import floor
 from re import Pattern
 from typing import Dict, List, Optional, Any, Tuple
 
 import aiohttp
 from aiohttp import ClientError
+from math import floor
 
 from blockcrawler import LOGGER_NAME
 from blockcrawler.core.stats import StatsService
@@ -242,7 +242,7 @@ class RpcClient:
                 break
 
         if wse := self.__ws.exception():  # Exception means implicit close due to error
-            self.__log_error(f"Web Socket exception received: {repr(wse)}")
+            self.__log_debug(f"Web Socket exception received: {repr(wse)}")
             asyncio.create_task(self.__reconnect())
             self.__reconnected = True
 
@@ -281,7 +281,7 @@ class RpcClient:
 
         self.__reconnect_future = asyncio.get_running_loop().create_future()
 
-        self.__log_info(
+        self.__log_debug(
             f"Reconnecting to {self.__provider_url} "
             f"and replaying {len(self.__pending)} requests.",
         )
