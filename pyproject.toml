@@ -60,7 +60,11 @@ dev = [
 ]
 
 docs = [
-    "sphinx~=6.1"
+    "sphinx~=6.1",
+]
+
+build = [
+    "build~=0.10",
 ]
 
 [build-system]

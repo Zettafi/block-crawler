@@ -3,6 +3,7 @@
 .mypy_cache
 bin
 build
+dist
 Dockerfile
 .env
 .env.*
