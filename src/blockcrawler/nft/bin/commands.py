@@ -25,7 +25,7 @@ from blockcrawler.evm.transformers import (
     EvmTransactionToContractEvmTransactionReceiptTransformer,
     EvmTransactionReceiptToEvmLogTransformer,
 )
-from blockcrawler.nft.bin import BlockBoundTracker
+from blockcrawler.nft.bin import BlockBoundTracker, get_stat_line
 from blockcrawler.nft.consumers import (
     NftCollectionPersistenceConsumer,
     NftTokenMintPersistenceConsumer,
@@ -120,7 +120,7 @@ async def __evm_block_crawler_data_bus_factory(
     await data_bus.register(NftTokenTransferPersistenceConsumer(data_service))
     tokens_table_resource = await dynamodb.Table(table_prefix + Tokens.table_name)
     await data_bus.register(NftTokenMintPersistenceConsumer(data_service))
-    await data_bus.register(NftTokenQuantityUpdatingConsumer(tokens_table_resource))
+    await data_bus.register(NftTokenQuantityUpdatingConsumer(tokens_table_resource, stats_service))
     await data_bus.register(
         Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(
             data_bus=data_bus,
@@ -134,9 +134,9 @@ async def __evm_block_crawler_data_bus_factory(
             data_version=data_version,
         )
     )
-    await data_bus.register(NftMetadataUriUpdatingConsumer(tokens_table_resource))
+    await data_bus.register(NftMetadataUriUpdatingConsumer(tokens_table_resource, stats_service))
     owners_table_resource = await dynamodb.Table(table_prefix + Owners.table_name)
-    await data_bus.register(CurrentOwnerPersistingConsumer(owners_table_resource))
+    await data_bus.register(CurrentOwnerPersistingConsumer(owners_table_resource, stats_service))
     return data_bus
 
 
@@ -153,6 +153,7 @@ async def get_data_version(
                 ReturnValues="UPDATED_NEW",
             )
         except ClientError as e:
+            # noinspection PyUnresolvedReferences
             if e.response.get("Error", {}).get("Code", None) == "ValidationException":
                 result = await config_table.update_item(
                     Key={"blockchain": blockchain.value},
@@ -299,6 +300,7 @@ async def listen_for_and_process_new_evm_blocks(
                     process_interval
                 )  # Set equal to make initial delay 0
                 while not signal_manager.interrupted:
+                    stats_service.reset()
                     if block_processing >= current_block_number:
                         # If we've processed all the blocks we know of, see if new blocks exist
 
@@ -319,7 +321,7 @@ async def listen_for_and_process_new_evm_blocks(
                         total_process_time += process_time
                         logger.info(
                             f"{block_processing.int_value} [{current_block_number.int_value}]"
-                            f" - {process_time:0.3f}s"
+                            f" - {process_time:0.3f}s - {get_stat_line(stats_service)}"
                         )
 
                         await set_last_block_id_for_block_chain(

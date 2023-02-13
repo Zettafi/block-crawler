@@ -180,3 +180,7 @@ class StatsPrintingConsumer(Consumer, ContextManager):
     @property
     def in_flight(self):
         return self.__in_flight
+
+
+def safe_average(count: int, total: int) -> float:
+    return 0.0 if count == 0 else total / count

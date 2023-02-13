@@ -21,8 +21,16 @@ from blockcrawler.core.data_clients import (
     TooManyRequestsProtocolError,
     ProtocolTimeoutError,
 )
+from blockcrawler.core.stats import StatsService
 from blockcrawler.core.storage_clients import StorageClientContext
-from blockcrawler.nft.data_services import DataVersionTooOldException, DataService
+from blockcrawler.nft.data_services import (
+    DataVersionTooOldException,
+    DataService,
+    STAT_TOKEN_UPDATE_MS,
+    STAT_TOKEN_UPDATE,
+    STAT_TOKEN_OWNER_UPDATE_MS,
+    STAT_TOKEN_OWNER_UPDATE,
+)
 from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
@@ -94,7 +102,8 @@ class NftTokenTransferPersistenceConsumer(Consumer):
 
 
 class NftTokenQuantityUpdatingConsumer(Consumer):
-    def __init__(self, tokens_table: TableResource) -> None:
+    def __init__(self, tokens_table: TableResource, stats_service: StatsService) -> None:
+        self.__stats_service: StatsService = stats_service
         self.__tokens_table = tokens_table
 
     async def receive(self, data_package: DataPackage):
@@ -110,7 +119,9 @@ class NftTokenQuantityUpdatingConsumer(Consumer):
             return
 
         try:
-            await self.__update_quantity(quantity, token_transfer)
+            with self.__stats_service.ms_counter(STAT_TOKEN_UPDATE_MS):
+                await self.__update_quantity(quantity, token_transfer)
+                self.__stats_service.increment(STAT_TOKEN_UPDATE)
         except Exception as e:
             raise ConsumerError(
                 f"Failed to add {quantity} to quantity for token "
@@ -120,6 +131,7 @@ class NftTokenQuantityUpdatingConsumer(Consumer):
                 f" -- Cause {e}"
             )
 
+    # TODO: Move this to data service
     @backoff.on_exception(backoff.expo, ClientError, max_tries=5, backoff_log_level=logging.DEBUG)
     async def __update_quantity(self, quantity, token_transfer):
         await self.__tokens_table.update_item(
@@ -135,15 +147,18 @@ class NftTokenQuantityUpdatingConsumer(Consumer):
 
 
 class NftMetadataUriUpdatingConsumer(Consumer):
-    def __init__(self, tokens_table: TableResource) -> None:
+    def __init__(self, tokens_table: TableResource, stats_service: StatsService) -> None:
         self.__tokens_table = tokens_table
+        self.__stats_service: StatsService = stats_service
 
     async def receive(self, data_package: DataPackage):
         if not isinstance(data_package, TokenMetadataUriUpdatedDataPackage):
             return
+        with self.__stats_service.ms_counter(STAT_TOKEN_UPDATE_MS):
+            await self.__update_metadata_uri(data_package)
+            self.__stats_service.increment(STAT_TOKEN_UPDATE)
 
-        await self.__update_metadata_uri(data_package)
-
+    # TODO: Move this to data service
     @backoff.on_exception(backoff.expo, ClientError, max_tries=5, backoff_log_level=logging.DEBUG)
     async def __update_metadata_uri(self, data_package: TokenMetadataUriUpdatedDataPackage):
         blockchain_collection_id = (
@@ -300,8 +315,9 @@ class NftTokenMetadataPersistingConsumer(Consumer):
 
 
 class CurrentOwnerPersistingConsumer(Consumer):
-    def __init__(self, owners_table: TableResource) -> None:
+    def __init__(self, owners_table: TableResource, stats_service: StatsService) -> None:
         self.__owners_table = owners_table
+        self.__stats_service = stats_service
 
     async def receive(self, data_package: DataPackage):
         if not isinstance(data_package, TokenTransferDataPackage):
@@ -322,6 +338,7 @@ class CurrentOwnerPersistingConsumer(Consumer):
             transfers.append((token_transfer.from_, -token_transfer.quantity.int_value))
 
         for address, quantity in transfers:
+            # TODO: Move this to data service
             table_key = {
                 "blockchain_account": f"{blockchain}::{address}",
                 "collection_id_token_id": f"{token_transfer.collection_id}"
@@ -354,45 +371,55 @@ class CurrentOwnerPersistingConsumer(Consumer):
                     | Attr("data_version").eq(token_transfer.data_version)
                 ),
             }
-            try:
-                await self.__owners_table.update_item(**update_params)
-
+            with self.__stats_service.ms_counter(STAT_TOKEN_OWNER_UPDATE_MS):
                 try:
-                    await self.__owners_table.delete_item(
-                        Key=table_key,
-                        ConditionExpression=(Attr("quantity").eq(0)),
-                    )
-                except self.__owners_table.meta.client.exceptions.ConditionalCheckFailedException:
-                    pass  # Not worried if it wasn't 0.
+                    await self.__owners_table.update_item(**update_params)
 
-            except self.__owners_table.meta.client.exceptions.ConditionalCheckFailedException as e:
-                result = await self.__owners_table.get_item(Key=table_key)
-
-                if (
-                    "Item" not in result
-                    or result["Item"]["data_version"] >= token_transfer.data_version
-                ):
-                    raise ConsumerError(error_template.format(e))
-
-                item: Dict[str, Any] = table_key.copy()
-                item["collection_id"] = str(token_transfer.collection_id)
-                item["token_id"] = token_transfer.token_id.hex_value
-                item["account"] = address
-                item["quantity"] = quantity
-                item["data_version"] = token_transfer.data_version
-                try:
-                    await self.__owners_table.put_item(
-                        Item=item,
-                        ConditionExpression=Attr("data_version").lt(token_transfer.data_version),
-                    )
-                except self.__owners_table.meta.client.exceptions.ConditionalCheckFailedException:
                     try:
-                        await self.__owners_table.update_item(**update_params)
+                        await self.__owners_table.delete_item(
+                            Key=table_key,
+                            ConditionExpression=(Attr("quantity").eq(0)),
+                        )
+                    except (
+                        self.__owners_table.meta.client.exceptions.ConditionalCheckFailedException
+                    ):
+                        pass  # Not worried if it wasn't 0.
+
+                except (
+                    self.__owners_table.meta.client.exceptions.ConditionalCheckFailedException
+                ) as e:
+                    result = await self.__owners_table.get_item(Key=table_key)
+
+                    if (
+                        "Item" not in result
+                        or result["Item"]["data_version"] >= token_transfer.data_version
+                    ):
+                        raise ConsumerError(error_template.format(e))
+
+                    item: Dict[str, Any] = table_key.copy()
+                    item["collection_id"] = str(token_transfer.collection_id)
+                    item["token_id"] = token_transfer.token_id.hex_value
+                    item["account"] = address
+                    item["quantity"] = quantity
+                    item["data_version"] = token_transfer.data_version
+                    try:
+                        await self.__owners_table.put_item(
+                            Item=item,
+                            ConditionExpression=Attr("data_version").lt(
+                                token_transfer.data_version
+                            ),
+                        )
+                    except (
+                        self.__owners_table.meta.client.exceptions.ConditionalCheckFailedException
+                    ):
+                        try:
+                            await self.__owners_table.update_item(**update_params)
+                        except Exception as e:
+                            raise ConsumerError(error_template.format(e))
                     except Exception as e:
                         raise ConsumerError(error_template.format(e))
+                except ConsumerError:
+                    raise
                 except Exception as e:
                     raise ConsumerError(error_template.format(e))
-            except ConsumerError:
-                raise
-            except Exception as e:
-                raise ConsumerError(error_template.format(e))
+            self.__stats_service.increment(STAT_TOKEN_OWNER_UPDATE)

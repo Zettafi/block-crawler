@@ -1,5 +1,4 @@
 import asyncio
-import signal
 import time
 
 import aioboto3
@@ -55,12 +54,3 @@ def tail(
     while loop.is_running():
         time.sleep(0.001)
     config.logger.info("Process complete")
-
-
-class SignalRaisedException(Exception):
-    pass
-
-
-def signal_to_exception(signum: int, _):
-    signame = signal.Signals(signum).name
-    raise SignalRaisedException(signame)

@@ -9,10 +9,9 @@ import math
 
 from blockcrawler import LOGGER_NAME
 from blockcrawler.core.click import HexIntParamType
-from blockcrawler.core.rpc import RpcClient
 from blockcrawler.core.stats import StatsService
 from blockcrawler.core.types import HexInt
-from blockcrawler.nft.bin import BlockBoundTracker, Config
+from blockcrawler.nft.bin import BlockBoundTracker, Config, get_stat_line
 from blockcrawler.nft.bin.commands import crawl_evm_blocks
 
 
@@ -100,63 +99,17 @@ class StatsWriter:
         self.__stats_service = stats_service
         self.__block_bound_tracker = block_bound_tracker
 
-    @staticmethod
-    def __safe_average(count, total):
-        return 0.0 if count == 0 else total / count
-
     def write_line(self):
-        rpc_connect = self.__stats_service.get_count(RpcClient.STAT_CONNECT)
-        rpc_reconnect = self.__stats_service.get_count(RpcClient.STAT_RECONNECT)
-        rpc_connection_reset = self.__stats_service.get_count(RpcClient.STAT_CONNECTION_RESET)
-        rpc_throttled = self.__stats_service.get_count(RpcClient.STAT_RESPONSE_TOO_MANY_REQUESTS)
-        rpc_sent = self.__stats_service.get_count(RpcClient.STAT_REQUEST_SENT)
-        rpc_delayed = self.__stats_service.get_count(RpcClient.STAT_REQUEST_DELAYED)
-        rpc_received = self.__stats_service.get_count(RpcClient.STAT_RESPONSE_RECEIVED)
-        rpc_request_ms = self.__stats_service.get_count(RpcClient.STAT_REQUEST_MS)
-        rpc_request_ms_avg = self.__safe_average(rpc_received, rpc_request_ms)
-        # collection_count = self.__stats_service.get_count(data_services.STAT_COLLECTION_WRITE)
-        # collection_ms = self.__stats_service.get_count(data_services.STAT_COLLECTION_WRITE_MS)
-        # collection_ms_avg = self.__safe_average(collection_count, collection_ms)
-        # token_count = self.__stats_service.get_count(data_services.STAT_TOKEN_WRITE_BATCH)
-        # token_ms = self.__stats_service.get_count(data_services.STAT_TOKEN_WRITE_BATCH_MS)
-        # token_ms_avg = self.__safe_average(token_count, token_ms)
-        # transfer_count = self.__stats_service.get_count(
-        #     data_services.STAT_TOKEN_TRANSFER_WRITE_BATCH
-        # )
-        # transfer_ms = self.__stats_service.get_count(
-        #     data_services.STAT_TOKEN_TRANSFER_WRITE_BATCH_MS
-        # )
-        # transfer_ms_avg = self.__safe_average(transfer_count, transfer_ms)
-        # owner_count = self.__stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH)
-        # owner_ms = self.__stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE_BATCH_MS)
-        # owner_ms_avg = self.__safe_average(owner_count, owner_ms)
-        # write_delayed = self.__stats_service.get_count(data_services.STAT_WRITE_DELAYED)
-        logging.getLogger(LOGGER_NAME).info(
+        get_stat_line(self.__stats_service)
+        log_line = (
             f"Blocks ["
             f"{self.__block_bound_tracker.low.int_value:,}:"
             f"{self.__block_bound_tracker.high.int_value:,}"
             f"]"
             f" -- "
-            f"Conn ["
-            f"C:{rpc_connect:,} "
-            f"X:{rpc_reconnect:,} "
-            f"R:{rpc_connection_reset:,}"
-            f"]"
-            f" RPC ["
-            f"S:{rpc_sent:,} "
-            f"D:{rpc_delayed:,} "
-            f"T:{rpc_throttled:,} "
-            f"R:{rpc_received:,}/{rpc_request_ms_avg:,.0F}"
-            f"]"
-            f" -- "
-            f"Write ["
-            # f"D:{write_delayed:,} "
-            # f"C:{collection_count:,}/{collection_ms_avg :,.0F} "
-            # f"T:{token_count :,}/{token_ms_avg :,.0F} "
-            # f"X:{transfer_count:,}/{transfer_ms_avg :,.0F} "
-            # f"O:{owner_count:,}/{owner_ms_avg :,.0F}"
-            f"]"
+            f"{get_stat_line()}"
         )
+        logging.getLogger(LOGGER_NAME).info(log_line)
 
     async def write_at_interval(self, interval: int):
         try:

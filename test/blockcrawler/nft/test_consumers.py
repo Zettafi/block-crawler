@@ -15,6 +15,7 @@ from blockcrawler.core.data_clients import (
     TooManyRequestsProtocolError,
 )
 from blockcrawler.core.entities import BlockChain
+from blockcrawler.core.stats import StatsService
 from blockcrawler.core.storage_clients import StorageClientContext
 from blockcrawler.nft.data_services import DataVersionTooOldException, DataService
 from blockcrawler.core.types import Address, HexInt
@@ -238,7 +239,10 @@ class NftTokenTransferPersistenceConsumerTestCase(IsolatedAsyncioTestCase):
 class NftTokenQuantityUpdatingConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__table_resource = AsyncMock()
-        self.__consumer = NftTokenQuantityUpdatingConsumer(self.__table_resource)
+        self.__consumer = NftTokenQuantityUpdatingConsumer(
+            self.__table_resource,
+            MagicMock(StatsService),
+        )
         transfer = Mock(TokenTransfer)
         transfer.blockchain = Mock(BlockChain)
         transfer.blockchain.value = "blockchain"
@@ -307,7 +311,10 @@ class NftMetadataUriPersistingConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__table_resource = AsyncMock()
         self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException = Exception
-        self.__consumer = NftMetadataUriUpdatingConsumer(self.__table_resource)
+        self.__consumer = NftMetadataUriUpdatingConsumer(
+            self.__table_resource,
+            MagicMock(StatsService),
+        )
         transfer = Mock(TokenTransfer)
         transfer.blockchain = Mock(BlockChain)
         transfer.blockchain.value = "blockchain"
@@ -547,6 +554,7 @@ class CurrentOwnerPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         )
         self.__consumer = CurrentOwnerPersistingConsumer(
             self.__table_resource,
+            MagicMock(StatsService),
         )
         self.__data_package = MagicMock(TokenTransferDataPackage)
         self.__data_package.token_transfer = MagicMock(TokenTransfer)
