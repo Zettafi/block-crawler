@@ -28,5 +28,12 @@
 - Replace signal handler with Signal Manager to properly handle graceful shutdown of crawl and tail nft commands
 - Refactor tail to always process one block at a time to always allow for clean shutdown
 
-# Version 0.4.0
+# Version 1.0.0
+
+- Update README with quickstart
+- Add build optional deps for build and publish
+- Move websocket exceptions in inbound loop of RPC client logging to DEBUG level
+- Add stats to nft tail command and added update stats for nft crawl command
+- Remove input check for interfaces in nft loader as it prevented loading of proxy contracts
+- Don't display extra transfer items from nft verify command
 

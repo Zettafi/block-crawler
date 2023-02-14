@@ -41,6 +41,7 @@ except ModuleNotFoundError:
     envvar="EVM_RPC_NODES",
     help="RPC Node URI and the number of connections",
     multiple=True,
+    required=True,
     type=click.Tuple([str, int]),
 )
 @click.option(
@@ -59,12 +60,14 @@ except ModuleNotFoundError:
     "--dynamodb-timeout",
     envvar="DYNAMODB_TIMEOUT",
     default=5.0,
+    show_default=True,
     help="Maximum time in seconds to wait for connect or response from DynamoDB",
 )
 @click.option(
     "--dynamodb-table-prefix",
     envvar="AWS_DYNAMO_DB_TABLE_PREFIX",
     help="Prefix for table names",
+    show_default=True,
     default="",
 )
 @click.option(
