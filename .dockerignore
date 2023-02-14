@@ -1,6 +1,7 @@
 .venv
 .tox
 .mypy_cache
+.github
 bin
 build
 dist
