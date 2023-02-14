@@ -38,7 +38,6 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/block-crawler/block-crawler/docs/"
 "Source Code" = "https://github.com/block-crawler/block-crawler"
 "Issue Tracker" = "https://github.com/block-crawler/block-crawler/issues/"
 
