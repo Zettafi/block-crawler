@@ -1,5 +1,7 @@
 # Block Crawler
 
+[https://img.shields.io/github/actions/workflow/status/block-crawler/block-crawler/ci-actions.yaml?branch=main]
+
 Block Crawler is a collection of tools for extracting data from a blockchain and 
 storing that data in a database. While it will eventually service a number of 
 blockchains and databases, it is currently designed to extract NFT data from EVM 
