@@ -11,3 +11,4 @@ __pycache__
 *.csv
 /.tox/
 /dist/
+/docshtml/

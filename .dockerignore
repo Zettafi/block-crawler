@@ -5,6 +5,7 @@
 bin
 build
 dist
+docshtml
 Dockerfile
 .env
 .env.*

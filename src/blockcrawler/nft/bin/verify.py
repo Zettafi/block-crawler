@@ -319,10 +319,9 @@ def verify(
     block_height: HexInt,
 ):
     """
-    Verify a collection in databases against an EVM archive node in a BLOCKCHAIN by
+    Verify a collection in databases against an EVM archive node by
     COLLECTION_ID at a BLOCK_HEIGHT.
 
-    BLOCKCHAIN: The blockchain for which the database records are associated
     COLLECTION_ID: The collection ID of the NFT collection you wish to verify
     BLOCK_HEIGHT: Block height at which you wush tio verify the data.
     """

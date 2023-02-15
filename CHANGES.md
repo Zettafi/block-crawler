@@ -1,3 +1,31 @@
+# Version 1.0.1
+
+- Add block number to error messages to enable replay after the fact in load
+- Fix crawl message line error
+- Added initial documentation
+
+# Version 1.0.0
+
+- Update README with quickstart
+- Add build optional deps for build and publish
+- Move websocket exceptions in inbound loop of RPC client logging to DEBUG level
+- Add stats to nft tail command and added update stats for nft crawl command
+- Remove input check for interfaces in nft loader as it prevented loading of proxy contracts
+- Don't display extra transfer items from nft verify command
+
+# Version 0.3.0
+
+- Replace signal handler with Signal Manager to properly handle graceful shutdown of crawl and tail nft commands
+- Refactor tail to always process one block at a time to always allow for clean shutdown
+
+# Version 0.2.0
+
+- Add signal handler for graceful shutdown of nft tail command on interrupt
+
+# Version 0.1.1
+
+- Bug fix for nft load command
+
 # Version 0.1.0
 
 - Data Bus
@@ -14,26 +42,3 @@
 - EVM Commands
   - function-digest - Get ABI function digest for function definition
   - block-number - Get the current block height of a node
-
-# Version 0.1.1
-
-- Bug fix for nft load command
-
-# Version 0.2.0
-
-- Add signal handler for graceful shutdown of nft tail command on interrupt
-
-# Version 0.3.0
-
-- Replace signal handler with Signal Manager to properly handle graceful shutdown of crawl and tail nft commands
-- Refactor tail to always process one block at a time to always allow for clean shutdown
-
-# Version 1.0.0
-
-- Update README with quickstart
-- Add build optional deps for build and publish
-- Move websocket exceptions in inbound loop of RPC client logging to DEBUG level
-- Add stats to nft tail command and added update stats for nft crawl command
-- Remove input check for interfaces in nft loader as it prevented loading of proxy contracts
-- Don't display extra transfer items from nft verify command
-

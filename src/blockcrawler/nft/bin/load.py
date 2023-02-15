@@ -31,7 +31,7 @@ from blockcrawler.nft.bin.commands import load_evm_contracts_by_block
     default=False,
     show_default=True,
     help="Increment the data version being processed. This ensures data integrity when "
-    "reprocessing the blockchain. Running multiple instances may require the first instance"
+    "reprocessing the blockchain. Running multiple instances may require the first instance "
     "to increase the version. Subsequent instances should not update the data version.",
 )
 @click.option(
@@ -53,7 +53,7 @@ from blockcrawler.nft.bin.commands import load_evm_contracts_by_block
     envvar="BLOCK_TIME_CACHE_FILENAME",
     default=f"{os.getcwd()}{os.sep}block-time-cache.csv",
     type=click.Path(file_okay=True, dir_okay=False, allow_dash=False, path_type=pathlib.Path),
-    help="Location and filename for the block time cache. Defaults location is the directory"
+    help="Location and filename for the block time cache. Defaults location is the directory "
     "from which the command was run.",
 )
 @click.pass_obj
