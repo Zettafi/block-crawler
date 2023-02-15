@@ -100,14 +100,14 @@ class StatsWriter:
         self.__block_bound_tracker = block_bound_tracker
 
     def write_line(self):
-        get_stat_line(self.__stats_service)
+        stat_line = get_stat_line(self.__stats_service)
         log_line = (
             f"Blocks ["
             f"{self.__block_bound_tracker.low.int_value:,}:"
             f"{self.__block_bound_tracker.high.int_value:,}"
             f"]"
             f" -- "
-            f"{get_stat_line()}"
+            f"{stat_line}"
         )
         logging.getLogger(LOGGER_NAME).info(log_line)
 
