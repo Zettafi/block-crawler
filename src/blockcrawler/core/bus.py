@@ -1,3 +1,4 @@
+import abc
 import asyncio
 import logging
 import signal
@@ -15,24 +16,26 @@ class ConsumerError(Exception):
     pass
 
 
-class DataPackage:
+class DataPackage(ABC):
     pass
 
 
-class Consumer:
+class Consumer(ABC):
     """
-    Data bus consumer interface
+    Data bus consumer ABC
     """
 
+    @abc.abstractmethod
     async def receive(self, data_package: DataPackage):
         raise NotImplementedError
 
 
-class DataBus:
+class DataBus(ABC):
     """
-    Data bus interface
+    Data bus abstract base class
     """
 
+    @abc.abstractmethod
     async def send(self, data_package: DataPackage):
         """
         Send data to the data bus. The data will be received from the data bus by
@@ -40,6 +43,7 @@ class DataBus:
         """
         raise NotImplementedError
 
+    @abc.abstractmethod
     async def register(self, consumer: Consumer):
         """
         Register a consumer with the data bus. The data bus will send data to the
@@ -48,6 +52,7 @@ class DataBus:
         """
         raise NotImplementedError
 
+    @abc.abstractmethod
     async def __aenter__(self):
         """
         Asynchronous context manager entrypoint. This should be used to set up any
@@ -55,6 +60,7 @@ class DataBus:
         """
         raise NotImplementedError
 
+    @abc.abstractmethod
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """
         Asynchronous context manager exit point. This should be used to tear down any
@@ -63,12 +69,16 @@ class DataBus:
         raise NotImplementedError
 
 
-class Producer:
+class Producer(ABC):
     """
-    Data bus producer interface
+    Data Producer abstract base class
     """
 
+    @abc.abstractmethod
     async def __call__(self, data_bus: DataBus):
+        """
+        Implementations should place Data Packages on the Data Bus
+        """
         raise NotImplementedError
 
 
@@ -90,7 +100,7 @@ class Transformer(Consumer, ABC):
 
 class ParallelDataBus(DataBus):
     """
-    Data bus which will send the data packages to consumers in parallel.
+    Data Bus implementation which will send the data packages to consumers in parallel.
     """
 
     def __init__(self, logger: Logger) -> None:

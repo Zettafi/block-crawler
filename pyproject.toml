@@ -38,6 +38,9 @@ dependencies = [
 ]
 
 [project.urls]
+Chat = "https://github.com/block-crawler/block-crawler/discussions"
+Documentation = "https://block-crawler.readthedocs.io"
+Changes = "https://github.com/block-crawler/block-crawler/blob/main/CHANGES.md"
 "Source Code" = "https://github.com/block-crawler/block-crawler"
 "Issue Tracker" = "https://github.com/block-crawler/block-crawler/issues/"
 
@@ -68,7 +71,9 @@ dev = [
 ]
 
 docs = [
-    "sphinx~=6.1",
+    "sphinx~=5.3",
+    "pydata-sphinx-theme~=0.12",
+    "sphinx-design~=0.3",
 ]
 
 build = [
