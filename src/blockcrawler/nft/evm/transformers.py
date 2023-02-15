@@ -131,7 +131,8 @@ class EvmTransactionReceiptToNftCollectionTransformer(Transformer):
             )
         except Exception as e:
             raise ConsumerError(
-                f"Unable to create collection from contract {contract_id} " f"due to error -- {e}"
+                f"Unable to create collection from contract {contract_id} created in "
+                f"block {data_package.block.number.hex_value} due to error -- {e}"
             )
 
         await self._get_data_bus().send(CollectionDataPackage(collection))
@@ -407,7 +408,8 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(Transformer):
             raise ConsumerError(
                 f"Unable to retrieve metadata URI for Token ID "
                 f"{data_package.token_transfer.token_id.int_value} in "
-                f"Collection {data_package.token_transfer.collection_id}"
+                f"Collection {data_package.token_transfer.collection_id} "
+                f"created in block {data_package.token_transfer.block_id.hex_value}"
                 f" -- {e}"
             )
 
