@@ -1,3 +1,7 @@
+# Version 1.0.2
+
+- Add better logging for failing to update token metadata URI
+
 # Version 1.0.1
 
 - Add block number to error messages to enable replay after the fact in load

@@ -404,6 +404,14 @@ class NftMetadataUriPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         ):
             await self.__consumer.receive(self.__data_package)
 
+    async def test_raises_consumer_error_when_uri_is_too_large(self):
+        self.__table_resource.meta.client.exceptions.ValidationException = Exception()
+        self.__table_resource.update_item.side_effect = (
+            self.__table_resource.meta.client.exceptions.ValidationException
+        )
+        with self.assertRaises(ConsumerError):
+            await self.__consumer.receive(self.__data_package)
+
 
 @ddt.ddt
 class NftTokenMetadataPersistingConsumerTestCase(IsolatedAsyncioTestCase):
