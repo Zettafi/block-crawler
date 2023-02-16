@@ -142,12 +142,7 @@ class ParallelDataBus(DataBus):
                 await self.__add_task(consumer.receive(data_package))
                 await asyncio.sleep(0)  # Allow task to start before continuing
             except Exception as e:
-                if isinstance(e, ConsumerError):
-                    self.__logger.error(e)
-                else:
-                    self.__logger.exception(
-                        "Error sending data package to consumer", exc_info=False
-                    )
+                self.__logger.exception("Error sending data package to consumer", exc_info=e)
 
     async def register(self, consumer: Consumer):
         self.__consumers.append(consumer)
@@ -161,9 +156,12 @@ class ParallelDataBus(DataBus):
             for index, task in enumerate(self.__tasks):
                 if task.done():
                     if exc_info := task.exception():
-                        self.__logger.exception(
-                            "Error sending data package to consumer", exc_info=exc_info
-                        )
+                        if isinstance(exc_info, ConsumerError):
+                            self.__logger.error(exc_info)
+                        else:
+                            self.__logger.exception(
+                                "Error sending data package to consumer", exc_info=exc_info
+                            )
                     self.__tasks.pop(index)
             await asyncio.sleep(0)
 

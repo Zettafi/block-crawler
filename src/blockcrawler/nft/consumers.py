@@ -132,7 +132,13 @@ class NftTokenQuantityUpdatingConsumer(Consumer):
             )
 
     # TODO: Move this to data service
-    @backoff.on_exception(backoff.expo, ClientError, max_tries=5, backoff_log_level=logging.DEBUG)
+    @backoff.on_exception(
+        backoff.expo,
+        ClientError,
+        max_tries=5,
+        backoff_log_level=logging.DEBUG,
+        giveup_log_level=logging.DEBUG,
+    )
     async def __update_quantity(self, quantity, token_transfer):
         await self.__tokens_table.update_item(
             Key={
@@ -159,7 +165,13 @@ class NftMetadataUriUpdatingConsumer(Consumer):
             self.__stats_service.increment(STAT_TOKEN_UPDATE)
 
     # TODO: Move this to data service
-    @backoff.on_exception(backoff.expo, ClientError, max_tries=5, backoff_log_level=logging.DEBUG)
+    @backoff.on_exception(
+        backoff.expo,
+        ClientError,
+        max_tries=5,
+        backoff_log_level=logging.DEBUG,
+        giveup_log_level=logging.DEBUG,
+    )
     async def __update_metadata_uri(self, data_package: TokenMetadataUriUpdatedDataPackage):
         blockchain_collection_id = (
             f"{data_package.blockchain.value}" f"::{data_package.collection_id}"
@@ -269,6 +281,7 @@ class NftTokenMetadataPersistingConsumer(Consumer):
         value=lambda r: r.retry_after,
         jitter=None,
         backoff_log_level=logging.DEBUG,
+        giveup_log_level=logging.ERROR,
     )
     @backoff.on_exception(
         backoff.expo,
@@ -276,6 +289,7 @@ class NftTokenMetadataPersistingConsumer(Consumer):
         max_value=16,
         jitter=backoff.full_jitter,
         backoff_log_level=logging.DEBUG,
+        giveup_log_level=logging.ERROR,
     )
     def get_metadata(self, data_client, uri):
         return data_client.get(uri)
