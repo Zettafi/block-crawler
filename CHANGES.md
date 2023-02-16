@@ -3,6 +3,8 @@
 - Add block number to error messages to enable replay after the fact in load
 - Fix crawl message line error
 - Added initial documentation
+- Quiet the logs
+- Fix crawl/tail stats - use write instead of write batch stats.
 
 # Version 1.0.0
 
