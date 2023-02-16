@@ -1,6 +1,7 @@
 # Version 1.0.2
 
 - Add better logging for failing to update token metadata URI
+- Add common caveats to nft command docs
 
 # Version 1.0.1
 

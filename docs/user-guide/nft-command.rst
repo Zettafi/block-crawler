@@ -118,6 +118,49 @@ Output lines example:
     2023-02-15 21:18:24,975 Blocks [12,400,001:12,401,000] -- Conn [C:46 X:28 R:0] RPC [S:923,930 D:24,817 T:0 R:923,908/445] -- Write [D:3,228 C:112/153 T:83,748/7 X:252,576/10 O:151,185/9]
     2023-02-15 21:27:45,802 Total Time: 8:29:19.63 -- Blocks 11,900,001 to 12,400,000 at block height 16,378,614
 
+Common Caveats
+--------------
+
+Token Quantity
+++++++++++++++
+
+Database restrictions on the size of a number can prevent a token from being created
+via a mint or updated via a transfer if the resulting quantity exceeds the allowable
+size. As the Block Crawler performs the incrementing and decrementing of the quantity
+per blockchain transaction in an asynchronous manner, it may be necessary for the
+database to store the quantity as a number to allow for atomic operations to increment
+and decrement the value of quantity. The maximum size of the number is database
+dependent. For example, DynamoDB allows for 38 digits of precision which allows the
+quantity value to be very large. However, token from an ERC-1155 contract with a high
+value for "decimals" may exceed maximum size. If this occurs, an error will appear in
+the log for tracking purposes.
+
+Data URIs for Token URI
++++++++++++++++++++++++
+
+Database restrictions on text and/or record size may prevent the storage of token URIs
+when the token URI is a Data URI when it is very large. This tends to be the case
+when the contract attempts to place another data URI for the token "image" attribute
+which includes the base64 encoded value of the image binary. This is not a common
+practice, but it has been identified as a metadata strategy in use by a limited number
+of collections. When this occurs, the token URI will not be set/updated and an error
+will appear in the log for tracking purposes.
+
+Invalid Token URIs
+++++++++++++++++++
+
+A number of collections return data that cannot be parsed properly for token URIs. The
+URIs themselves contain binary data that cannot be decoded as a string per the
+specification. When this occurs, the token URI will not be set/updated and an error
+will appear in the log for tracking purposes.
+
+Collection Description
+++++++++++++++++++++++
+
+Database restrictions on text and/or record size may limit the ability to store the
+entire collection description in the database. When this occurs, the description will
+be truncated to a sane value for the database.
+
 Load
 ----
 
