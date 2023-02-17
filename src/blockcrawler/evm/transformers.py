@@ -5,6 +5,7 @@ from blockcrawler.core.bus import (
     ConsumerError,
 )
 from blockcrawler.core.entities import BlockChain
+from blockcrawler.core.rpc import RpcError
 from blockcrawler.evm.data_packages import (
     EvmBlockDataPackage,
     EvmTransactionHashDataPackage,
@@ -54,6 +55,7 @@ class EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(Tran
             return
 
         try:
+            # TODO: Add retry behavior
             block = await self.__rpc_client.get_block(data_package.block_id, True)
             await self.__block_time_service.set_block_timestamp(
                 data_package.block_id, block.timestamp
@@ -84,7 +86,14 @@ class EvmTransactionHashToEvmTransactionReceiptTransformer(Transformer):
         if not isinstance(data_package, EvmTransactionHashDataPackage):
             return
 
-        transaction_receipt = await self.__rpc_client.get_transaction_receipt(data_package.hash)
+        try:
+            # TODO: Add retry for this
+            transaction_receipt = await self.__rpc_client.get_transaction_receipt(data_package.hash)
+        except RpcError as e:
+            raise ConsumerError(
+                f"Error retrieving transaction receipt for hash {data_package.hash} - {e}"
+            )
+
         receipt_data_package = EvmTransactionReceiptDataPackage(
             self.__blockchain, transaction_receipt, data_package.block
         )
