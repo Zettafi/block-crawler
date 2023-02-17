@@ -1,3 +1,5 @@
+"""Classes and exceptions needed to operate a Data Bus"""
+
 import abc
 import asyncio
 import logging
@@ -13,10 +15,14 @@ import blockcrawler
 
 
 class ConsumerError(Exception):
+    """The default base error class for a data bus."""
+
     pass
 
 
 class DataPackage(ABC):
+    """The base data package for a data bus to send and a consumer to receive."""
+
     pass
 
 
@@ -94,6 +100,8 @@ class Transformer(Consumer, ABC):
     def _get_data_bus(self) -> DataBus:
         """
         Get the data bus instance which will receive transformed data
+
+        :meta public:
         """
         return self.__data_bus
 
@@ -176,18 +184,18 @@ class SignalManager(ContextManager):
     handler will alter the state of the manager such that `interrupted` will be True
     and `interrupting_signal` will return the name of hte interrupting signal.
 
-    Usage:
+    Usage::
 
-    with SignalManager() as signal_manager:
-        i: int = 0
-        while not signal_manager.interrupted:
-            i += 1
-            print(i)
-            sleep(1.0)
-        print(signal_manager.interrupting_signal)
+        with SignalManager() as signal_manager:
+            i: int = 0
+            while not signal_manager.interrupted:
+                i += 1
+                print(i)
+                sleep(1.0)
+            print(signal_manager.interrupting_signal)
 
     The above code will print an incrementing value every second until a signal occurs.
-     Once the signal occurs, it will exit the while loop and print which signal it was.
+    Once the signal occurs, it will exit the while loop and print which signal it was.
     """
 
     SIG_NAMES = [
@@ -242,7 +250,20 @@ class SignalManager(ContextManager):
 
 
 class DebugConsumer(Consumer):
-    def __init__(self, filter_function=lambda _: True) -> None:
+    """
+    Consumer to use for testing your composed crawler. It will print all data received
+    for with the filter function returns True.
+
+    This consumer can help understand which data is being passed around asynchronously
+    on the data bus when standard debugging becomes too cumbersome.
+    """
+
+    def __init__(self, filter_function: Callable[[DataPackage], bool] = lambda _: True) -> None:
+        """
+        :filter_function: Callable to filter which DataPackage items to print. If the result
+            of the filter is not truthy, it will not be printed. The default filter will
+            print all DataPackage items received
+        """
         self.__filter_function = filter_function
 
     async def receive(self, data_package: DataPackage):

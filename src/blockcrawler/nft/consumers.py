@@ -1,6 +1,5 @@
 import logging
-import re
-from typing import Optional, cast, Tuple, List, Dict, Any
+from typing import Tuple, List, Dict, Any
 
 import backoff
 from boto3.dynamodb.conditions import Attr
@@ -8,21 +7,13 @@ from boto3.dynamodb.table import TableResource
 from botocore.exceptions import ClientError
 
 from blockcrawler.core.bus import DataPackage, Consumer, ConsumerError
-from blockcrawler.core.data_clients import (
-    HttpDataClient,
-    IpfsDataClient,
-    ArweaveDataClient,
-    DataUriDataClient,
-    DataClient,
-    UnsupportedProtocolError,
-    DataReader,
-    ResourceNotFoundProtocolError,
-    InvalidRequestProtocolError,
-    TooManyRequestsProtocolError,
-    ProtocolTimeoutError,
-)
 from blockcrawler.core.stats import StatsService
-from blockcrawler.core.storage_clients import StorageClientContext
+from blockcrawler.core.types import Address, HexInt
+from blockcrawler.nft.data_packages import (
+    CollectionDataPackage,
+    TokenTransferDataPackage,
+    TokenMetadataUriUpdatedDataPackage,
+)
 from blockcrawler.nft.data_services import (
     DataVersionTooOldException,
     DataService,
@@ -30,12 +21,6 @@ from blockcrawler.nft.data_services import (
     STAT_TOKEN_UPDATE,
     STAT_TOKEN_OWNER_UPDATE_MS,
     STAT_TOKEN_OWNER_UPDATE,
-)
-from blockcrawler.core.types import Address, HexInt
-from blockcrawler.nft.data_packages import (
-    CollectionDataPackage,
-    TokenTransferDataPackage,
-    TokenMetadataUriUpdatedDataPackage,
 )
 from blockcrawler.nft.entities import TokenTransactionType, Token
 
@@ -226,115 +211,6 @@ class NftMetadataUriUpdatingConsumer(Consumer):
                 f"at data version {data_package.data_version}."
                 f" -- {e}"
             )
-
-
-class NftTokenMetadataPersistingConsumer(Consumer):
-    PROTOCOL_MATCH_REGEX = re.compile("^(?:([^:]+)://|(data):).+$")
-    HTTP_IPFS_MATCH_REGEX = re.compile("^https?://.+/ipfs/(.+)$")
-
-    def __init__(
-        self,
-        http_client: HttpDataClient,
-        ipfs_client: IpfsDataClient,
-        arweave_client: ArweaveDataClient,
-        data_uri_client: DataUriDataClient,
-        storage_client_context: StorageClientContext,
-    ) -> None:
-        self.__http_client = http_client
-        self.__ipfs_client = ipfs_client
-        self.__arweave_client = arweave_client
-        self.__data_uri_client = data_uri_client
-        self.__storage_client_context = storage_client_context
-
-    async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, TokenMetadataUriUpdatedDataPackage):
-            return
-
-        try:
-            uri = self.__sanitize_uri(data_package.metadata_uri)
-            data_client = self.__get_data_client_for_uri(uri)
-
-            async with self.get_metadata(data_client, uri) as (content_type, data_reader):
-                key = (
-                    f"{data_package.blockchain.value}"
-                    f"/{data_package.collection_id}"
-                    f"/{data_package.token_id.hex_value}"
-                    f"/{data_package.metadata_uri_version.hex_value}"
-                )
-                try:
-                    await self.__storage_client_context.store(
-                        key,
-                        cast(DataReader, data_reader),
-                        cast(str, content_type),
-                    )
-                except Exception as e:
-                    raise ConsumerError(
-                        f"Failed to store Token metadata " f"{data_package} -- Cause {e}"
-                    )
-        except (ConsumerError, TooManyRequestsProtocolError):
-            raise
-        except (
-            ResourceNotFoundProtocolError,
-            InvalidRequestProtocolError,
-            UnsupportedProtocolError,
-        ):
-            pass
-        except Exception as e:
-            raise ConsumerError(
-                f"Failed to retrieve metadata for Token URI " f"{data_package} -- Cause {e}"
-            )
-
-    @backoff.on_exception(
-        backoff.runtime,
-        TooManyRequestsProtocolError,
-        value=lambda r: r.retry_after,
-        jitter=None,
-        backoff_log_level=logging.DEBUG,
-        giveup_log_level=logging.ERROR,
-    )
-    @backoff.on_exception(
-        backoff.expo,
-        ProtocolTimeoutError,
-        max_value=16,
-        jitter=backoff.full_jitter,
-        backoff_log_level=logging.DEBUG,
-        giveup_log_level=logging.ERROR,
-    )
-    def get_metadata(self, data_client, uri):
-        return data_client.get(uri)
-
-    def __get_data_client_for_uri(self, uri: str) -> DataClient:
-        proto = self.__get_protocol_from_uri(uri)
-        if proto in ("https", "http"):
-            data_client: DataClient = self.__http_client
-        elif proto == "ipfs":
-            data_client = self.__ipfs_client
-        elif proto == "ar":
-            data_client = self.__arweave_client
-        elif proto == "data":
-            data_client = self.__data_uri_client
-        else:
-            raise UnsupportedProtocolError(f"Protocol for URI {uri} is not supported!")
-        return data_client
-
-    def __get_protocol_from_uri(self, uri: str) -> Optional[str]:
-        match = self.PROTOCOL_MATCH_REGEX.fullmatch(uri)
-        if match and match.group(1):
-            protocol = match.group(1)
-        elif match and match.group(2):
-            protocol = match.group(2)
-        else:
-            protocol = None
-        return protocol
-
-    @classmethod
-    def __sanitize_uri(cls, uri: str):
-        match = cls.HTTP_IPFS_MATCH_REGEX.match(uri)
-        if match:
-            sanitized = "ipfs://" + match.group(1)
-        else:
-            sanitized = uri
-        return sanitized
 
 
 class CurrentOwnerPersistingConsumer(Consumer):

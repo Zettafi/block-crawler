@@ -1,3 +1,5 @@
+"""Remote Procedure Call Client classes and exceptions"""
+
 import asyncio
 import logging
 import random
@@ -22,22 +24,32 @@ TOO_MANY_REQUESTS_ERROR_CODES: Dict[int, Pattern] = {
 
 
 class RpcError(Exception):
+    """Base exception for all RPC client errors"""
+
     pass
 
 
 class RpcTransportError(RpcError):
+    """Exception thrown when the network transport used by the RPC client errors"""
+
     pass
 
 
 class RpcClientError(RpcError):
+    """Exception thrown when something goes awry within the client itself"""
+
     pass
 
 
 class RpcDecodeError(RpcError):
+    """An error occurring when the RPC client cannot decode the response"""
+
     pass
 
 
 class RpcServerError(RpcError):
+    """An error raised when the RPC server returns an error response"""
+
     def __init__(self, rpc_version, request_id, error_code, error_message) -> None:
         super().__init__(f"RPC {rpc_version} - Req {request_id} - {error_code}: {error_message}")
         self.__rpc_version = rpc_version
@@ -47,22 +59,30 @@ class RpcServerError(RpcError):
 
     @property
     def rpc_version(self):
+        """The version of the RPC response"""
         return self.__rpc_version
 
     @property
     def request_id(self):
+        """The request ID for which the error is a result"""
         return self.__request_id
 
     @property
     def error_code(self):
+        """The error code returned by the RPC server"""
         return self.__error_code
 
     @property
     def error_message(self):
+        """The error message returned by the server"""
         return self.__error_message
 
 
-class RpcResponse:
+class _RpcResponse:
+    """
+    The RPC response
+    """
+
     def __init__(self, rpc_version, request_id, result):
         self.__rpc_version = rpc_version
         self.__request_id = request_id
@@ -82,18 +102,47 @@ class RpcResponse:
 
 
 class RpcClient:
+    """
+    High performance RPC Client
+
+    :param provider_url: URI of the websocket capable endpoint of an RPC server
+    :param stats_service: Stats service for recording connection and request metrics
+    :param requests_per_second: The maximum number of requests allowed in a second
+    :param max_concurrent_requests: The maximum number of requests that can be awaiting
+        a response at any given time. The default will equal the
+        `max_concurrent_requests` value.
+
+    """
+
     STAT_CONNECT = "rpc.connect"
+    """Stat name for the number of time the client connected to the provider"""
     STAT_CONNECTION_RESET = "rpc.connection-reset"
+    """Stat name for the number of connection resets received from the provider"""
     STAT_RECONNECT = "rpc.reconnect"
+    """Stat name for the number of times the client reconnected to the provider"""
     STAT_REQUEST_SENT = "rpc.request-sent"
+    """Stat name for the number of requests sent to the provider"""
     STAT_REQUEST_MS = "rpc.request-ms"
+    """Stat name for the total number of milliseconds all request spent round trip"""
     STAT_REQUEST_DELAYED = "rpc-request-delayed"
+    """Stat name for the number of requests that were delayed due to exceeding the
+    requests per second limit or due to a pause caused by receiving a "Too Many Requests"
+    error from the provider."""
     STAT_RESPONSE_RECEIVED = "rpc.response-received"
+    """Stat name for the number of responses received from the provider"""
     STAT_RESPONSE_TOO_MANY_REQUESTS = "rpc.response-too-many-requests"
+    """Stat name for the number of "Too Many Requests" errors that were received from
+    the provider."""
     STAT_RESPONSE_NO_ID = "rpc.response-without-id"
+    """Stat name for the number of responses received that had no request ID"""
     STAT_RESPONSE_UNKNOWN_ID = "rpc.response-unknown-id"
+    """Stat name for the number of responses received that could not be accounted for in
+    the outbound requests."""
     STAT_RESPONSE_UNKNOWN_FORMAT = "rpc.response-unknown-format"
+    """Stat name for the number of responses received that were in an unknown format"""
     STAT_ORPHANED_REQUESTS = "rpc.orphaned-requests"
+    """Stat name for the number of requests that were orphaned by being unable to receive
+    a response from the provider."""
 
     def __init__(
         self,
@@ -102,6 +151,7 @@ class RpcClient:
         requests_per_second: Optional[int] = None,
         max_concurrent_requests: Optional[int] = None,
     ) -> None:
+        """ """
         self._stats_service = stats_service
         self.__inbound_loop_task: Optional[Task] = None
         self.__provider_url: str = provider_url
@@ -361,7 +411,15 @@ class RpcClient:
     def __log(self, level, message, **kwargs):
         self.__logger.log(level, f"{self.__instance}:{message}", **kwargs)
 
-    async def send(self, method, *params) -> Any:
+    async def send(self, method: str, *params: Any) -> Any:
+        """
+        Send the RPC request for the method with the provided params and return the result, The
+        parameters are analogous to the
+        `RPC 2.0 specification <https://www.jsonrpc.org/specification#request_object>`_
+
+        :param method: RPC method
+        :param params: Parameters for the RPC method
+        """
         if not self.__context_manager_running or not self.__ws:
             raise RpcClientError("Requests must be sent using a context manager instance!")
         if (
