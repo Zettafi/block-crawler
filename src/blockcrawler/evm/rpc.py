@@ -1,3 +1,5 @@
+"""EVM specific RPC Clients"""
+
 import logging
 import math
 from typing import Optional, Union, List, Any, AsyncIterable, Literal
@@ -19,6 +21,18 @@ from ..core.rpc import RpcClient, RpcServerError, RpcDecodeError, RpcClientError
 
 
 class EthCall:
+    """
+    Python representation of the properties of an eth_call to execute a function for a
+    smart contract on an Ethereum Virtual Machine (EVM)
+
+    :param from_: Address from which a transaction would originate. This is optional for
+        view function calls.
+    :param to:  Address of the contract whose function you will be calling.
+    :param function: The function class representation of the contract function
+    :param parameters: The list of ordered function parameters to send
+    :param block: The block height at which to execute the function
+    """
+
     def __init__(
         self,
         from_: Optional[str],
@@ -79,22 +93,50 @@ class EthCall:
 
 
 class CallError(Exception):
+    """Exception for issues arising while calling the `call` method"""
+
     pass
 
 
 class EvmRpcClient(RpcClient):
+    """RPC Client for EVM RPC calls"""
+
     STAT_GET_BLOCK_NUMBER = "rpc.eth.block_number"
+    """Stat name for counts of `eth_blockNumber` RPC calls"""
+
     STAT_GET_BLOCK = "rpc.eth.get_block_by_number"
+    """Stat name for counts of `eth_getBlockByNumber` RPC calls"""
+
     STAT_GET_TRANSACTION_RECEIPT = "rpc.eth.get_transaction_receipt"
+    """Stat name for counts of `eth_getTransactionReceipt` RPC calls"""
+
     STAT_CALL = "rpc.eth.call"
+    """Stat name for counts of `eth_call` RPC calls"""
+
     STAT_GET_LOGS = "rpc.eth.get_logs"
+    """Stat name for counts of `eth_getLogs` RPC calls"""
 
     async def get_block_number(self) -> HexInt:
+        """Get the current block height via
+        `eth_blockNumber <https://ethereum.org/en/developers/docs/apis/json-rpc/#eth_blocknumber>`_
+        """
+
         result = await self.send("eth_blockNumber")
         block_number = HexInt(result)
         return block_number
 
     async def get_block(self, block_num: HexInt, full_transactions: bool = False) -> EvmBlock:
+        """Get a block via
+        `eth_getBlockByNumber <https://ethereum.org/en/developers/docs/apis/json-rpc/#eth_getblockbynumber>`_
+
+        :param block_num: The block number for the block you wish to get.
+        :param full_transactions: Return full transactions flag. If True,
+            `transactions` attribute on the returned block will contain EVMTransaction
+            objects and the `transaction_hashes` attribute will contain transaction hashes. If
+            False, the `transaction_hashes` attribute will contain transaction hashes and the
+            `transactions` attribute will be None.
+        """  # noqa: E501
+
         result = await self.send("eth_getBlockByNumber", block_num.hex_value, full_transactions)
         if full_transactions:
             transactions = [
@@ -146,6 +188,12 @@ class EvmRpcClient(RpcClient):
         return block
 
     async def get_transaction_receipt(self, tx_hash: HexBytes) -> EvmTransactionReceipt:
+        """Get a transaction receipt by hash via
+        `eth_getTransactionReceipt <https://ethereum.org/en/developers/docs/apis/json-rpc/#eth_gettransactionreceipt>`_
+
+        :param tx_hash: Transaction hash of transaction you wish to retrieve.
+        """  # noqa: E501
+
         result = await self.send("eth_getTransactionReceipt", tx_hash.hex())
         logs: List[EvmLog] = []
         for log in result["logs"]:
@@ -180,6 +228,23 @@ class EvmRpcClient(RpcClient):
         return receipt
 
     async def call(self, request: EthCall) -> Any:
+        """
+        Call a function on a smart contract via
+        `eth_call <https://ethereum.org/en/developers/docs/apis/json-rpc/#eth_call>`_
+
+        :param request: Object representation of the call
+
+        :returns: Decoded values returned by the smart contract function.
+            If there is no return type for the function, the result will be None.
+            Otherwise, it will be a tuple of response types as functions can return
+            multiple values. For example::
+
+                (result,) = rpc_client.call(request)
+
+        :raises: CallError
+
+        """
+
         if len(request.parameters) == 0:
             encoded_params = ""
         else:
@@ -221,6 +286,39 @@ class EvmRpcClient(RpcClient):
         address: Address,
         starting_block_range_size: Optional[int] = None,
     ) -> AsyncIterable[EvmLog]:
+        """
+        Get logs for the provided topic from one block to another for an address by
+        an optional block size via
+        `eth_getLogs <https://ethereum.org/en/developers/docs/apis/json-rpc/#eth_getlogs>`_.
+
+        This method will react to errors for the endpoint returning an error as the
+        block range or result is too large and iterate for as many calls as is
+        necessary to return all the logs.
+
+        :param topics: List of topics that are ABI encoded. The list is dependent on
+            the log type you wish to search. Explaining how to search logs takes more
+            room than this document could provide.
+        :param from_block: The lowest block from which to search for logs
+        :param to_block: The highest block from which to search for logs
+        :param address: The log address to filter.
+        :param starting_block_range_size: The starting size for the block range to
+            query for the logs. The default size is the entire range. This may be not
+            be optimal if the range will house a large number of logs and the method
+            will have to react. Optimizing this size can reduce time spent on RPC
+            calls that will always error.1
+
+        :returns: An asynchronous iterator to iterate through the logs.
+
+        Here's an example for retrieving all the URI events for a contract::
+
+            async for log in await rpc_client.get_logs(
+                [Erc1155Events.URI.event_signature_hash.hex()],
+                HexInt(0),
+                HexInt(16_734_967),
+                Address("0x19c8a3f0b290a36de59a50b4c70a23f9c045ec74"),
+            ):
+                print(log)
+        """
         if not starting_block_range_size:
             starting_block_range_size = to_block.int_value - from_block.int_value + 1
         current_block = from_block
@@ -272,6 +370,15 @@ class EvmRpcClient(RpcClient):
 
 
 class ConnectionPoolingEvmRpcClient(EvmRpcClient):
+    """
+    Pooled EVM RPC Client. THis client takes a list of EVM RPC clients to use in a
+    round-robin strategy for sending RPC requests. The client is for high-volume
+    applications that would exceed their request-per-second limit with a single
+    connection or even a single provider.
+
+    :param pool: List of RPC clients
+    """
+
     # noinspection PyMissingConstructor
     def __init__(
         self,

@@ -1,9 +1,17 @@
+"""Core types"""
+
 from typing import NewType, Union
 
 Address = NewType("Address", str)
+"""A address type for explicitly identifying an address in usage"""
 
 
 class HexInt:
+    """
+    A representation of an integer than can be easily translated between a hexadecimal
+    string and an integer. It will evaluate in most forms as an integer representation.
+    """
+
     def __init__(self, value: Union[str, int]) -> None:
         if isinstance(value, str):
             self.__hex_str = value
@@ -92,13 +100,23 @@ class HexInt:
 
     @property
     def hex_value(self) -> str:
+        """Get the hexadecimal string representation of the object"""
         return self.__hex_str
 
     @property
     def int_value(self) -> int:
+        """Get the integer representation of the object"""
         if self.__int_value is None:
             self.__int_value = int(self.__hex_str, 16)
         return self.__int_value
 
     def padded_hex(self, length: int):
+        """
+        Get a zero-padded hexadecimal string of the object. for example::
+
+            HexInt(1).padded_hex(4)
+
+        will return the hexadecimal string `0x00001`.
+
+        """
         return "0x" + self.hex_value[2:].zfill(length)

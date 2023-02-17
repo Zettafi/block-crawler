@@ -6,17 +6,8 @@ from boto3.dynamodb.conditions import Attr
 from hexbytes import HexBytes
 
 from blockcrawler.core.bus import DataPackage, ConsumerError
-from blockcrawler.core.data_clients import (
-    HttpDataClient,
-    IpfsDataClient,
-    ArweaveDataClient,
-    DataUriDataClient,
-    InvalidRequestProtocolError,
-    TooManyRequestsProtocolError,
-)
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.stats import StatsService
-from blockcrawler.core.storage_clients import StorageClientContext
 from blockcrawler.nft.data_services import DataVersionTooOldException, DataService
 from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.consumers import (
@@ -25,7 +16,6 @@ from blockcrawler.nft.consumers import (
     NftTokenTransferPersistenceConsumer,
     NftTokenQuantityUpdatingConsumer,
     NftMetadataUriUpdatingConsumer,
-    NftTokenMetadataPersistingConsumer,
     CurrentOwnerPersistingConsumer,
 )
 from blockcrawler.nft.data_packages import (
@@ -411,139 +401,6 @@ class NftMetadataUriPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         )
         with self.assertRaises(ConsumerError):
             await self.__consumer.receive(self.__data_package)
-
-
-@ddt.ddt
-class NftTokenMetadataPersistingConsumerTestCase(IsolatedAsyncioTestCase):
-    URI_TO_MOCK = (
-        ("http://metadata/uri", "http_data_client"),
-        ("https://metadata/uri", "http_data_client"),
-        ("ipfs://metadata/uri", "ipfs_data_client"),
-        ("ar://metadata/uri", "arweave_data_client"),
-        ("data:,metadata", "data_uri_data_client"),
-    )
-
-    def return_client_response(self):
-        return self.__client_response
-
-    async def asyncSetUp(self) -> None:
-        self.__client_response = None, None
-        self.http_data_client = AsyncMock(HttpDataClient)
-        self.http_data_client.get.return_value.__aenter__.side_effect = self.return_client_response
-        self.http_data_client.get.return_value.__aexit__.return_value = None
-        self.ipfs_data_client = AsyncMock(IpfsDataClient)
-        self.ipfs_data_client.get.return_value.__aenter__.side_effect = self.return_client_response
-        self.ipfs_data_client.get.return_value.__aexit__.return_value = None
-        self.arweave_data_client = AsyncMock(ArweaveDataClient)
-        self.arweave_data_client.get.return_value.__aenter__.side_effect = (
-            self.return_client_response
-        )
-        self.arweave_data_client.get.return_value.__aexit__.return_value = None
-        self.data_uri_data_client = AsyncMock(DataUriDataClient)
-        self.data_uri_data_client.get.return_value.__aenter__.side_effect = (
-            self.return_client_response
-        )
-        self.data_uri_data_client.get.return_value.__aexit__.return_value = None
-        self.storage_client_context = AsyncMock(StorageClientContext)
-
-        self.__consumer = NftTokenMetadataPersistingConsumer(
-            http_client=self.http_data_client,
-            ipfs_client=self.ipfs_data_client,
-            arweave_client=self.arweave_data_client,
-            data_uri_client=self.data_uri_data_client,
-            storage_client_context=self.storage_client_context,
-        )
-
-        self.__data_package = Mock(TokenMetadataUriUpdatedDataPackage)
-        self.__data_package.blockchain = Mock(BlockChain)
-        self.__data_package.blockchain.value = "blockchain"
-        self.__data_package.collection_id = Address("Collection ID")
-        self.__data_package.token_id = Mock(HexInt)
-        self.__data_package.token_id.hex_value = "0x0"
-        self.__data_package.metadata_uri = "URI"
-        self.__data_package.metadata_uri_version = Mock(HexInt)
-        self.__data_package.metadata_uri_version.hex_value = "0x0"
-
-    @ddt.data(*URI_TO_MOCK)
-    @ddt.unpack
-    async def test_uses_correct_client_for_uri(self, metadata_uri, mock_attr):
-        self.__data_package.metadata_uri = metadata_uri[:]
-        await self.__consumer.receive(self.__data_package)
-        mock = getattr(self, mock_attr)
-        mock.get.assert_called_once_with(metadata_uri)
-
-    @ddt.data(*URI_TO_MOCK)
-    @ddt.unpack
-    async def test_sends_data_client_response_to_s3(self, metadata_uri, _):
-        self.__data_package.metadata_uri = metadata_uri[:]
-        self.__client_response = (None, "Expected")
-        await self.__consumer.receive(self.__data_package)
-        self.storage_client_context.store.assert_awaited_once_with(
-            ANY,
-            "Expected",
-            ANY,
-        )
-
-    @ddt.data(*URI_TO_MOCK)
-    @ddt.unpack
-    async def test_sends_content_type_to_s3(self, metadata_uri, _):
-        self.__data_package.metadata_uri = metadata_uri[:]
-        self.__client_response = (b"expected content type", None)
-        await self.__consumer.receive(self.__data_package)
-        self.storage_client_context.store.assert_awaited_once_with(
-            ANY,
-            ANY,
-            b"expected content type",
-        )
-
-    @ddt.data(*URI_TO_MOCK)
-    @ddt.unpack
-    async def test_sends_metadata_with_correct_key_s3(self, metadata_uri, _):
-        self.__data_package.metadata_uri = metadata_uri[:]
-        self.__data_package.blockchain.value = "blockchain"
-        self.__data_package.collection_id = Address("0x1")
-        self.__data_package.token_id.hex_value = "0x2"
-        self.__data_package.metadata_uri_version.hex_value = "0x3"
-        expected = "blockchain/0x1/0x2/0x3"
-        await self.__consumer.receive(self.__data_package)
-        self.storage_client_context.store.assert_awaited_once_with(
-            expected,
-            ANY,
-            ANY,
-        )
-
-    @ddt.data("https://ipfs.io/ipfs/hash", "https://ipfs.infura.io/ipfs/hash")
-    async def test_uses_ipfs_for_http_versions_of_ipfs(self, uri):
-        self.__data_package.metadata_uri = uri
-        await self.__consumer.receive(self.__data_package)
-        self.ipfs_data_client.get.assert_called_once_with("ipfs://hash")
-
-    async def test_does_not_error_but_abandons_for_unsupported_protocol(self):
-        self.__data_package.metadata_uri = "Invalid URI"
-        await self.__consumer.receive(self.__data_package)
-        self.ipfs_data_client.assert_not_called()
-        self.arweave_data_client.assert_not_called()
-        self.http_data_client.assert_not_called()
-        self.data_uri_data_client.assert_not_called()
-        self.storage_client_context.store.assert_not_called()
-
-    async def test_does_not_error_but_abandons_for_invalid_request(self):
-        self.__data_package.metadata_uri = "https://x.y.z"
-        self.http_data_client.get.side_effect = InvalidRequestProtocolError()
-        await self.__consumer.receive(self.__data_package)
-        self.http_data_client.get.assert_called_once()
-        self.storage_client_context.store.assert_not_called()
-
-    async def test_retries_after_retry_after_for_too_many_requests(self):
-        self.__data_package.metadata_uri = "https://x.y.z"
-        self.http_data_client.get.side_effect = (TooManyRequestsProtocolError(retry_after=0),)
-        with self.assertRaises(ConsumerError):
-            await self.__consumer.receive(self.__data_package)
-            self.assertEqual(
-                6,
-                self.http_data_client.get.call_count,
-                'Expected 6 calls to "get" because of 5 expected retries',
-            )
 
 
 @ddt.ddt

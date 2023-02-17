@@ -1,3 +1,5 @@
+"""Classes to integrate with teh click library"""
+
 import typing as t
 
 from click import ParamType, Parameter, Context
@@ -7,6 +9,8 @@ from blockcrawler.core.types import Address, HexInt
 
 
 class BlockChainParamType(ParamType):
+    """CLick param type to parse input data and produce BlockChain enums"""
+
     name = "BlockChain"
 
     def convert(
@@ -22,6 +26,8 @@ class BlockChainParamType(ParamType):
 
 
 class HexIntParamType(ParamType):
+    """CLick param type to parse input data and produce HexInt instances"""
+
     name = "HexInt"
 
     def convert(
@@ -40,6 +46,8 @@ class HexIntParamType(ParamType):
 
 
 class AddressParamType(ParamType):
+    """CLick param type to parse input data and produce Address instances"""
+
     name = "Address"
 
     def convert(
