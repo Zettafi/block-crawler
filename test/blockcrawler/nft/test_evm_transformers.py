@@ -1,4 +1,5 @@
-from typing import Dict, Union
+import unittest
+from typing import Dict, Union, Any
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, call, ANY, MagicMock, patch
 
@@ -9,7 +10,8 @@ from hexbytes import HexBytes
 
 from blockcrawler.core.bus import DataBus, DataPackage, ConsumerError
 from blockcrawler.core.entities import BlockChain
-from blockcrawler.core.rpc import RpcServerError
+from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.evm.data_packages import EvmLogDataPackage
 from blockcrawler.evm.data_packages import (
     EvmTransactionReceiptDataPackage,
@@ -27,17 +29,18 @@ from blockcrawler.evm.types import (
     Erc721Events,
     Erc1155Events,
 )
-from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     TokenTransferDataPackage,
     TokenMetadataUriUpdatedDataPackage,
     CollectionDataPackage,
+    ForceLoadCollectionDataPackage,
 )
 from blockcrawler.nft.entities import (
     EthereumCollectionType,
     TokenTransfer,
     TokenTransactionType,
     Collection,
+    CollectionType,
 )
 from blockcrawler.nft.evm.oracles import LogVersionOracle, TokenTransactionTypeOracle
 from blockcrawler.nft.evm.transformers import (
@@ -47,6 +50,7 @@ from blockcrawler.nft.evm.transformers import (
     EvmLogErc1155TransferToNftTokenTransferTransformer,
     EvmLogErc1155UriEventToNftTokenMetadataUriUpdatedTransformer,
     Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer,
+    EvmForceLoadContractTransformer,
 )
 
 
@@ -1243,3 +1247,240 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformerTestCase(Isolate
         )
         self.__rpc_client.call.assert_awaited_once()
         self.__data_bus.send.assert_not_called()
+
+
+@ddt.ddt
+class EvmForceLoadContractTransformerTestCase(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__data_bus = AsyncMock(DataBus)
+        self.__rpc_client = AsyncMock(EvmRpcClient)
+        self.__transformer = EvmForceLoadContractTransformer(self.__data_bus, self.__rpc_client)
+        self.__rpc_client_call_results: Dict[str, Any] = {}
+        self.__rpc_client.call.side_effect = self.__respond_to_call
+        self.__rpc_client.get_transaction_receipt.return_value.logs = []
+
+    def __respond_to_call(self, call_: EthCall):
+        try:
+            result = self.__rpc_client_call_results[call_.function.function_signature_hash]
+            if isinstance(result, dict):
+                result = result[call_.parameters[0]]
+            if isinstance(result, Exception):
+                raise result
+            # noinspection PyRedundantParentheses
+            return (result,)
+        except KeyError:
+            raise RpcServerError(None, None, -1, "No response defined")
+
+    @ddt.data(
+        (
+            True,
+            False,
+            EthereumCollectionType.ERC721,
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+        (
+            True,
+            RpcDecodeError(),
+            EthereumCollectionType.ERC721,
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+        (
+            True,
+            RpcServerError(None, None, None, None),
+            EthereumCollectionType.ERC721,
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+        (
+            False,
+            True,
+            EthereumCollectionType.ERC1155,
+            None,
+            None,
+            None,
+            Address("Owner"),
+        ),
+        (
+            RpcDecodeError(),
+            True,
+            EthereumCollectionType.ERC1155,
+            None,
+            None,
+            None,
+            Address("Owner"),
+        ),
+        (
+            RpcServerError(None, None, None, None),
+            True,
+            EthereumCollectionType.ERC1155,
+            None,
+            None,
+            None,
+            Address("Owner"),
+        ),
+        (
+            False,
+            False,
+            CollectionType("DEFAULT"),
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+        (
+            RpcDecodeError(),
+            False,
+            CollectionType("DEFAULT"),
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+        (
+            False,
+            RpcDecodeError(),
+            CollectionType("DEFAULT"),
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+        (
+            RpcServerError(None, None, None, None),
+            False,
+            CollectionType("DEFAULT"),
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+        (
+            False,
+            RpcServerError(None, None, None, None),
+            CollectionType("DEFAULT"),
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+        (
+            RpcServerError(None, None, None, None),
+            RpcServerError(None, None, None, None),
+            CollectionType("DEFAULT"),
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+        (
+            False,
+            False,
+            CollectionType("DEFAULT"),
+            "Name",
+            "SYMBL",
+            HexInt(1234),
+            Address("Owner"),
+        ),
+    )
+    @ddt.unpack
+    async def test_places_collection_on_bus_with_all_data_when_available(
+        self,
+        is_erc721,
+        is_erc155,
+        expected_specification,
+        expected_name,
+        expected_symbol,
+        expected_total_supply,
+        expected_owner,
+    ):
+        self.__rpc_client_call_results = {
+            Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash: {
+                HexBytes(Erc165InterfaceID.ERC721.value): is_erc721,
+                HexBytes(Erc165InterfaceID.ERC1155.value): is_erc155,
+            },
+            Erc721MetadataFunctions.NAME.function_signature_hash: "Name",
+            Erc721MetadataFunctions.SYMBOL.function_signature_hash: "SYMBL",
+            Erc721EnumerableFunctions.TOTAL_SUPPLY.function_signature_hash: 1234,
+            AdditionalFunctions.OWNER.function_signature_hash: "Owner",
+        }
+
+        blockchain = MagicMock(BlockChain)
+        collection_id = Address("collection id")
+        data_package = ForceLoadCollectionDataPackage(
+            blockchain=blockchain,
+            collection_id=collection_id,
+            transaction_hash=HexBytes(b"hash"),
+            data_version=999,
+            default_collection_type=CollectionType("DEFAULT"),
+        )
+        await self.__transformer.receive(data_package)
+        self.__data_bus.send.assert_awaited_once_with(
+            CollectionDataPackage(
+                collection=Collection(
+                    blockchain=blockchain,
+                    collection_id=collection_id,
+                    creator=self.__rpc_client.get_transaction_receipt.return_value.from_,
+                    block_created=self.__rpc_client.get_transaction_receipt.return_value.block_number,  # noqa: E501
+                    date_created=self.__rpc_client.get_block.return_value.timestamp,
+                    specification=expected_specification,
+                    data_version=999,
+                    owner=expected_owner,
+                    name=expected_name,
+                    symbol=expected_symbol,
+                    total_supply=expected_total_supply,
+                )
+            )
+        )
+
+    async def test_defaults_all_data_when_not_available(self):
+        blockchain = MagicMock(BlockChain)
+        collection_id = Address("collection id")
+        data_package = ForceLoadCollectionDataPackage(
+            blockchain=blockchain,
+            collection_id=collection_id,
+            transaction_hash=HexBytes(b"hash"),
+            data_version=999,
+            default_collection_type=CollectionType("DEFAULT"),
+        )
+        await self.__transformer.receive(data_package)
+        self.__data_bus.send.assert_awaited_once_with(
+            CollectionDataPackage(
+                collection=Collection(
+                    blockchain=ANY,
+                    collection_id=ANY,
+                    creator=ANY,
+                    block_created=ANY,
+                    date_created=ANY,
+                    specification=CollectionType("DEFAULT"),
+                    data_version=ANY,
+                    owner=None,
+                    name=None,
+                    symbol=None,
+                    total_supply=None,
+                )
+            )
+        )
+
+    async def test_gets_the_proper_transaction_receipt_and_block(self):
+        transaction_hash = HexBytes(b"hash")
+        await self.__transformer.receive(
+            ForceLoadCollectionDataPackage(
+                blockchain=BlockChain.ETHEREUM_MAINNET,
+                collection_id=Address("Collection ID"),
+                transaction_hash=transaction_hash,
+                data_version=999,
+                default_collection_type=CollectionType("DEFAULT"),
+            )
+        )
+        self.__rpc_client.get_transaction_receipt.assert_awaited_once_with(transaction_hash)
+        self.__rpc_client.get_block.assert_awaited_once_with(
+            self.__rpc_client.get_transaction_receipt.return_value.block_number
+        )

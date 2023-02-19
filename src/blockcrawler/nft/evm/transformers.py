@@ -13,6 +13,7 @@ from blockcrawler.core.bus import (
 )
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.evm.data_packages import (
     EvmTransactionReceiptDataPackage,
     EvmLogDataPackage,
@@ -26,12 +27,13 @@ from blockcrawler.evm.types import (
     AdditionalFunctions,
     Erc721Events,
     Erc1155Events,
+    Function,
 )
-from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
     TokenTransferDataPackage,
     TokenMetadataUriUpdatedDataPackage,
+    ForceLoadCollectionDataPackage,
 )
 from blockcrawler.nft.entities import (
     EthereumCollectionType,
@@ -391,6 +393,7 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(Transformer):
             return
 
         try:
+            # TODO: Add retry logic for non -32000 error
             (metadata_uri,) = await self.__rpc_client.call(
                 EthCall(
                     from_=None,
@@ -423,3 +426,141 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(Transformer):
         )
 
         await self._get_data_bus().send(uri_update_data_package)
+
+
+class EvmForceLoadContractTransformer(Transformer):
+    def __init__(self, data_bus: DataBus, rpc_client: EvmRpcClient) -> None:
+        super().__init__(data_bus)
+        self.__rpc_client: EvmRpcClient = rpc_client
+
+    async def receive(self, data_package: DataPackage):
+        if not isinstance(data_package, ForceLoadCollectionDataPackage):
+            return
+
+        transaction_receipt = await self.__rpc_client.get_transaction_receipt(
+            data_package.transaction_hash
+        )
+        block = await self.__rpc_client.get_block(transaction_receipt.block_number)
+
+        is_erc721, is_erc1155 = await self._supports_interfaces(data_package.collection_id)
+
+        if is_erc1155:
+            (owner, name, symbol, total_supply) = (
+                await self.__get_owner(data_package.collection_id),
+                None,
+                None,
+                None,
+            )
+        else:
+            owner_coro = self.__get_owner(data_package.collection_id)
+            name_coro = self.__get_name(data_package.collection_id)
+            symbol_coro = self.__get_symbol(data_package.collection_id)
+            total_supply_coro = self.__get_total_supply(data_package.collection_id)
+
+            (owner, name, symbol, total_supply) = await asyncio.gather(
+                owner_coro, name_coro, symbol_coro, total_supply_coro
+            )
+
+        if is_erc721:
+            specification = EthereumCollectionType.ERC721
+        elif is_erc1155:
+            specification = EthereumCollectionType.ERC1155
+        else:
+            specification = data_package.default_collection_type
+
+        collection_data_package = CollectionDataPackage(
+            Collection(
+                blockchain=data_package.blockchain,
+                collection_id=data_package.collection_id,
+                creator=transaction_receipt.from_,
+                block_created=transaction_receipt.block_number,
+                specification=specification,
+                date_created=block.timestamp,
+                data_version=data_package.data_version,
+                owner=owner,
+                name=name,
+                symbol=symbol,
+                total_supply=None if total_supply is None else HexInt(total_supply),
+            )
+        )
+        await self._get_data_bus().send(collection_data_package)
+
+    async def _supports_interfaces(self, collection_id: Address) -> Tuple[bool, bool]:
+        # TODO: use shared code rather than duplicated code
+        supports_erc721_interface_coro = self.__rpc_client.call(
+            EthCall(
+                None,
+                collection_id,
+                Erc165Functions.SUPPORTS_INTERFACE,
+                [Erc165InterfaceID.ERC721.bytes],
+            ),
+        )
+        supports_erc1155_interface_coro = self.__rpc_client.call(
+            EthCall(
+                None,
+                collection_id,
+                Erc165Functions.SUPPORTS_INTERFACE,
+                [Erc165InterfaceID.ERC1155.bytes],
+            ),
+        )
+        supports_erc721_result, supports_erc1155_result = await asyncio.gather(
+            supports_erc721_interface_coro,
+            supports_erc1155_interface_coro,
+            return_exceptions=True,
+        )
+        if isinstance(supports_erc721_result, (RpcServerError, RpcDecodeError)):
+            """
+            RpcServerError occurs when the function is not part the contract.
+            RpcDecodeError occurs when an unexpected response is returned. This
+            can be a result of a hash collision or incorrect implementation. In
+            either case, it's not unexpected as we perform discovery on contracts.
+            """
+            supports_erc721 = False
+        elif isinstance(supports_erc721_result, Exception):
+            raise supports_erc721_result
+        else:
+            (supports_erc721,) = supports_erc721_result
+        if isinstance(supports_erc1155_result, (RpcServerError, RpcDecodeError)):
+            # See erc721 check for details
+            supports_erc1155 = False
+        elif isinstance(supports_erc1155_result, Exception):
+            raise supports_erc1155_result
+        else:
+            (supports_erc1155,) = supports_erc1155_result
+        return supports_erc721, supports_erc1155
+
+    async def __try_to_get_collection_attribute(self, collection_id: Address, function: Function):
+        try:
+            (result,) = await self.__rpc_client.call(
+                EthCall(
+                    None,
+                    collection_id,
+                    function,
+                )
+            )
+        except (RpcServerError, RpcDecodeError):
+            # These errors are likely due to the function not being available
+            # or not what was expected due to signature collision
+            result = None
+
+        return result
+
+    async def __get_owner(self, collection_id: Address):
+        return await self.__try_to_get_collection_attribute(
+            collection_id, AdditionalFunctions.OWNER
+        )
+
+    async def __get_name(self, collection_id: Address):
+        return await self.__try_to_get_collection_attribute(
+            collection_id, Erc721MetadataFunctions.NAME
+        )
+
+    async def __get_symbol(self, collection_id: Address):
+        return await self.__try_to_get_collection_attribute(
+            collection_id, Erc721MetadataFunctions.SYMBOL
+        )
+
+    async def __get_total_supply(self, collection_id: Address):
+        return await self.__try_to_get_collection_attribute(
+            collection_id, Erc721EnumerableFunctions.TOTAL_SUPPLY
+        )

@@ -25,7 +25,7 @@ from blockcrawler.evm.transformers import (
     EvmTransactionToContractEvmTransactionReceiptTransformer,
     EvmTransactionReceiptToEvmLogTransformer,
 )
-from blockcrawler.nft.bin import BlockBoundTracker, get_stat_line
+from blockcrawler.nft.bin import BlockBoundTracker, get_crawl_stat_line
 from blockcrawler.nft.consumers import (
     NftCollectionPersistenceConsumer,
     NftTokenMintPersistenceConsumer,
@@ -320,8 +320,8 @@ async def listen_for_and_process_new_evm_blocks(
                         process_time: float = end - start
                         total_process_time += process_time
                         logger.info(
-                            f"{block_processing.int_value} [{current_block_number.int_value}]"
-                            f" - {process_time:0.3f}s - {get_stat_line(stats_service)}"
+                            f"{block_processing.int_value}/{current_block_number.int_value}"
+                            f" - {process_time:0.3f}s - {get_crawl_stat_line(stats_service)}"
                         )
 
                         await set_last_block_id_for_block_chain(
