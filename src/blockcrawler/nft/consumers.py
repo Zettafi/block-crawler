@@ -202,15 +202,18 @@ class NftMetadataUriUpdatingConsumer(Consumer):
                     f" data version {data_package.data_version} -- Data Package: {data_package}"
                     f" -- Tokens Table Record: {result}"
                 )
-        except self.__tokens_table.meta.client.exceptions.ValidationException as e:
-            raise ConsumerError(
-                f"Unable to update Token URI for token {data_package.token_id.hex_value}"
-                f" with version {data_package.metadata_uri_version.hex_value} in "
-                f"collection {data_package.collection_id} on blockchain "
-                f"{data_package.blockchain.value} with value {data_package.metadata_uri}"
-                f"at data version {data_package.data_version}."
-                f" -- {e}"
-            )
+        except ClientError as e:
+            # noinspection PyUnresolvedReferences
+            if e.response.get("Error", {}).get("Code", None) == "ValidationException":
+                raise ConsumerError(
+                    f"Unable to update Token URI for token {data_package.token_id.hex_value}"
+                    f" with version {data_package.metadata_uri_version.hex_value} in "
+                    f"collection {data_package.collection_id} on blockchain "
+                    f"{data_package.blockchain.value} with value {data_package.metadata_uri}"
+                    f"at data version {data_package.data_version}."
+                    f" -- {e}"
+                )
+            raise
 
 
 class CurrentOwnerPersistingConsumer(Consumer):
