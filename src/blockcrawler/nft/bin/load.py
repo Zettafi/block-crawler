@@ -2,22 +2,42 @@ import asyncio
 import os
 import pathlib
 import time
+from logging import Logger
+from typing import Optional, Dict, Union, Iterable
 
 import aioboto3
 import click
 import math
+from botocore.config import Config as BotoConfig
 
+from blockcrawler.core.bus import ParallelDataBus
 from blockcrawler.core.click import HexIntParamType
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.stats import StatsService, StatsWriter
 from blockcrawler.core.types import HexInt
-from blockcrawler.nft.bin import (
-    BlockBoundTracker,
-    Config,
-    persist_block_time_cache,
-    get_block_time_cache,
-    get_load_stat_line,
+from blockcrawler.evm.producers import BlockIDProducer
+from blockcrawler.evm.rpc import EvmRpcClient
+from blockcrawler.evm.services import BlockTimeCache, BlockTimeService
+from blockcrawler.evm.transformers import (
+    EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer,
+    EvmTransactionToContractEvmTransactionReceiptTransformer,
 )
-from blockcrawler.nft.bin.commands import load_evm_contracts_by_block
+from blockcrawler.nft.bin.shared import (
+    Config,
+    _get_data_version,
+    BlockBoundTracker,
+    _get_block_time_cache,
+    _persist_block_time_cache,
+    _get_load_stat_line,
+)
+from blockcrawler.nft.consumers import NftCollectionPersistenceConsumer
+from blockcrawler.nft.data_services.dynamodb import DynamoDbDataService
+from blockcrawler.nft.evm.consumers import (
+    CollectionToEverythingElseErc721CollectionBasedConsumer,
+    CollectionToEverythingElseErc1155CollectionBasedConsumer,
+)
+from blockcrawler.nft.evm.oracles import TokenTransactionTypeOracle, LogVersionOracle
+from blockcrawler.nft.evm.transformers import EvmTransactionReceiptToNftCollectionTransformer
 
 
 @click.command()
@@ -74,7 +94,7 @@ def load(
     BLOCK_HEIGHT. Multiple runs will require the same data version and BLOCK_HEIGHT to
     ensure accurate data.
     """
-    block_time_cache = get_block_time_cache(block_time_cache_filename, config)
+    block_time_cache = _get_block_time_cache(block_time_cache_filename, config)
     block_bound_tracker = BlockBoundTracker()
     stats_writer = StatsWriter(config.stats_service, LineWriter(block_bound_tracker))
     loop = asyncio.new_event_loop()
@@ -83,7 +103,7 @@ def load(
     stats_task = loop.create_task(stats_writer.write_at_interval(60))
     try:
         loop.run_until_complete(
-            load_evm_contracts_by_block(
+            run_load(
                 blockchain=config.blockchain,
                 starting_block=starting_block,
                 ending_block=ending_block,
@@ -109,7 +129,7 @@ def load(
         while loop.is_running():
             time.sleep(0.001)
 
-        persist_block_time_cache(config, block_time_cache, block_time_cache_filename)
+        _persist_block_time_cache(config, block_time_cache, block_time_cache_filename)
         end = time.perf_counter()
         runtime = end - start
         secs = runtime % 60
@@ -133,4 +153,120 @@ class LineWriter:
         high = (
             self.__block_bound_tracker.high.int_value if self.__block_bound_tracker.high else None
         )
-        return f"Blocks [{low,}:{high:,}] -- {get_load_stat_line(stats_service)}"
+        return f"Blocks [{low,}:{high:,}] -- {_get_load_stat_line(stats_service)}"
+
+
+async def run_load(
+    starting_block: HexInt,
+    ending_block: HexInt,
+    block_height: HexInt,
+    increment_data_version: bool,
+    block_chunk_size: int,
+    logger: Logger,
+    stats_service: StatsService,
+    block_time_cache: BlockTimeCache,
+    evm_rpc_client: EvmRpcClient,
+    boto3_session: aioboto3.Session,
+    blockchain: BlockChain,
+    dynamodb_endpoint_url: Optional[str],
+    dynamodb_timeout: float,
+    table_prefix: str,
+    dynamodb_parallel_batches: int,
+    block_bound_tracker: BlockBoundTracker,
+) -> None:
+    config = BotoConfig(connect_timeout=dynamodb_timeout, read_timeout=dynamodb_timeout)
+    base_resource_kwargs: Dict[str, Union[str, BotoConfig]] = {"config": config}
+
+    token_transaction_type_oracle = TokenTransactionTypeOracle()
+    log_version_oracle = LogVersionOracle()
+
+    dynamodb_resource_kwargs = base_resource_kwargs.copy()
+    if dynamodb_endpoint_url is not None:  # This would only be in non-deployed environments
+        dynamodb_resource_kwargs["endpoint_url"] = dynamodb_endpoint_url
+    async with boto3_session.resource(
+        "dynamodb", **dynamodb_resource_kwargs
+    ) as dynamodb:  # type: ignore
+        data_service = DynamoDbDataService(
+            dynamodb, stats_service, table_prefix, dynamodb_parallel_batches
+        )
+        data_version = await _get_data_version(  # noqa: F841
+            dynamodb, blockchain, increment_data_version, table_prefix
+        )
+
+        async with evm_rpc_client:
+            data_bus = ParallelDataBus(logger)
+            block_time_service = BlockTimeService(block_time_cache, evm_rpc_client)
+
+            await data_bus.register(
+                EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(
+                    data_bus=data_bus,
+                    rpc_client=evm_rpc_client,
+                    block_time_service=block_time_service,
+                ),
+            )
+            await data_bus.register(
+                EvmTransactionToContractEvmTransactionReceiptTransformer(
+                    data_bus=data_bus,
+                    rpc_client=evm_rpc_client,
+                )
+            )
+            await data_bus.register(
+                EvmTransactionReceiptToNftCollectionTransformer(
+                    data_bus=data_bus,
+                    blockchain=blockchain,
+                    rpc_client=evm_rpc_client,
+                    data_version=data_version,
+                )
+            )
+            await data_bus.register(NftCollectionPersistenceConsumer(data_service))
+            # Make sure batches are full as batches are 25 items
+            dynamodb_write_batch_size = dynamodb_parallel_batches * 25
+            # Make sure we don't exceed max hot partition value of 1,000
+            dynamodb_max_concurrent_batches = math.floor(1_000 / dynamodb_write_batch_size)
+            await data_bus.register(
+                CollectionToEverythingElseErc721CollectionBasedConsumer(
+                    data_service=data_service,
+                    rpc_client=evm_rpc_client,
+                    block_time_service=block_time_service,
+                    log_version_oracle=log_version_oracle,
+                    token_transaction_type_oracle=token_transaction_type_oracle,
+                    max_block_height=block_height,
+                    write_batch_size=dynamodb_write_batch_size,
+                    max_concurrent_batch_writes=dynamodb_max_concurrent_batches,
+                )
+            )
+            await data_bus.register(
+                CollectionToEverythingElseErc1155CollectionBasedConsumer(
+                    data_service=data_service,
+                    rpc_client=evm_rpc_client,
+                    block_time_service=block_time_service,
+                    log_version_oracle=log_version_oracle,
+                    token_transaction_type_oracle=token_transaction_type_oracle,
+                    max_block_height=block_height,
+                    write_batch_size=dynamodb_write_batch_size,
+                    max_concurrent_batch_writes=dynamodb_max_concurrent_batches,
+                )
+            )
+
+            if ending_block == starting_block:
+                blocks: Iterable = [starting_block]
+            else:
+                blocks = [
+                    HexInt(block_number)
+                    for block_number in range(
+                        ending_block.int_value, starting_block.int_value, -1 * block_chunk_size
+                    )
+                ]
+
+            for block_chunk_start in blocks:
+                block_chunk_end = block_chunk_start - block_chunk_size + 1
+                if block_chunk_end < starting_block:
+                    block_chunk_end = starting_block
+
+                block_bound_tracker.low = block_chunk_end
+                block_bound_tracker.high = block_chunk_start
+                block_id_producer = BlockIDProducer(
+                    blockchain, block_chunk_start, block_chunk_end, -1
+                )
+                async with data_bus:
+                    await block_id_producer(data_bus)

@@ -33,7 +33,7 @@ from blockcrawler.evm.types import (
     Erc721Events,
     Erc1155Events,
 )
-from blockcrawler.nft.bin import Config
+from blockcrawler.nft.bin.shared import Config
 
 
 try:

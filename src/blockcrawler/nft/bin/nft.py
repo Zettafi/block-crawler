@@ -12,7 +12,7 @@ from blockcrawler.core.click import BlockChainParamType
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.stats import StatsService
 from blockcrawler.evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient
-from blockcrawler.nft.bin import Config
+from blockcrawler.nft.bin.shared import Config
 from blockcrawler.nft.bin.crawl import crawl
 from blockcrawler.nft.bin.force import force_load
 from blockcrawler.nft.bin.load import load
