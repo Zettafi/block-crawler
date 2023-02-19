@@ -14,6 +14,10 @@ class BlockTimeCache(abc.ABC):
     async def get(self, block_id: int) -> Optional[int]:
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def __iter__(self):
+        raise NotImplementedError
+
 
 class MemoryBlockTimeCache(BlockTimeCache):
     def __init__(self) -> None:

@@ -1,10 +1,20 @@
 import unittest
+from unittest.mock import MagicMock
 
-from click import BadParameter
+import ddt
+from click import BadParameter, Parameter
+from hexbytes import HexBytes
 
+from blockcrawler.core.click import (
+    BlockChainParamType,
+    HexIntParamType,
+    AddressParamType,
+    HexBytesParamType,
+    EthereumCollectionTypeParamType,
+)
 from blockcrawler.core.entities import BlockChain
-from blockcrawler.core.click import BlockChainParamType, HexIntParamType, AddressParamType
 from blockcrawler.core.types import Address, HexInt
+from blockcrawler.nft.entities import EthereumCollectionType, CollectionType
 
 
 class BlockChainParamTypeTestCase(unittest.TestCase):
@@ -94,3 +104,53 @@ class AddressParamTypeTestCase(unittest.TestCase):
 
     def test_implements_name(self):
         self.assertIsNotNone(AddressParamType().name)
+
+
+class HexBytesParamTypeTestCase(unittest.TestCase):
+    def test_converts_valid_hex_into_hex_bytes(self):
+        param_type = HexBytesParamType()
+        input_ = "0x0123456789012345678901234567890123456789"
+        expected = HexBytes(input_)
+        actual = param_type(input_[:])
+        self.assertEqual(expected, actual)
+
+    def test_convert_raises_error_with_invalid_hex(self):
+        with self.assertRaises(BadParameter):
+            HexBytesParamType()("0x012345678901234567890123456789012345678g")
+
+    def test_convert_raises_error_with_non_hex(self):
+        with self.assertRaises(BadParameter):
+            HexBytesParamType()("0")
+
+    def test_convert_raises_error_with_nonstr(self):
+        with self.assertRaises(BadParameter):
+            AddressParamType()(b"0x0123456789012345678901234567890123456789")
+
+    def test_implements_name(self):
+        self.assertIsNotNone(AddressParamType().name)
+
+
+@ddt.ddt
+class EthereumCollectionTypeParamTypeTestCase(unittest.TestCase):
+    @ddt.data(EthereumCollectionType.ERC721, EthereumCollectionType.ERC1155)
+    def test_converts_valid_value_into_collection_type(self, value):
+        param_type = EthereumCollectionTypeParamType()
+        input_ = value
+        expected = CollectionType(value)
+        actual = param_type(input_[:])
+        self.assertEqual(expected, actual)
+
+    def test_convert_raises_error_with_invalid_value(self):
+        with self.assertRaises(BadParameter):
+            EthereumCollectionTypeParamType()("NOT VALID")
+
+    def test_allows_default_even_if_not_known(self):
+        param_type = EthereumCollectionTypeParamType()
+        param = MagicMock(Parameter)
+        param.default = "OTHER"
+        expected = CollectionType("OTHER")
+        actual = param_type("OTHER", param=param)
+        self.assertEqual(expected, actual)
+
+    def test_implements_name(self):
+        self.assertIsNotNone(EthereumCollectionTypeParamType().name)

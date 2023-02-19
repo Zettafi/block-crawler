@@ -1,8 +1,13 @@
 """Class for tracking performance statistics"""
+import asyncio
+import logging
 
 import time
+from asyncio import CancelledError
 from contextlib import contextmanager
-from typing import Dict, List
+from typing import Dict, List, Callable
+
+from blockcrawler import LOGGER_NAME
 
 
 class StatsService:
@@ -119,3 +124,23 @@ class StatsService:
 
 def _safe_average(count: int, total: int) -> float:
     return 0.0 if count == 0 else total / count
+
+
+class StatsWriter:
+    def __init__(
+        self, stats_service: StatsService, get_line_function: Callable[[StatsService], str]
+    ) -> None:
+        self.__stats_service = stats_service
+        self.__logger = logging.getLogger(LOGGER_NAME)
+        self.__get_line_function = get_line_function
+
+    def write_line(self):
+        logging.getLogger(LOGGER_NAME).info(self.__get_line_function(self.__stats_service))
+
+    async def write_at_interval(self, interval: int):
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                self.write_line()
+        except CancelledError:
+            pass

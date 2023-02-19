@@ -14,6 +14,7 @@ from blockcrawler.core.stats import StatsService
 from blockcrawler.evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient
 from blockcrawler.nft.bin import Config
 from blockcrawler.nft.bin.crawl import crawl
+from blockcrawler.nft.bin.force import force_load
 from blockcrawler.nft.bin.load import load
 from blockcrawler.nft.bin.seed import seed
 from blockcrawler.nft.bin.tail import tail
@@ -130,6 +131,7 @@ nft.add_command(load)
 nft.add_command(crawl)
 nft.add_command(tail)
 nft.add_command(seed)
+nft.add_command(force_load)
 
 if __name__ == "__main__":
     nft()

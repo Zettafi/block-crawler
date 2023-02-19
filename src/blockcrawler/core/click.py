@@ -3,9 +3,11 @@
 import typing as t
 
 from click import ParamType, Parameter, Context
+from hexbytes import HexBytes
 
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.types import Address, HexInt
+from blockcrawler.nft.entities import EthereumCollectionType, CollectionType
 
 
 class BlockChainParamType(ParamType):
@@ -46,7 +48,7 @@ class HexIntParamType(ParamType):
 
 
 class AddressParamType(ParamType):
-    """CLick param type to parse input data and produce Address instances"""
+    """Click param type to parse input data and produce Address instances"""
 
     name = "Address"
 
@@ -62,3 +64,41 @@ class AddressParamType(ParamType):
                 pass
 
         self.fail(f'Invalid value "{value}"! Must be a hexadecimal string of 20 bytes')
+
+
+class HexBytesParamType(ParamType):
+    """Click param type to parse input data and produce HexBytes instances"""
+
+    name = "HexBytes"
+
+    def convert(
+        self, value: t.Any, param: t.Optional["Parameter"], ctx: t.Optional["Context"]
+    ) -> t.Any:
+        if isinstance(value, str) and value.startswith("0x"):
+            try:
+                return HexBytes(value)
+            except ValueError:
+                pass
+
+        self.fail(f'Invalid value "{value}"! Must be a hexadecimal bytes string')
+
+
+class EthereumCollectionTypeParamType(ParamType):
+    """Click param type to parse input data and produce CollectionType instances"""
+
+    name = "EthereumCollectionType"
+
+    def __init__(self) -> None:
+        self.__valid_types = [
+            getattr(EthereumCollectionType, attr)
+            for attr in dir(EthereumCollectionType)
+            if attr.startswith("ERC")
+        ]
+
+    def convert(
+        self, value: t.Any, param: t.Optional["Parameter"], ctx: t.Optional["Context"]
+    ) -> t.Any:
+        if value in self.__valid_types or (param and value == param.default):
+            return CollectionType(value)
+
+        self.fail(f'Value must be one of: {", ".join(self.__valid_types)}')
