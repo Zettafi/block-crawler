@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 from botocore.exceptions import ClientError
 
 from blockcrawler.core.entities import BlockChain
-from blockcrawler.nft.bin.commands import get_data_version
+from blockcrawler.nft.bin.shared import _get_data_version
 
 
 class GetDataVersionTestCase(unittest.IsolatedAsyncioTestCase):
@@ -12,11 +12,13 @@ class GetDataVersionTestCase(unittest.IsolatedAsyncioTestCase):
         self.__dynamodb = AsyncMock()
 
     async def test_not_increment_gets_data_from_correct_dynamodb_table(self):
-        await get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, False, "prefix-")
+        await _get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, False, "prefix-")
         self.__dynamodb.Table.assert_awaited_once_with("prefix-crawler_config")
 
     async def test_not_increment_data_version_gets_current_data_version_from_db(self):
-        await get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, False, table_prefix="")
+        await _get_data_version(
+            self.__dynamodb, BlockChain.ETHEREUM_MAINNET, False, table_prefix=""
+        )
         self.__dynamodb.Table.return_value.get_item.assert_awaited_once_with(
             Key={"blockchain": BlockChain.ETHEREUM_MAINNET.value},
         )
@@ -26,17 +28,17 @@ class GetDataVersionTestCase(unittest.IsolatedAsyncioTestCase):
         self.__dynamodb.Table.return_value.get_item.return_value = {
             "Item": {"data_version": expected}
         }
-        actual = await get_data_version(
+        actual = await _get_data_version(
             self.__dynamodb, BlockChain.ETHEREUM_MAINNET, False, table_prefix=""
         )
         self.assertEqual(expected, actual)
 
     async def test_increment_gets_data_from_correct_dynamodb_table(self):
-        await get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, True, table_prefix="")
+        await _get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, True, table_prefix="")
         self.__dynamodb.Table.assert_awaited_once_with("crawler_config")
 
     async def test_increment_data_version_creates_incremented_data_version_in_db(self):
-        await get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, True, table_prefix="")
+        await _get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, True, table_prefix="")
         self.__dynamodb.Table.return_value.update_item.assert_awaited_once_with(
             Key={"blockchain": BlockChain.ETHEREUM_MAINNET.value},
             UpdateExpression="SET data_version = data_version + :inc",
@@ -49,7 +51,7 @@ class GetDataVersionTestCase(unittest.IsolatedAsyncioTestCase):
         self.__dynamodb.Table.return_value.update_item.return_value = {
             "Attributes": {"data_version": expected}
         }
-        actual = await get_data_version(
+        actual = await _get_data_version(
             self.__dynamodb, BlockChain.ETHEREUM_MAINNET, True, table_prefix=""
         )
         self.assertEqual(expected, actual)
@@ -59,7 +61,7 @@ class GetDataVersionTestCase(unittest.IsolatedAsyncioTestCase):
             ClientError({"Error": {"Code": "ValidationException"}}, "Operation Name"),
             {"Attributes": {"data_version": 1}},
         ]
-        actual = await get_data_version(
+        actual = await _get_data_version(
             self.__dynamodb, BlockChain.ETHEREUM_MAINNET, True, table_prefix=""
         )
         self.assertEqual(1, actual)
@@ -69,7 +71,7 @@ class GetDataVersionTestCase(unittest.IsolatedAsyncioTestCase):
             ClientError({"Error": {"Code": "ValidationException"}}, "Operation Name"),
             {"Attributes": {"data_version": 1}},
         ]
-        await get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, True, table_prefix="")
+        await _get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, True, table_prefix="")
         self.__dynamodb.Table.return_value.update_item.assert_awaited_with(
             Key={"blockchain": BlockChain.ETHEREUM_MAINNET.value},
             UpdateExpression="SET data_version = :version",

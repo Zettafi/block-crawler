@@ -26,13 +26,13 @@ from blockcrawler.core.stats import StatsService, StatsWriter
 from blockcrawler.core.types import HexInt, Address
 from blockcrawler.evm.rpc import EvmRpcClient
 from blockcrawler.evm.services import BlockTimeCache, BlockTimeService
-from blockcrawler.nft.bin import (
+from blockcrawler.nft.bin.shared import (
     Config,
-    get_block_time_cache,
-    persist_block_time_cache,
-    get_load_stat_line,
+    _get_data_version,
+    _get_block_time_cache,
+    _persist_block_time_cache,
+    _get_load_stat_line,
 )
-from blockcrawler.nft.bin.commands import get_data_version
 from blockcrawler.nft.consumers import NftCollectionPersistenceConsumer
 from blockcrawler.nft.data_packages import ForceLoadCollectionDataPackage
 from blockcrawler.nft.data_services.dynamodb import DynamoDbDataService
@@ -78,7 +78,7 @@ async def load_evm_contract_by_force(
         data_service = DynamoDbDataService(
             dynamodb, stats_service, table_prefix, dynamodb_parallel_batches
         )
-        data_version = await get_data_version(  # noqa: F841
+        data_version = await _get_data_version(  # noqa: F841
             dynamodb, blockchain, False, table_prefix
         )
 
@@ -178,9 +178,9 @@ def force_load(
     to determine the creation data. The collection type will default to COLLECTION_TYPE
     if it cannot be determined.
     """
-    block_time_cache = get_block_time_cache(block_time_cache_filename, config)
+    block_time_cache = _get_block_time_cache(block_time_cache_filename, config)
 
-    stats_writer = StatsWriter(config.stats_service, get_load_stat_line)
+    stats_writer = StatsWriter(config.stats_service, _get_load_stat_line)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     start = time.perf_counter()
@@ -211,7 +211,7 @@ def force_load(
         while loop.is_running():
             time.sleep(0.001)
 
-        persist_block_time_cache(config, block_time_cache, block_time_cache_filename)
+        _persist_block_time_cache(config, block_time_cache, block_time_cache_filename)
         end = time.perf_counter()
         runtime = end - start
         secs = runtime % 60

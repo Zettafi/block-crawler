@@ -5,8 +5,10 @@ import click
 
 from blockcrawler.core.click import HexIntParamType
 from blockcrawler.core.types import HexInt
-from blockcrawler.nft.bin import Config
-from blockcrawler.nft.bin.commands import set_last_block_id_for_block_chain
+from blockcrawler.nft.bin.shared import (
+    Config,
+    _update_latest_block,
+)
 
 
 @click.command()
@@ -20,7 +22,7 @@ def seed(config: Config, last_block_id: HexInt):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(
-        set_last_block_id_for_block_chain(
+        _update_latest_block(
             aioboto3.Session(),
             config.blockchain.value,
             last_block_id,
