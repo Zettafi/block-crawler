@@ -1,14 +1,11 @@
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock, Mock, ANY, MagicMock, call
+from unittest.mock import AsyncMock, Mock, MagicMock, call
 
 import ddt
-from boto3.dynamodb.conditions import Attr
 from hexbytes import HexBytes
 
-from blockcrawler.core.bus import DataPackage, ConsumerError
+from blockcrawler.core.bus import DataPackage
 from blockcrawler.core.entities import BlockChain
-from blockcrawler.core.stats import StatsService
-from blockcrawler.nft.data_services import DataVersionTooOldException, DataService
 from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.consumers import (
     NftCollectionPersistenceConsumer,
@@ -16,13 +13,15 @@ from blockcrawler.nft.consumers import (
     NftTokenTransferPersistenceConsumer,
     NftTokenQuantityUpdatingConsumer,
     NftMetadataUriUpdatingConsumer,
-    CurrentOwnerPersistingConsumer,
+    OwnerPersistingConsumer,
+    NftCurrentOwnerUpdatingConsumer,
 )
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
     TokenTransferDataPackage,
     TokenMetadataUriUpdatedDataPackage,
 )
+from blockcrawler.nft.data_services import DataVersionTooOldException, DataService
 from blockcrawler.nft.entities import (
     Collection,
     CollectionType,
@@ -30,6 +29,7 @@ from blockcrawler.nft.entities import (
     TokenTransactionType,
     EthereumCollectionType,
     Token,
+    TokenOwner,
 )
 
 
@@ -144,31 +144,6 @@ class NftTokenMintPersistenceConsumerTestCase(IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_does_not_react_to_data_version_too_old_when_saving(self):
-        data_package = TokenTransferDataPackage(
-            TokenTransfer(
-                blockchain=BlockChain.ETHEREUM_MAINNET,
-                data_version=999,
-                collection_id=Address("Collection Address"),
-                collection_type=EthereumCollectionType.ERC721,
-                token_id=HexInt(1),
-                timestamp=HexInt(2),
-                from_=Address("From"),
-                to_=Address("To"),
-                quantity=HexInt(3),
-                block_id=HexInt(4),
-                transaction_hash=HexBytes("0xaabbccdd"),
-                transaction_index=HexInt(5),
-                log_index=HexInt(6),
-                transaction_type=TokenTransactionType.MINT,
-                attribute_version=HexInt(7),
-            ),
-        )
-
-        self.__data_service.write_token.side_effect = DataVersionTooOldException
-        await self.__consumer.receive(data_package)
-        self.__data_service.write_token.assert_awaited_once()
-
 
 class NftTokenTransferPersistenceConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -198,52 +173,15 @@ class NftTokenTransferPersistenceConsumerTestCase(IsolatedAsyncioTestCase):
         await self.__consumer.receive(data_package)
         self.__data_service.write_token_transfer.assert_awaited_once_with(token_transfer)
 
-    async def test_does_not_react_to_data_version_too_old_when_saving(self):
-        data_package = TokenTransferDataPackage(
-            TokenTransfer(
-                blockchain=BlockChain.ETHEREUM_MAINNET,
-                data_version=999,
-                collection_type=EthereumCollectionType.ERC721,
-                collection_id=Address("Collection Address"),
-                token_id=HexInt(1),
-                timestamp=HexInt(2),
-                from_=Address("From"),
-                to_=Address("To"),
-                quantity=HexInt(3),
-                block_id=HexInt(4),
-                transaction_hash=HexBytes("0xaabbccdd"),
-                transaction_index=HexInt(5),
-                log_index=HexInt(6),
-                transaction_type=TokenTransactionType.MINT,
-                attribute_version=HexInt(7),
-            ),
-        )
-
-        self.__data_service.write_token_transfer.side_effect = DataVersionTooOldException
-        await self.__consumer.receive(data_package)
-        self.__data_service.write_token_transfer.assert_awaited_once()
-
 
 # noinspection PyDataclass,PyPropertyAccess
 @ddt.ddt
 class NftTokenQuantityUpdatingConsumerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__table_resource = AsyncMock()
+        self.__data_service = AsyncMock(DataService)
         self.__consumer = NftTokenQuantityUpdatingConsumer(
-            self.__table_resource,
-            MagicMock(StatsService),
+            self.__data_service,
         )
-        transfer = Mock(TokenTransfer)
-        transfer.blockchain = Mock(BlockChain)
-        transfer.blockchain.value = "blockchain"
-        transfer.collection_id = "Collection ID"
-        transfer.transaction_type = Mock(TokenTransactionType)
-        transfer.token_id = Mock(HexInt)
-        transfer.quantity = Mock(HexInt)
-        transfer.quantity.int_value = 0
-        transfer.data_version = 0
-
-        self.__data_package = TokenTransferDataPackage(transfer)
 
     async def test_transfer_does_nothing(self):
         transfer = Mock(TokenTransfer)
@@ -252,59 +190,11 @@ class NftTokenQuantityUpdatingConsumerTestCase(IsolatedAsyncioTestCase):
         data_package = TokenTransferDataPackage(transfer)
         await self.__consumer.receive(data_package)
 
-        self.__table_resource.update_item.assert_not_called()
-
-    @ddt.data(TokenTransactionType.MINT, TokenTransactionType.BURN)
-    async def test_mint_and_burn_update_the_correct_token(self, tx_type):
-        self.__data_package.token_transfer.transaction_type = tx_type
-        self.__data_package.token_transfer.blockchain.value = "blockchain"
-        self.__data_package.token_transfer.collection_id = "Collection ID"
-        self.__data_package.token_transfer.token_id.hex_value = "Token ID"
-        await self.__consumer.receive(self.__data_package)
-        self.__table_resource.update_item.assert_called_once_with(
-            Key=dict(
-                blockchain_collection_id="blockchain::Collection ID",
-                token_id="Token ID",
-            ),
-            UpdateExpression=ANY,
-            ExpressionAttributeValues=ANY,
-            ConditionExpression=ANY,
-        )
+        self.assertEqual([], self.__data_service.mock_calls)
 
     @ddt.data((TokenTransactionType.MINT, 12, 12), (TokenTransactionType.BURN, 13, -13))
     @ddt.unpack
-    async def test_modifies_quantity_correctly(self, tx_type, quantity, add_value):
-        self.__data_package.token_transfer.transaction_type = tx_type
-        self.__data_package.token_transfer.quantity.int_value = abs(quantity)
-        await self.__consumer.receive(self.__data_package)
-        self.__table_resource.update_item.assert_called_once_with(
-            Key=ANY,
-            UpdateExpression="ADD quantity :q",
-            ExpressionAttributeValues={":q": add_value},
-            ConditionExpression=ANY,
-        )
-
-    async def test_updates_requires_data_version_is_same(self):
-        self.__data_package.token_transfer.transaction_type = TokenTransactionType.MINT
-        self.__data_package.token_transfer.data_version = 999
-        await self.__consumer.receive(self.__data_package)
-        self.__table_resource.update_item.assert_called_once_with(
-            Key=ANY,
-            UpdateExpression=ANY,
-            ExpressionAttributeValues=ANY,
-            ConditionExpression=Attr("data_version").eq(999),
-        )
-
-
-# noinspection PyDataclass,PyPropertyAccess
-class NftMetadataUriPersistingConsumerTestCase(IsolatedAsyncioTestCase):
-    async def asyncSetUp(self) -> None:
-        self.__table_resource = AsyncMock()
-        self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException = Exception
-        self.__consumer = NftMetadataUriUpdatingConsumer(
-            self.__table_resource,
-            MagicMock(StatsService),
-        )
+    async def test_mint_and_burn_update_the_correct_token(self, tx_type, quantity, add_value):
         transfer = Mock(TokenTransfer)
         transfer.blockchain = Mock(BlockChain)
         transfer.blockchain.value = "blockchain"
@@ -312,19 +202,25 @@ class NftMetadataUriPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         transfer.transaction_type = Mock(TokenTransactionType)
         transfer.token_id = Mock(HexInt)
         transfer.quantity = Mock(HexInt)
-        transfer.quantity.int_value = 0
-        transfer.data_version = 0
+        transfer.quantity.int_value = quantity
+        transfer.data_version = 999
 
-        self.__data_package = Mock(TokenMetadataUriUpdatedDataPackage)
-        self.__data_package.blockchain = Mock(BlockChain)
-        self.__data_package.blockchain.value = "blockchain"
-        self.__data_package.collection_id = Address("Collection ID")
-        self.__data_package.token_id = Mock(HexInt)
-        self.__data_package.token_id.int_value = 0
-        self.__data_package.metadata_uri = "Expected URI"
-        self.__data_package.metadata_uri_version = Mock(HexInt)
-        self.__data_package.metadata_uri_version.hex_value = "0x0"
-        self.__data_package.data_version = 0
+        transfer.transaction_type = tx_type
+        await self.__consumer.receive(TokenTransferDataPackage(transfer))
+        self.__data_service.update_token_quantity.assert_called_once_with(
+            blockchain=transfer.blockchain,
+            collection_id=transfer.collection_id,
+            token_id=transfer.token_id,
+            quantity=add_value,
+            data_version=transfer.data_version,
+        )
+
+
+# noinspection PyDataclass,PyPropertyAccess
+class NftMetadataUriPersistingConsumerTestCase(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__data_service = AsyncMock(DataService)
+        self.__consumer = NftMetadataUriUpdatingConsumer(self.__data_service)
 
     async def test_non_uri_update_does_nothing(self):
         transfer = Mock(TokenTransfer)
@@ -332,95 +228,75 @@ class NftMetadataUriPersistingConsumerTestCase(IsolatedAsyncioTestCase):
 
         data_package = TokenTransferDataPackage(transfer)
         await self.__consumer.receive(data_package)
+        self.assertEqual([], self.__data_service.mock_calls)
 
-        self.__table_resource.update_item.assert_not_called()
-
-    async def test_updates_metadata_uri_correctly(self):
-        self.__data_package.metadata_uri = "Expected"
-        self.__data_package.data_version = 99
-        self.__data_package.metadata_uri_version.hex_value = "0x100"
-        await self.__consumer.receive(self.__data_package)
-        self.__table_resource.update_item.assert_called_once_with(
-            Key=ANY,
-            UpdateExpression="SET metadata_uri = :metadata_uri, "
-            "metadata_uri_version = :metadata_uri_version",
-            ExpressionAttributeValues={
-                ":metadata_uri": "Expected",
-                ":data_version": 99,
-                ":metadata_uri_version": "0x100",
-            },
-            ConditionExpression="data_version = :data_version"
-            " AND (attribute_not_exists(metadata_uri_version)"
-            " OR metadata_uri_version <= :metadata_uri_version)",
+    async def test_updates_metadata_uri(self):
+        data_package = Mock(TokenMetadataUriUpdatedDataPackage)
+        data_package.blockchain = Mock(BlockChain)
+        data_package.blockchain.value = "blockchain"
+        data_package.collection_id = Address("Collection ID")
+        data_package.token_id = Mock(HexInt)
+        data_package.token_id.int_value = 0
+        data_package.metadata_url = "Expected URI"
+        data_package.metadata_url_version = Mock(HexInt)
+        data_package.metadata_url_version.hex_value = "0x0"
+        data_package.data_version = 999
+        await self.__consumer.receive(data_package)
+        self.__data_service.update_token_metadata_url.assert_awaited_once_with(
+            blockchain=data_package.blockchain,
+            collection_id=data_package.collection_id,
+            token_id=data_package.token_id,
+            metadata_url=data_package.metadata_url,
+            metadata_url_version=data_package.metadata_url_version,
+            data_version=data_package.data_version,
         )
 
-    async def test_ignores_error_when_metadata_uri_version_is_older(self):
-        self.__table_resource.update_item.side_effect = (
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException
-        )
-        self.__table_resource.get_item.return_value = dict(
-            Item=dict(
-                data_version=998,
-                metadata_uri_version="0x1",
-            ),
-        )
-        self.__data_package.blockchain.value = "Blockchain"
-        self.__data_package.collection_id = Address("Collection")
-        self.__data_package.token_id.hex_value = "0x2"
-        self.__data_package.data_version = 999
-        self.__data_package.metadata_uri_version.hex_value = "0x0"
-        await self.__consumer.receive(self.__data_package)
-        self.__table_resource.get_item.assert_awaited_once_with(
-            Key=dict(
-                blockchain_collection_id="Blockchain::Collection",
-                token_id="0x2",
-            )
-        )
-        # If there is no Exception raised, success
 
-    async def test_errors_when_data_version_is_not_same_or_lower(self):
-        self.__table_resource.update_item.side_effect = (
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException
-        )
-        self.__table_resource.get_item.return_value = dict(
-            Item=dict(
-                data_version=999,
-                metadata_uri_version="0x0",
-            )
-        )
-        self.__data_package.data_version = 998
-        with self.assertRaises(
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException
-        ):
-            await self.__consumer.receive(self.__data_package)
+class NftCurrentOwnerUpdatingConsumerTestCase(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.__data_service = AsyncMock()
+        self.__consumer = NftCurrentOwnerUpdatingConsumer(self.__data_service)
 
-    async def test_raises_consumer_error_when_uri_is_too_large(self):
-        self.__table_resource.meta.client.exceptions.ValidationException = Exception()
-        self.__table_resource.update_item.side_effect = (
-            self.__table_resource.meta.client.exceptions.ValidationException
+    async def test_stores_correct_data(self):
+        token_transfer = TokenTransfer(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("Collection ID"),
+            collection_type=EthereumCollectionType.ERC721,
+            token_id=HexInt("0x10"),
+            timestamp=HexInt("0x12345"),
+            transaction_type=TokenTransactionType.TRANSFER,
+            from_=Address("From"),
+            to_=Address("To"),
+            quantity=HexInt("0x1"),
+            data_version=11,
+            block_id=HexInt("0x80"),
+            transaction_hash=HexBytes("0x9999"),
+            transaction_index=HexInt("0x9"),
+            log_index=HexInt("0x0"),
+            attribute_version=HexInt("0x99"),
         )
-        with self.assertRaises(ConsumerError):
-            await self.__consumer.receive(self.__data_package)
+        data_package = TokenTransferDataPackage(token_transfer=token_transfer)
+
+        await self.__consumer.receive(data_package)
+        self.__data_service.update_token_current_owner.assert_awaited_once_with(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("Collection ID"),
+            token_id=HexInt("0x10"),
+            owner=Address("To"),
+            owner_version=HexInt("0x99"),
+            data_version=11,
+        )
 
 
 @ddt.ddt
-class CurrentOwnerPersistingConsumerTestCase(IsolatedAsyncioTestCase):
+class OwnerPersistingConsumerTestCase(IsolatedAsyncioTestCase):
     class SpecialException(Exception):
         pass
 
     # noinspection PyDataclass
     async def asyncSetUp(self) -> None:
-        self.__table_resource = AsyncMock()
-        self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException = (
-            self.SpecialException
-        )
-        self.__table_resource.delete_item.side_effect = (
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException
-        )
-        self.__consumer = CurrentOwnerPersistingConsumer(
-            self.__table_resource,
-            MagicMock(StatsService),
-        )
+        self.__data_service = AsyncMock(DataService)
+        self.__consumer = OwnerPersistingConsumer(self.__data_service)
         self.__data_package = MagicMock(TokenTransferDataPackage)
         self.__data_package.token_transfer = MagicMock(TokenTransfer)
         self.__data_package.token_transfer.blockchain = Mock(BlockChain)  #
@@ -435,103 +311,62 @@ class CurrentOwnerPersistingConsumerTestCase(IsolatedAsyncioTestCase):
 
     async def test_ignores_non_token_transfer_data_packages(self):
         await self.__consumer.receive(DataPackage())
-        self.__table_resource.update_item.assert_not_called()
-        self.__table_resource.get_item.assert_not_called()
-        self.__table_resource.delete_item.assert_not_called()
+        self.assertEqual([], self.__data_service.mock_calls)
 
     async def test_adds_quantity_to_to_on_mint(self):
         # noinspection PyDataclass
         self.__data_package.token_transfer.transaction_type = TokenTransactionType.MINT
         await self.__consumer.receive(self.__data_package)
-        self.__table_resource.update_item.assert_awaited_once_with(
-            Key=dict(
-                blockchain_account="blockchain::To",
-                collection_id_token_id="Collection ID::0x01",
-            ),
-            UpdateExpression="SET collection_id = :cid,"
-            "token_id = :tid,"
-            "account = :a,"
-            "data_version = :dv "
-            "ADD quantity :q",
-            ExpressionAttributeValues={
-                ":cid": "Collection ID",
-                ":tid": "0x01",
-                ":a": "To",
-                ":q": 3,
-                ":dv": 11,
-            },
-            ConditionExpression=Attr("data_version").not_exists() | Attr("data_version").eq(11),
+        self.__data_service.update_token_owner.assert_awaited_once_with(
+            TokenOwner(
+                blockchain=self.__data_package.token_transfer.blockchain,
+                account=self.__data_package.token_transfer.to_,
+                collection_id=self.__data_package.token_transfer.collection_id,
+                token_id=self.__data_package.token_transfer.token_id,
+                quantity=self.__data_package.token_transfer.quantity,
+                data_version=self.__data_package.token_transfer.data_version,
+            )
         )
 
     async def test_subtracts_quantity_from_from_on_burn(self):
         # noinspection PyDataclass
         self.__data_package.token_transfer.transaction_type = TokenTransactionType.BURN
         await self.__consumer.receive(self.__data_package)
-        self.__table_resource.update_item.assert_awaited_once_with(
-            Key=dict(
-                blockchain_account="blockchain::From",
-                collection_id_token_id="Collection ID::0x01",
-            ),
-            UpdateExpression="SET collection_id = :cid,"
-            "token_id = :tid,"
-            "account = :a,"
-            "data_version = :dv "
-            "ADD quantity :q",
-            ExpressionAttributeValues={
-                ":cid": "Collection ID",
-                ":tid": "0x01",
-                ":a": "From",
-                ":q": -3,
-                ":dv": 11,
-            },
-            ConditionExpression=Attr("data_version").not_exists() | Attr("data_version").eq(11),
+        self.__data_service.update_token_owner.assert_awaited_once_with(
+            TokenOwner(
+                blockchain=self.__data_package.token_transfer.blockchain,
+                account=self.__data_package.token_transfer.from_,
+                collection_id=self.__data_package.token_transfer.collection_id,
+                token_id=self.__data_package.token_transfer.token_id,
+                quantity=0 - self.__data_package.token_transfer.quantity,
+                data_version=self.__data_package.token_transfer.data_version,
+            )
         )
 
     async def test_adds_quantity_to_to_and_subtracts_quantity_from_from_on_transfer(self):
-        # noinspection PyDataclass
         self.__data_package.token_transfer.transaction_type = TokenTransactionType.TRANSFER
         await self.__consumer.receive(self.__data_package)
-        self.__table_resource.update_item.assert_has_awaits(
+        self.__data_service.update_token_owner.assert_has_calls(
             [
                 call(
-                    Key=dict(
-                        blockchain_account="blockchain::To",
-                        collection_id_token_id="Collection ID::0x01",
-                    ),
-                    UpdateExpression="SET collection_id = :cid,"
-                    "token_id = :tid,"
-                    "account = :a,"
-                    "data_version = :dv "
-                    "ADD quantity :q",
-                    ExpressionAttributeValues={
-                        ":cid": "Collection ID",
-                        ":tid": "0x01",
-                        ":a": "To",
-                        ":q": 3,
-                        ":dv": 11,
-                    },
-                    ConditionExpression=Attr("data_version").not_exists()
-                    | Attr("data_version").eq(11),
+                    TokenOwner(
+                        blockchain=self.__data_package.token_transfer.blockchain,
+                        account=self.__data_package.token_transfer.to_,
+                        collection_id=self.__data_package.token_transfer.collection_id,
+                        token_id=self.__data_package.token_transfer.token_id,
+                        quantity=self.__data_package.token_transfer.quantity,
+                        data_version=self.__data_package.token_transfer.data_version,
+                    )
                 ),
                 call(
-                    Key=dict(
-                        blockchain_account="blockchain::From",
-                        collection_id_token_id="Collection ID::0x01",
-                    ),
-                    UpdateExpression="SET collection_id = :cid,"
-                    "token_id = :tid,"
-                    "account = :a,"
-                    "data_version = :dv "
-                    "ADD quantity :q",
-                    ExpressionAttributeValues={
-                        ":cid": "Collection ID",
-                        ":tid": "0x01",
-                        ":a": "From",
-                        ":q": -3,
-                        ":dv": 11,
-                    },
-                    ConditionExpression=Attr("data_version").not_exists()
-                    | Attr("data_version").eq(11),
+                    TokenOwner(
+                        blockchain=self.__data_package.token_transfer.blockchain,
+                        account=self.__data_package.token_transfer.from_,
+                        collection_id=self.__data_package.token_transfer.collection_id,
+                        token_id=self.__data_package.token_transfer.token_id,
+                        quantity=0 - self.__data_package.token_transfer.quantity,
+                        data_version=self.__data_package.token_transfer.data_version,
+                    )
                 ),
             ],
             any_order=True,
@@ -541,157 +376,42 @@ class CurrentOwnerPersistingConsumerTestCase(IsolatedAsyncioTestCase):
         # noinspection PyDataclass
         self.__data_package.token_transfer.transaction_type = TokenTransactionType.BURN
         await self.__consumer.receive(self.__data_package)
-        self.__table_resource.delete_item.assert_awaited_once_with(
-            Key=dict(
-                blockchain_account="blockchain::From",
-                collection_id_token_id="Collection ID::0x01",
-            ),
-            ConditionExpression=Attr("quantity").eq(0),
+        self.__data_service.delete_token_owner_with_zero_tokens.assert_awaited_once_with(
+            blockchain=self.__data_package.token_transfer.blockchain,
+            collection_id=self.__data_package.token_transfer.collection_id,
+            token_id=self.__data_package.token_transfer.token_id,
+            account=self.__data_package.token_transfer.from_,
         )
 
     async def test_sends_delete_for_zero_quantity_on_to_after_mint(self):
         # noinspection PyDataclass
         self.__data_package.token_transfer.transaction_type = TokenTransactionType.MINT
         await self.__consumer.receive(self.__data_package)
-        self.__table_resource.delete_item.assert_awaited_once_with(
-            Key=dict(
-                blockchain_account="blockchain::To",
-                collection_id_token_id="Collection ID::0x01",
-            ),
-            ConditionExpression=Attr("quantity").eq(0),
+        self.__data_service.delete_token_owner_with_zero_tokens.assert_awaited_once_with(
+            blockchain=self.__data_package.token_transfer.blockchain,
+            collection_id=self.__data_package.token_transfer.collection_id,
+            token_id=self.__data_package.token_transfer.token_id,
+            account=self.__data_package.token_transfer.to_,
         )
 
     async def test_sends_delete_for_zero_quantity_on_from_and_to_after_transfer(self):
         # noinspection PyDataclass
         self.__data_package.token_transfer.transaction_type = TokenTransactionType.TRANSFER
         await self.__consumer.receive(self.__data_package)
-        self.__table_resource.delete_item.assert_has_awaits(
+        self.__data_service.delete_token_owner_with_zero_tokens.assert_has_awaits(
             [
                 call(
-                    Key=dict(
-                        blockchain_account="blockchain::From",
-                        collection_id_token_id="Collection ID::0x01",
-                    ),
-                    ConditionExpression=Attr("quantity").eq(0),
+                    blockchain=self.__data_package.token_transfer.blockchain,
+                    collection_id=self.__data_package.token_transfer.collection_id,
+                    token_id=self.__data_package.token_transfer.token_id,
+                    account=self.__data_package.token_transfer.from_,
                 ),
                 call(
-                    Key=dict(
-                        blockchain_account="blockchain::To",
-                        collection_id_token_id="Collection ID::0x01",
-                    ),
-                    ConditionExpression=Attr("quantity").eq(0),
+                    blockchain=self.__data_package.token_transfer.blockchain,
+                    collection_id=self.__data_package.token_transfer.collection_id,
+                    token_id=self.__data_package.token_transfer.token_id,
+                    account=self.__data_package.token_transfer.to_,
                 ),
             ],
             any_order=True,
-        )
-
-    async def test_resets_counter_when_data_version_is_newer(self):
-        # noinspection PyDataclass
-        self.__data_package.token_transfer.transaction_type = TokenTransactionType.MINT
-        self.__table_resource.update_item.side_effect = [
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException,
-            None,
-        ]
-        self.__table_resource.get_item.return_value = dict(
-            Item=dict(
-                data_version=10,
-            ),
-        )
-        await self.__consumer.receive(self.__data_package)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item=dict(
-                blockchain_account="blockchain::To",
-                collection_id_token_id="Collection ID::0x01",
-                collection_id="Collection ID",
-                token_id="0x01",
-                account="To",
-                quantity=3,
-                data_version=11,
-            ),
-            ConditionExpression=Attr("data_version").lt(11),
-        )
-
-    async def test_tries_to_increment_again_after_reset_counter_fails_when_data_version_was_newer(
-        self,
-    ):
-        # noinspection PyDataclass
-        self.__data_package.token_transfer.transaction_type = TokenTransactionType.MINT
-        self.__table_resource.update_item.side_effect = [
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException,
-            None,
-        ]
-        self.__table_resource.put_item.side_effect = (
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException
-        )
-        self.__table_resource.get_item.return_value = dict(
-            Item=dict(
-                data_version=10,
-            ),
-        )
-        await self.__consumer.receive(self.__data_package)
-        self.__table_resource.update_item.assert_has_awaits(
-            [
-                call(
-                    Key=dict(
-                        blockchain_account="blockchain::To",
-                        collection_id_token_id="Collection ID::0x01",
-                    ),
-                    UpdateExpression="SET collection_id = :cid,"
-                    "token_id = :tid,"
-                    "account = :a,"
-                    "data_version = :dv "
-                    "ADD quantity :q",
-                    ExpressionAttributeValues={
-                        ":cid": "Collection ID",
-                        ":tid": "0x01",
-                        ":a": "To",
-                        ":q": 3,
-                        ":dv": 11,
-                    },
-                    ConditionExpression=Attr("data_version").not_exists()
-                    | Attr("data_version").eq(11),
-                ),
-                call(
-                    Key=dict(
-                        blockchain_account="blockchain::To",
-                        collection_id_token_id="Collection ID::0x01",
-                    ),
-                    UpdateExpression="SET collection_id = :cid,"
-                    "token_id = :tid,"
-                    "account = :a,"
-                    "data_version = :dv "
-                    "ADD quantity :q",
-                    ExpressionAttributeValues={
-                        ":cid": "Collection ID",
-                        ":tid": "0x01",
-                        ":a": "To",
-                        ":q": 3,
-                        ":dv": 11,
-                    },
-                    ConditionExpression=Attr("data_version").not_exists()
-                    | Attr("data_version").eq(11),
-                ),
-            ]
-        )
-
-    async def test_checks_database_data_version_and_errors_when_database_is_newer(self):
-        # noinspection PyDataclass
-        self.__data_package.token_transfer.transaction_type = TokenTransactionType.MINT
-        self.__table_resource.update_item.side_effect = [
-            self.__table_resource.meta.client.exceptions.ConditionalCheckFailedException,
-            None,
-        ]
-        self.__table_resource.get_item.return_value = dict(
-            Item=dict(
-                data_version=12,
-            ),
-        )
-        with self.assertRaisesRegex(ConsumerError, "Failed to add 3 to quantity for owner"):
-            await self.__consumer.receive(self.__data_package)
-
-        self.__table_resource.get_item.assert_called_once_with(
-            Key=dict(
-                blockchain_account="blockchain::To",
-                collection_id_token_id="Collection ID::0x01",
-            ),
         )

@@ -47,7 +47,7 @@ from blockcrawler.nft.evm.transformers import (
     EvmTransactionReceiptToNftCollectionTransformer,
     EvmLogErc721TransferToNftTokenTransferTransformer,
     EvmLogErc1155TransferSingleToNftTokenTransferTransformer,
-    EvmLogErc1155TransferToNftTokenTransferTransformer,
+    EvmLogErc1155TransferBatchToNftTokenTransferTransformer,
     EvmLogErc1155UriEventToNftTokenMetadataUriUpdatedTransformer,
     Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer,
     EvmForceLoadContractTransformer,
@@ -927,7 +927,7 @@ class EvmLogErc1155TransferToNftTokenTransferTestCase(IsolatedAsyncioTestCase):
         self.__transaction_type_oracle.type_from_log.return_value = self.__transaction_type
         self.__log_version_oracle = Mock(LogVersionOracle)
         self.__log_version_oracle.version_from_log.return_value = HexInt(1234)
-        self.__transformer = EvmLogErc1155TransferToNftTokenTransferTransformer(
+        self.__transformer = EvmLogErc1155TransferBatchToNftTokenTransferTransformer(
             self.__data_bus,
             self.__data_version,
             self.__transaction_type_oracle,
@@ -1109,8 +1109,8 @@ class EvmLogErc1155UriEventToNftTokenUriUpdatedTransformerTestCase(IsolatedAsync
                 blockchain=blockchain,
                 collection_id=Address("Collection ID"),
                 token_id=HexInt(12345),
-                metadata_uri="http://metadata.uri",
-                metadata_uri_version=HexInt(1234),
+                metadata_url="http://metadata.uri",
+                metadata_url_version=HexInt(1234),
                 data_version=self.__data_version,
             )
         )
@@ -1143,8 +1143,8 @@ class EvmLogErc1155UriEventToNftTokenUriUpdatedTransformerTestCase(IsolatedAsync
                 blockchain=blockchain,
                 collection_id=Address("Collection ID"),
                 token_id=HexInt(12345),
-                metadata_uri="http://metadata.uri/12345.json",
-                metadata_uri_version=HexInt(1234),
+                metadata_url="http://metadata.uri/12345.json",
+                metadata_url_version=HexInt(1234),
                 data_version=self.__data_version,
             )
         )
@@ -1199,8 +1199,8 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformerTestCase(Isolate
                 blockchain=self.__data_package.token_transfer.blockchain,
                 collection_id=self.__data_package.token_transfer.collection_id,
                 token_id=self.__data_package.token_transfer.token_id,
-                metadata_uri="http://metadata.uri",
-                metadata_uri_version=self.__data_package.token_transfer.attribute_version,
+                metadata_url="http://metadata.uri",
+                metadata_url_version=self.__data_package.token_transfer.attribute_version,
                 data_version=self.__data_package.token_transfer.data_version,
             )
         )

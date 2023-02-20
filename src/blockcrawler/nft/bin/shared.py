@@ -27,9 +27,10 @@ from blockcrawler.nft.consumers import (
     NftTokenMintPersistenceConsumer,
     NftTokenQuantityUpdatingConsumer,
     NftMetadataUriUpdatingConsumer,
-    CurrentOwnerPersistingConsumer,
+    OwnerPersistingConsumer,
+    NftCurrentOwnerUpdatingConsumer,
 )
-from blockcrawler.nft.data.models import BlockCrawlerConfig, Tokens, Owners
+from blockcrawler.nft.data.models import BlockCrawlerConfig
 from blockcrawler.nft.data_services.dynamodb import DynamoDbDataService
 from blockcrawler.nft.entities import BlockChain
 from blockcrawler.nft.evm.oracles import TokenTransactionTypeOracle, LogVersionOracle
@@ -37,7 +38,7 @@ from blockcrawler.nft.evm.transformers import (
     EvmTransactionReceiptToNftCollectionTransformer,
     EvmLogErc721TransferToNftTokenTransferTransformer,
     EvmLogErc1155TransferSingleToNftTokenTransferTransformer,
-    EvmLogErc1155TransferToNftTokenTransferTransformer,
+    EvmLogErc1155TransferBatchToNftTokenTransferTransformer,
     EvmLogErc1155UriEventToNftTokenMetadataUriUpdatedTransformer,
     Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer,
 )
@@ -111,7 +112,7 @@ async def _evm_block_crawler_data_bus_factory(
         )
     )
     await data_bus.register(
-        EvmLogErc1155TransferToNftTokenTransferTransformer(
+        EvmLogErc1155TransferBatchToNftTokenTransferTransformer(
             data_bus=data_bus,
             data_version=data_version,
             transaction_type_oracle=token_transaction_type_oracle,
@@ -126,9 +127,8 @@ async def _evm_block_crawler_data_bus_factory(
         )
     )
     await data_bus.register(NftTokenTransferPersistenceConsumer(data_service))
-    tokens_table_resource = await dynamodb.Table(table_prefix + Tokens.table_name)
     await data_bus.register(NftTokenMintPersistenceConsumer(data_service))
-    await data_bus.register(NftTokenQuantityUpdatingConsumer(tokens_table_resource, stats_service))
+    await data_bus.register(NftTokenQuantityUpdatingConsumer(data_service))
     await data_bus.register(
         Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(
             data_bus=data_bus,
@@ -142,9 +142,9 @@ async def _evm_block_crawler_data_bus_factory(
             data_version=data_version,
         )
     )
-    await data_bus.register(NftMetadataUriUpdatingConsumer(tokens_table_resource, stats_service))
-    owners_table_resource = await dynamodb.Table(table_prefix + Owners.table_name)
-    await data_bus.register(CurrentOwnerPersistingConsumer(owners_table_resource, stats_service))
+    await data_bus.register(NftMetadataUriUpdatingConsumer(data_service))
+    await data_bus.register(NftCurrentOwnerUpdatingConsumer(data_service))
+    await data_bus.register(OwnerPersistingConsumer(data_service))
     return data_bus
 
 
@@ -202,9 +202,6 @@ def _get_crawl_stat_line(stats_service: StatsService) -> str:
     transfer_count = stats_service.get_count(data_services.STAT_TOKEN_TRANSFER_WRITE)
     transfer_ms = stats_service.get_count(data_services.STAT_TOKEN_TRANSFER_WRITE_MS)
     transfer_ms_avg = _safe_average(transfer_count, transfer_ms)
-    owner_count = stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE)
-    owner_ms = stats_service.get_count(data_services.STAT_TOKEN_OWNER_WRITE_MS)
-    owner_ms_avg = _safe_average(owner_count, owner_ms)
     owner_update_count = stats_service.get_count(data_services.STAT_TOKEN_OWNER_UPDATE)
     owner_update_ms = stats_service.get_count(data_services.STAT_TOKEN_OWNER_UPDATE_MS)
     owner_update_ms_avg = _safe_average(owner_update_count, owner_update_ms)
@@ -228,7 +225,6 @@ def _get_crawl_stat_line(stats_service: StatsService) -> str:
         f"T:{token_count :,}/{token_ms_avg :,.0F} "
         f"TU:{token_update_count :,}/{token_update_avg :,.0F} "
         f"X:{transfer_count:,}/{transfer_ms_avg :,.0F} "
-        f"O:{owner_count:,}/{owner_ms_avg :,.0F} "
         f"OU:{owner_update_count:,}/{owner_update_ms_avg :,.0F}"
         f"]"
     )

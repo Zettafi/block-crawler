@@ -28,8 +28,8 @@ class TokenMetadataUriUpdatedDataPackage(DataPackage):
     blockchain: BlockChain
     collection_id: Address
     token_id: HexInt
-    metadata_uri: str
-    metadata_uri_version: HexInt
+    metadata_url: str
+    metadata_url_version: HexInt
     data_version: int
 
 
