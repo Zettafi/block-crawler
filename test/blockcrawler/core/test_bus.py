@@ -1,3 +1,4 @@
+import asyncio
 import signal
 import unittest
 from dataclasses import dataclass
@@ -37,12 +38,31 @@ class ParallelDataBusTestCase(IsolatedAsyncioTestCase):
         for consumer in consumers:
             consumer.receive.assert_awaited_once_with(expected)
 
-    async def test_logs_errors_from_consumers(self):
+    async def test_logs_errors_from_consumers_by_default(self):
         self.__consumer.receive.side_effect = Exception
         await self.__data_bus.register(self.__consumer)
         async with self.__data_bus:
             await self.__data_bus.send(TestDataPackage("Anything"))
         self.__logger.exception.assert_called_once()
+
+    async def test_raises_exceptions_from_send_when_raise_on_exception_is_true(self):
+        self.__consumer.receive.side_effect = Exception
+        data_bus = ParallelDataBus(self.__logger, raise_on_exception=True)
+        await data_bus.register(self.__consumer)
+        with self.assertRaises(Exception):
+            async with data_bus:
+                await data_bus.send(TestDataPackage("Anything"))
+
+    async def test_raises_exceptions_from_consumer_result_when_raise_on_exception_is_true(self):
+        future = asyncio.get_running_loop().create_future()
+        self.__consumer.receive.return_value = future
+        future.set_exception(Exception())
+        data_bus = ParallelDataBus(self.__logger, raise_on_exception=True)
+        await data_bus.register(self.__consumer)
+        with self.assertRaises(Exception):
+            async with data_bus:
+                await data_bus.send(TestDataPackage("Anything"))
+                future.set_exception(Exception())
 
     async def test_consumption_errors_do_not_prevent_consumption_by_other_consumers(self):
         self.__consumer.receive.side_effect = Exception

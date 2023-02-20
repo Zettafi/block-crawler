@@ -9,7 +9,7 @@ import aiohttp.client_exceptions
 import ddt
 from hexbytes import HexBytes
 
-from blockcrawler.core.rpc import RpcError, RpcServerError
+from blockcrawler.core.rpc import RpcError, RpcServerError, RpcClientError
 from blockcrawler.core.stats import StatsService
 from blockcrawler.evm.rpc import (
     EthCall,
@@ -678,6 +678,20 @@ class GetBlockTestCase(BaseRPCClientTestCase):
         )
         actual = await self._rpc_client.get_block(HexInt(1), True)
         self.assertEqual(expected, actual)
+
+    async def test_handles_null_transactions_in_full_transactions_mode(self):
+        self._rpc_response["result"]["transactions"] = None
+        with self.assertRaisesRegex(
+            RpcClientError, "Error retrieving block: no transactions returned"
+        ):
+            await self._rpc_client.get_block(HexInt(1), True)
+
+    async def test_handles_null_transactions_in_transaction_hashes_mode(self):
+        self._rpc_response["result"]["transactions"] = None
+        with self.assertRaisesRegex(
+            RpcClientError, "Error retrieving block: no transactions returned"
+        ):
+            await self._rpc_client.get_block(HexInt(1), False)
 
 
 class GetBlockNumberTestCase(BaseRPCClientTestCase):

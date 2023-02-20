@@ -12,6 +12,10 @@
 - Cleaned up commands/bin to be better contained and easier to follow
 - Reduced code duplication for stats logging
 - Standardized on naming for metadata_uri
+- Updated parallel bus to allow for configuration option to raise exceptions caught by consumers
+- Updated nft tail command to have bus raise exceptions, log errors from those exceptions, 
+  and reprocess the block on which hte error occurred
+- Fix bug in tailer where it would get ahead of the block height
 
 # Version 1.0.2
 

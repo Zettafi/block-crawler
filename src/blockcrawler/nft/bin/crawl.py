@@ -169,6 +169,7 @@ async def run_crawl(
                 rpc_client=rpc_client,
                 blockchain=blockchain,
                 data_version=data_version,
+                raise_on_exception=False,
             )
 
             if ending_block == starting_block:

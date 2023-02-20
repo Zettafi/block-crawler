@@ -107,6 +107,7 @@ async def run_tail(
                 rpc_client=evm_rpc_client,
                 blockchain=blockchain,
                 data_version=data_version,
+                raise_on_exception=True,
             )
 
             last_block_table: TableResource = await dynamodb.Table(
@@ -119,7 +120,7 @@ async def run_tail(
                 last_block_processed = HexInt(
                     int(last_block_result.get("Item").get("last_block_id"))
                 )
-            except AttributeError:
+            except (AttributeError, TypeError):
                 logger.error(
                     f"Unable to retrieve last_block_id for blockchain "
                     f"{blockchain.value} from {last_block_table.table_name}"
@@ -132,13 +133,13 @@ async def run_tail(
             )
             with SignalManager() as signal_manager:
                 block_processing = last_block_processed + 1  # Start processing the next block
-                current_block_number = block_processing  # Set equal to trigger get_block_number
+                block_height = block_processing + 1  # Set equal to trigger get_block_number
                 total_process_time: float = float(
                     process_interval
-                )  # Set equal to make initial delay 0
+                )  # Set equal to make initial delay 0.0
                 while not signal_manager.interrupted:
                     stats_service.reset()
-                    if block_processing >= current_block_number:
+                    if block_processing > block_height:
                         # If we've processed all the blocks we know of, see if new blocks exist
 
                         # Determine the remaining portion of the interval
@@ -148,30 +149,35 @@ async def run_tail(
                             await asyncio.sleep(sleep_time)
                         total_process_time = 0.0
                         block_number = await evm_rpc_client.get_block_number()
-                        current_block_number = block_number - trail_blocks
-                    if last_block_processed < current_block_number:
-                        start: float = time.perf_counter()
-                        async with data_bus:
-                            await data_bus.send(EvmBlockIDDataPackage(blockchain, block_processing))
-                        end: float = time.perf_counter()
-                        process_time: float = end - start
-                        total_process_time += process_time
-                        logger.info(
-                            f"{block_processing.int_value}/{current_block_number.int_value}"
-                            f" - {process_time:0.3f}s - {_get_crawl_stat_line(stats_service)}"
-                        )
+                        block_height = block_number - trail_blocks
+                    if block_processing <= block_height:
+                        try:
+                            start: float = time.perf_counter()
+                            async with data_bus:
+                                await data_bus.send(
+                                    EvmBlockIDDataPackage(blockchain, block_processing)
+                                )
+                            end: float = time.perf_counter()
+                            process_time: float = end - start
+                            total_process_time += process_time
+                            logger.info(
+                                f"{block_processing.int_value:,}/{block_height.int_value:,}"
+                                f" - {process_time:0.3f}s - {_get_crawl_stat_line(stats_service)}"
+                            )
 
-                        await _update_latest_block(
-                            boto3_session,
-                            cast(str, blockchain.value),
-                            block_processing,
-                            dynamodb_endpoint_url,
-                            table_prefix,
-                        )
-                        block_processing += 1
+                            await _update_latest_block(
+                                boto3_session,
+                                cast(str, blockchain.value),
+                                block_processing,
+                                dynamodb_endpoint_url,
+                                table_prefix,
+                            )
+                            block_processing += 1
+                        except Exception as e:
+                            logger.exception(f"Error processing block {block_height}", e)
 
                     else:
                         logger.warning(
-                            f"No blocks to process -- current: {current_block_number.int_value}"
-                            f" -- last processed: {last_block_processed.int_value}"
+                            f"No blocks to process -- current: {block_height.int_value}"
+                            f" -- last processed: {block_processing.int_value - 1}"
                         )
