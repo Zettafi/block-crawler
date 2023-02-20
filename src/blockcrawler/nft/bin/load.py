@@ -153,7 +153,7 @@ class LineWriter:
         high = (
             self.__block_bound_tracker.high.int_value if self.__block_bound_tracker.high else None
         )
-        return f"Blocks [{low,}:{high:,}] -- {_get_load_stat_line(stats_service)}"
+        return f"Blocks [{low:,}:{high:,}] -- {_get_load_stat_line(stats_service)}"
 
 
 async def run_load(

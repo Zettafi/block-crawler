@@ -309,7 +309,7 @@ class EvmLogErc1155TransferSingleToNftTokenTransferTransformer(
         return EthereumCollectionType.ERC1155, from_address, to_address, [token_id], [quantity]
 
 
-class EvmLogErc1155TransferToNftTokenTransferTransformer(
+class EvmLogErc1155TransferBatchToNftTokenTransferTransformer(
     EvmLogErcTransferToNftTokenTransferTransformerBase
 ):
     def _is_processable(self, data_package: EvmLogDataPackage):
@@ -367,8 +367,8 @@ class EvmLogErc1155UriEventToNftTokenMetadataUriUpdatedTransformer(Transformer):
             blockchain=data_package.blockchain,
             collection_id=data_package.log.address,
             token_id=token_id,
-            metadata_uri=metadata_uri,
-            metadata_uri_version=metadata_uri_version,
+            metadata_url=metadata_uri,
+            metadata_url_version=metadata_uri_version,
             data_version=self.__data_version,
         )
 
@@ -420,8 +420,8 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(Transformer):
             blockchain=data_package.token_transfer.blockchain,
             collection_id=data_package.token_transfer.collection_id,
             token_id=data_package.token_transfer.token_id,
-            metadata_uri=metadata_uri,
-            metadata_uri_version=data_package.token_transfer.attribute_version,
+            metadata_url=metadata_uri,
+            metadata_url_version=data_package.token_transfer.attribute_version,
             data_version=data_package.token_transfer.data_version,
         )
 

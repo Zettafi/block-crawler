@@ -1,3 +1,18 @@
+# Version 1.1.0
+
+- Moved all data processing into the data service
+  - Allows for all operations to be properly throttled to avoid errors from hot partition
+  - Reduce code duplication
+  - Puts the logic in the right domain
+- Refactored how we write data for tokens and owners
+  - No more waiting for tokens to update data in crawler and loader to handle a few issues
+    - Contracts that are missed by the loader because they are not recognized (contracts making contracts)
+    - Contracts that never mint or burn but place transfers (OpenSea)
+    - Order dependence causing lots of extra queries
+- Cleaned up commands/bin to be better contained and easier to follow
+- Reduced code duplication for stats logging
+- Standardized on naming for metadata_uri
+
 # Version 1.0.2
 
 - Add better logging for failing to update token metadata URI

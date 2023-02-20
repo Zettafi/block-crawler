@@ -1,15 +1,20 @@
+import logging
 import unittest
-from unittest.mock import Mock, AsyncMock, ANY, MagicMock
+from unittest.mock import Mock, AsyncMock, ANY, MagicMock, call
 
 import ddt
 from boto3.dynamodb.conditions import Attr
 from hexbytes import HexBytes
 
+import blockcrawler
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.stats import StatsService
-from blockcrawler.nft.data_services.dynamodb import DynamoDbDataService
-from blockcrawler.nft.data_services import DataVersionTooOldException
 from blockcrawler.core.types import Address, HexInt
+from blockcrawler.nft import data_services
+from blockcrawler.nft.data_services import (
+    DataVersionTooOldException,
+)
+from blockcrawler.nft.data_services.dynamodb import DynamoDbDataService
 from blockcrawler.nft.entities import (
     Collection,
     CollectionType,
@@ -148,7 +153,8 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             ConditionExpression=Attr("data_version").not_exists() | Attr("data_version").lte(999),
         )
 
-    async def test_write_collection_raises_expected_exception_for_condition_check_failure_when_saving(  # noqa: E501
+    async def test_write_collection_raises_exception_for_condition_check_failure_when_saving(
+        # noqa: E501
         self,
     ):
         self.__table_resource.put_item.side_effect = (
@@ -242,223 +248,436 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
         await self.__data_service.write_token(token)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
+        self.__table_resource.update_item.assert_awaited_once_with(
+            Key={
                 "blockchain_collection_id": "Expected Blockchain::Collection Address",
                 "token_id": "0x1",
-                "mint_timestamp": 2,
-                "mint_block_id": "0x4",
-                "original_owner_account": "Original Owner",
-                "current_owner_account": "Current Owner",
-                "current_owner_version": "0x00000000000000000007",
-                "quantity": 3,
-                "metadata_url": "Metadata URL",
-                "metadata_url_version": "0x00000000000000000007",
-                "data_version": 999,
             },
-            ConditionExpression=ANY,
-        )
-
-    async def test_write_token_does_not_store_owners_data_when_owners_are_none(self):
-        blockchain = Mock(BlockChain)
-        blockchain.value = "Expected Blockchain"
-        token = Token(
-            blockchain=blockchain,
-            data_version=999,
-            collection_id=Address("Collection Address"),
-            token_id=HexInt(1),
-            mint_date=HexInt(2),
-            mint_block=HexInt(4),
-            current_owner=None,
-            original_owner=None,
-            quantity=HexInt(3),
-            metadata_url="Metadata URL",
-            attribute_version=HexInt("0x00000000000000000007"),
-        )
-
-        await self.__data_service.write_token(token)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
-                "blockchain_collection_id": ANY,
-                "token_id": ANY,
-                "mint_timestamp": ANY,
-                "mint_block_id": ANY,
-                "quantity": ANY,
-                "metadata_url": ANY,
-                "metadata_url_version": ANY,
-                "data_version": ANY,
+            UpdateExpression=(
+                "SET mint_timestamp = :mint_timestamp, mint_block_id = :mint_block_id, "
+                "original_owner_account = :original_owner_account"
+            ),
+            ConditionExpression=(
+                "attribute_not_exists(data_version) OR data_version <= :data_version"
+            ),
+            ExpressionAttributeValues={
+                ":mint_timestamp": 2,
+                ":mint_block_id": "0x4",
+                ":original_owner_account": "Original Owner",
+                ":data_version": 999,
             },
-            ConditionExpression=ANY,
         )
 
-    async def test_write_token_uses_the_correct_conditional_expression_and_attrs(self):
-        token = Token(
-            blockchain=BlockChain.ETHEREUM_MAINNET,
-            data_version=999,
-            collection_id=Address("Collection Address"),
-            token_id=HexInt(1),
-            mint_date=HexInt(2),
-            mint_block=HexInt(4),
-            current_owner=Address("Current Owner"),
-            original_owner=Address("Original Owner"),
-            quantity=HexInt(3),
-            metadata_url="Metadata URL",
-            attribute_version=HexInt(7),
-        )
-
-        await self.__data_service.write_token(token)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item=ANY,
-            ConditionExpression=Attr("data_version").not_exists() | Attr("data_version").lte(999),
-        )
-
-    async def test_write_token_raises_expected_exception_for_condition_check_failure_when_saving(
-        self,
-    ):
-        token = Token(
-            blockchain=BlockChain.ETHEREUM_MAINNET,
-            data_version=999,
-            collection_id=Address("Collection Address"),
-            token_id=HexInt(1),
-            mint_date=HexInt(2),
-            mint_block=HexInt(4),
-            current_owner=Address("Current Owner"),
-            original_owner=Address("Original Owner"),
-            quantity=HexInt(3),
-            metadata_url="Metadata URL",
-            attribute_version=HexInt(7),
-        )
-
-        self.__table_resource.put_item.side_effect = (
+    async def test_write_token_logs_condition_check_fails(self):
+        self.__table_resource.update_item.side_effect = (
             self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
         )
-        with self.assertRaises(DataVersionTooOldException):
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
+            token = Token(
+                blockchain=BlockChain.ETHEREUM_MAINNET,
+                data_version=999,
+                collection_id=Address("Collection Address"),
+                token_id=HexInt(1),
+                mint_date=HexInt(2),
+                mint_block=HexInt(4),
+                current_owner=Address("Current Owner"),
+                original_owner=Address("Original Owner"),
+                quantity=HexInt(3),
+                metadata_url="Metadata URL",
+                attribute_version=HexInt("0x00000000000000000007"),
+            )
             await self.__data_service.write_token(token)
-            self.__table_resource.put_item.assert_awaited_once()
+            self.assertIn(
+                f"DEBUG:{blockcrawler.LOGGER_NAME}:Token for "
+                f"ethereum-mainnet:Collection Address:1 not written -- version too old -- "
+                f"999 -- {token}",
+                cm.output,
+            )
 
-    async def test_write_token_with_2048_char_url_stores_url(self):
-        token = Token(
+    async def test_update_token_url_uses_token_table_with_prefix_prepended(self):
+        await self.__data_service.update_token_metadata_url(
             blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            metadata_url="metadata-url",
+            metadata_url_version=HexInt(0x100),
             data_version=999,
-            collection_id=Address("Collection Address"),
-            token_id=HexInt(1),
-            mint_date=HexInt(2),
-            mint_block=HexInt(4),
-            current_owner=Address("Current Owner"),
-            original_owner=Address("Original Owner"),
-            quantity=HexInt(3),
-            metadata_url="X" * 2048,
-            attribute_version=HexInt("0x00000000000000000007"),
         )
+        self.__dynamodb.Table.assert_awaited_once_with("pretoken")
 
-        await self.__data_service.write_token(token)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
-                "blockchain_collection_id": ANY,
-                "token_id": ANY,
-                "mint_timestamp": ANY,
-                "mint_block_id": ANY,
-                "original_owner_account": ANY,
-                "current_owner_account": ANY,
-                "current_owner_version": ANY,
-                "quantity": ANY,
-                "metadata_url": "X" * 2048,
-                "metadata_url_version": ANY,
-                "data_version": ANY,
+    async def test_update_token_url_calls_update_item_with_the_correct_values(self):
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        await self.__data_service.update_token_metadata_url(
+            blockchain=blockchain,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            metadata_url="metadata-url",
+            metadata_url_version=HexInt(0x100),
+            data_version=999,
+        )
+        self.__table_resource.update_item.assert_awaited_once_with(
+            Key={
+                "blockchain_collection_id": "blockchain::collection-id",
+                "token_id": "0x1",
             },
-            ConditionExpression=ANY,
-        )
-
-    async def test_write_token_with_2049_char_url_does_not_store_url_data(self):
-        token = Token(
-            blockchain=BlockChain.ETHEREUM_MAINNET,
-            data_version=999,
-            collection_id=Address("Collection Address"),
-            token_id=HexInt(1),
-            mint_date=HexInt(2),
-            mint_block=HexInt(4),
-            current_owner=Address("Current Owner"),
-            original_owner=Address("Original Owner"),
-            quantity=HexInt(3),
-            metadata_url="X" * 2049,
-            attribute_version=HexInt("0x00000000000000000007"),
-        )
-
-        await self.__data_service.write_token(token)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
-                "blockchain_collection_id": ANY,
-                "token_id": ANY,
-                "mint_timestamp": ANY,
-                "mint_block_id": ANY,
-                "original_owner_account": ANY,
-                "current_owner_account": ANY,
-                "current_owner_version": ANY,
-                "quantity": ANY,
-                "data_version": ANY,
+            UpdateExpression=(
+                "SET metadata_url = :metadata_url, metadata_url_version = :metadata_url_version"
+            ),
+            ExpressionAttributeValues={
+                ":metadata_url": "metadata-url",
+                ":metadata_url_version": "0x100",
+                ":data_version": 999,
             },
-            ConditionExpression=ANY,
+            ConditionExpression=(
+                "attribute_not_exists(data_version)"  # New token
+                " OR data_version < :data_version"  # New load for existing token
+                " OR (data_version = :data_version"  # Same load for existing item
+                " AND (attribute_not_exists(metadata_url_version)"  # No URI
+                " OR metadata_url_version < :metadata_url_version)"  # Newer URI"
+                ")"
+            ),
         )
 
-    async def test_write_token_does_not_store_url_data_when_url_is_none(self):
-        token = Token(
+    async def test_update_token_url_debug_logs_condition_check_fails(self):
+        self.__table_resource.update_item.side_effect = (
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
+        )
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
+            await self.__data_service.update_token_metadata_url(
+                blockchain=blockchain,
+                collection_id=Address("collection-id"),
+                token_id=HexInt(0x1),
+                metadata_url="metadata-url",
+                metadata_url_version=HexInt(0x12345),
+                data_version=999,
+            )
+            self.assertIn(
+                f"DEBUG:{blockcrawler.LOGGER_NAME}:Metadata URI for "
+                f"blockchain:collection-id:1 not updated -- version too old -- "
+                f"data: 999 - URI: 0x12345 -- metadata-url",
+                cm.output,
+            )
+
+    async def test_update_token_url_hits_stat_for_condition_check_fails(self):
+        self.__table_resource.update_item.side_effect = (
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
+        )
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        await self.__data_service.update_token_metadata_url(
             blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            metadata_url="metadata-url",
+            metadata_url_version=HexInt(0),
             data_version=999,
-            collection_id=Address("Collection Address"),
-            token_id=HexInt(1),
-            mint_date=HexInt(2),
-            mint_block=HexInt(4),
-            current_owner=Address("Current Owner"),
-            original_owner=Address("Original Owner"),
-            quantity=HexInt(3),
+        )
+        self.__stats_service.increment.assert_has_calls(
+            [call(data_services.STAT_TOKEN_URI_UPDATE_DATA_TOO_OLD)]
+        )
+
+    async def test_update_token_url_with_2048_char_url_stores_url(self):
+        metadata_url = "X" * 2048
+        await self.__data_service.update_token_metadata_url(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            metadata_url=metadata_url,
+            metadata_url_version=HexInt(0),
+            data_version=999,
+        )
+        self.__table_resource.update_item.assert_awaited_once()
+
+    async def test_update_token_url_with_none_stores_url(self):
+        await self.__data_service.update_token_metadata_url(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
             metadata_url=None,
-            attribute_version=HexInt("0x00000000000000000007"),
-        )
-
-        await self.__data_service.write_token(token)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
-                "blockchain_collection_id": ANY,
-                "token_id": ANY,
-                "mint_timestamp": ANY,
-                "mint_block_id": ANY,
-                "original_owner_account": ANY,
-                "current_owner_account": ANY,
-                "current_owner_version": ANY,
-                "quantity": ANY,
-                "data_version": ANY,
-            },
-            ConditionExpression=ANY,
-        )
-
-    async def test_write_token_does_not_store_owner_data_when_none(self):
-        token = Token(
-            blockchain=BlockChain.ETHEREUM_MAINNET,
+            metadata_url_version=HexInt(0),
             data_version=999,
-            collection_id=Address("Collection Address"),
-            token_id=HexInt(1),
-            mint_date=HexInt(2),
-            mint_block=HexInt(4),
-            current_owner=None,
-            original_owner=None,
-            quantity=HexInt(3),
-            metadata_url="URL",
-            attribute_version=HexInt("0x00000000000000000007"),
+        )
+        self.__table_resource.update_item.assert_awaited_once()
+
+    async def test_update_token_url_with_2049_char_url_does_not_store_url_data_and_debug_logs(self):
+        metadata_url = "X" * 2049
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
+            await self.__data_service.update_token_metadata_url(
+                blockchain=blockchain,
+                collection_id=Address("collection-id"),
+                token_id=HexInt(0x1),
+                metadata_url=metadata_url,
+                metadata_url_version=HexInt(0),
+                data_version=999,
+            )
+            self.__table_resource.update_item.assert_not_awaited()
+            self.assertIn(
+                f"DEBUG:{blockcrawler.LOGGER_NAME}:Metadata URI for "
+                f"blockchain:collection-id:1 not updated -- "
+                f"too long to store -- {metadata_url}",
+                cm.output,
+            )
+
+    async def test_update_token_url_increments_count_stat(self):
+        await self.__data_service.update_token_metadata_url(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            metadata_url="metadata-url",
+            metadata_url_version=HexInt(0),
+            data_version=999,
+        )
+        self.__stats_service.increment.assert_has_calls([call(data_services.STAT_TOKEN_URI_UPDATE)])
+
+    async def test_update_token_url_hits_timer_stat(self):
+        await self.__data_service.update_token_metadata_url(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            metadata_url="metadata-url",
+            metadata_url_version=HexInt(0),
+            data_version=999,
+        )
+        self.__stats_service.ms_counter.assert_called_once_with(
+            data_services.STAT_TOKEN_URI_UPDATE_MS
         )
 
-        await self.__data_service.write_token(token)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
-                "blockchain_collection_id": ANY,
-                "token_id": ANY,
-                "mint_timestamp": ANY,
-                "mint_block_id": ANY,
-                "metadata_url": ANY,
-                "metadata_url_version": ANY,
-                "quantity": ANY,
-                "data_version": ANY,
+    async def test_update_token_quantity_uses_token_table_with_prefix_prepended(self):
+        await self.__data_service.update_token_quantity(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            quantity=21,
+            data_version=999,
+        )
+        self.__dynamodb.Table.assert_awaited_once_with("pretoken")
+
+    async def test_update_token_quantity_calls_update_item_with_the_correct_values(self):
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        await self.__data_service.update_token_quantity(
+            blockchain=blockchain,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            quantity=21,
+            data_version=999,
+        )
+        self.__table_resource.update_item.assert_called_once_with(
+            Key={
+                "blockchain_collection_id": "blockchain::collection-id",
+                "token_id": "0x1",
             },
-            ConditionExpression=ANY,
+            UpdateExpression="ADD quantity :q SET data_version = :data_version",
+            ExpressionAttributeValues={":q": 21, ":data_version": 999},
+            ConditionExpression="attribute_not_exists(data_version) "
+            "OR data_version = :data_version",
+        )
+
+    async def test_update_token_quantity_updates_item_again_to_increment_when_check_fails(
+        self,
+    ):
+        self.__table_resource.update_item.side_effect = [
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException,
+            None,
+        ]
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        await self.__data_service.update_token_quantity(
+            blockchain=blockchain,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            quantity=21,
+            data_version=999,
+        )
+        self.__table_resource.update_item.assert_has_awaits(
+            [
+                call(
+                    Key={
+                        "blockchain_collection_id": "blockchain::collection-id",
+                        "token_id": "0x1",
+                    },
+                    UpdateExpression="SET quantity :q, data_version = :data_version",
+                    ExpressionAttributeValues={":q": 21, ":data_version": 999},
+                    ConditionExpression="data_version < :data_version",
+                )
+            ]
+        )
+
+    async def test_update_token_quantity_debug_logs_seconds_condition_check_fails(self):
+        self.__table_resource.update_item.side_effect = (
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
+        )
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
+            await self.__data_service.update_token_quantity(
+                blockchain=blockchain,
+                collection_id=Address("collection-id"),
+                token_id=HexInt(0x1),
+                quantity=21,
+                data_version=999,
+            )
+            self.assertIn(
+                f"DEBUG:{blockcrawler.LOGGER_NAME}:Quantity for "
+                f"blockchain:collection-id:1 not updated -- version too old -- "
+                f"data: 999 -- 21",
+                cm.output,
+            )
+
+    async def test_update_token_quantity_hits_stat_for_condition_check_fails(self):
+        self.__table_resource.update_item.side_effect = (
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
+        )
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        await self.__data_service.update_token_quantity(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            quantity=21,
+            data_version=999,
+        )
+        self.__stats_service.increment.assert_has_calls(
+            [call(data_services.STAT_TOKEN_QUANTITY_UPDATE_DATA_TOO_OLD)]
+        )
+
+    async def test_update_token_quantity_increments_count_stat(self):
+        await self.__data_service.update_token_quantity(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            quantity=21,
+            data_version=999,
+        )
+        self.__stats_service.increment.assert_has_calls(
+            [call(data_services.STAT_TOKEN_QUANTITY_UPDATE)]
+        )
+
+    async def test_update_token_quantity_hits_timer_stat(self):
+        await self.__data_service.update_token_quantity(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            quantity=21,
+            data_version=999,
+        )
+        self.__stats_service.ms_counter.assert_called_once_with(
+            data_services.STAT_TOKEN_QUANTITY_UPDATE_MS
+        )
+
+    async def test_update_token_current_owner_uses_token_table_with_prefix_prepended(self):
+        await self.__data_service.update_token_current_owner(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            owner=Address("Owner"),
+            owner_version=HexInt(0x1234),
+            data_version=999,
+        )
+        self.__dynamodb.Table.assert_awaited_once_with("pretoken")
+
+    async def test_update_token_current_owner_calls_update_item_with_the_correct_values(self):
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        await self.__data_service.update_token_current_owner(
+            blockchain=blockchain,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            owner=Address("Owner"),
+            owner_version=HexInt(0x1234),
+            data_version=999,
+        )
+        self.__table_resource.update_item.assert_awaited_once_with(
+            Key={
+                "blockchain_collection_id": "blockchain::collection-id",
+                "token_id": "0x1",
+            },
+            UpdateExpression="SET current_owner_account = :current_owner_account, "
+            "current_owner_version = :current_owner_version",
+            ExpressionAttributeValues={
+                ":current_owner_account": "Owner",
+                ":current_owner_version": "0x1234",
+                ":data_version": 999,
+            },
+            ConditionExpression=(
+                "attribute_not_exists(data_version)"  # New token
+                " OR data_version < :data_version"  # New load for existing token
+                " OR (data_version = :data_version"  # Same load for existing item
+                " AND (attribute_not_exists(current_owner_version)"  # No owner
+                " OR current_owner_version < :current_owner_version)"  # Newer owner
+                ")"
+            ),
+        )
+
+    async def test_update_token_current_owner_debug_logs_condition_check_fails(self):
+        self.__table_resource.update_item.side_effect = (
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
+        )
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
+            await self.__data_service.update_token_current_owner(
+                blockchain=blockchain,
+                collection_id=Address("collection-id"),
+                token_id=HexInt(0x1),
+                owner=Address("Owner"),
+                owner_version=HexInt(0x1234),
+                data_version=999,
+            )
+            self.assertIn(
+                f"DEBUG:{blockcrawler.LOGGER_NAME}:Current owner for "
+                f"blockchain:collection-id:1 not updated -- version too old -- "
+                f"data: 999 - owner: 0x1234 -- Owner",
+                cm.output,
+            )
+
+    async def test_update_token_current_owner_hits_stat_for_condition_check_fails(self):
+        self.__table_resource.update_item.side_effect = (
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
+        )
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        await self.__data_service.update_token_current_owner(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            owner=Address("Owner"),
+            owner_version=HexInt(0x1234),
+            data_version=999,
+        )
+        self.__stats_service.increment.assert_has_calls(
+            [call(data_services.STAT_TOKEN_CURRENT_OWNER_UPDATE_DATA_TOO_OLD)]
+        )
+
+    async def test_update_token_current_owner_increments_count_stat(self):
+        await self.__data_service.update_token_current_owner(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            owner=Address("Owner"),
+            owner_version=HexInt(0x1234),
+            data_version=999,
+        )
+        self.__stats_service.increment.assert_has_calls(
+            [call(data_services.STAT_TOKEN_CURRENT_OWNER_UPDATE)]
+        )
+
+    async def test_update_token_current_owner_hits_timer_stat(self):
+        await self.__data_service.update_token_current_owner(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            owner=Address("Owner"),
+            owner_version=HexInt(0x1234),
+            data_version=999,
+        )
+        self.__stats_service.ms_counter.assert_called_once_with(
+            data_services.STAT_TOKEN_CURRENT_OWNER_UPDATE_MS
         )
 
     async def test_write_token_batch_uses_token_table_with_prefix_prepended(self):
@@ -698,7 +917,8 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             ConditionExpression=Attr("data_version").not_exists() | Attr("data_version").lte(999),
         )
 
-    async def test_write_token_transfer_raises_expected_exception_for_condition_check_failure_when_saving(  # noqa: E501
+    async def test_write_token_transfer_logs_debug_check_failure_when_saving(
+        # noqa: E501
         self,
     ):
         token_transfer = TokenTransfer(
@@ -722,9 +942,14 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
         self.__table_resource.put_item.side_effect = (
             self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
         )
-        with self.assertRaises(DataVersionTooOldException):
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
             await self.__data_service.write_token_transfer(token_transfer)
-            self.__table_resource.put_item.assert_awaited_once()
+            self.assertIn(
+                f"DEBUG:{blockcrawler.LOGGER_NAME}:Token Transfer for "
+                f"ethereum-mainnet:Collection Address not written -- version too old -- "
+                f"999 -- {token_transfer}",
+                cm.output,
+            )
 
     async def test_write_token_transfer_batch_uses_token_transfer_table_with_prefix_prepended(self):
         token_transfer = TokenTransfer(
@@ -787,7 +1012,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_write_token_owner_uses_owner_table_with_prefix_prepended(self):
+    async def test_update_token_owner_uses_owner_table_with_prefix_prepended(self):
         token_owner = TokenOwner(
             blockchain=BlockChain.ETHEREUM_MAINNET,
             collection_id=Address("Collection ID"),
@@ -797,67 +1022,213 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
             data_version=11,
         )
 
-        await self.__data_service.write_token_owner(token_owner)
+        await self.__data_service.update_token_owner(token_owner)
         self.__dynamodb.Table.assert_awaited_once_with("preowner")
 
-    async def test_write_token_owner_stores_correct_data(self):
-        token_owner = TokenOwner(
-            blockchain=BlockChain.ETHEREUM_MAINNET,
-            collection_id=Address("Collection ID"),
-            token_id=HexInt("0x10"),
-            account=Address("Account"),
-            quantity=HexInt("0x1"),
-            data_version=11,
+    async def test_update_token_owner_stores_correct_data(self):
+        await self.__data_service.update_token_owner(
+            TokenOwner(
+                blockchain=BlockChain.ETHEREUM_MAINNET,
+                collection_id=Address("Collection ID"),
+                token_id=HexInt("0x10"),
+                account=Address("Account"),
+                quantity=HexInt("0x3"),
+                data_version=11,
+            )
         )
-
-        await self.__data_service.write_token_owner(token_owner)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item={
-                "blockchain_account": f"{BlockChain.ETHEREUM_MAINNET.value}::Account",
-                "collection_id_token_id": "Collection ID::0x10",
-                "collection_id": "Collection ID",
-                "token_id": "0x10",
-                "account": "Account",
-                "quantity": 1,
-                "data_version": 11,
+        self.__table_resource.update_item.assert_awaited_once_with(
+            Key=dict(
+                blockchain_account="ethereum-mainnet::Account",
+                collection_id_token_id="Collection ID::0x10",
+            ),
+            UpdateExpression="SET collection_id = :collection_id,"
+            "token_id = :token_id,"
+            "account = :account,"
+            "data_version = :data_version "
+            "ADD quantity :quantity",
+            ConditionExpression=(
+                "attribute_not_exists(data_version) OR data_version = :data_version"
+            ),
+            ExpressionAttributeValues={
+                ":collection_id": "Collection ID",
+                ":token_id": "0x10",
+                ":account": "Account",
+                ":quantity": 3,
+                ":data_version": 11,
             },
-            ConditionExpression=ANY,
         )
 
-    async def test_write_token_owner_uses_the_correct_conditional_expression_and_attrs(self):
-        token_owner = TokenOwner(
-            blockchain=BlockChain.ETHEREUM_MAINNET,
-            collection_id=Address("Collection ID"),
-            token_id=HexInt("0x10"),
-            account=Address("Account"),
-            quantity=HexInt("0x1"),
-            data_version=11,
-        )
-
-        await self.__data_service.write_token_owner(token_owner)
-        self.__table_resource.put_item.assert_awaited_once_with(
-            Item=ANY,
-            ConditionExpression=Attr("data_version").not_exists() | Attr("data_version").lte(11),
-        )
-
-    async def test_write_token_owner_raises_expected_exception_for_condition_check_failure_when_saving(  # noqa: E501
+    async def test_update_token_owner_updates_item_again_to_increment_when_check_fails(
         self,
     ):
-        token_owner = TokenOwner(
+        self.__table_resource.update_item.side_effect = [
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException,
+            None,
+        ]
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        await self.__data_service.update_token_owner(
+            TokenOwner(
+                blockchain=BlockChain.ETHEREUM_MAINNET,
+                collection_id=Address("Collection ID"),
+                token_id=HexInt("0x10"),
+                account=Address("Account"),
+                quantity=HexInt("0x3"),
+                data_version=11,
+            )
+        )
+        self.__table_resource.update_item.assert_has_awaits(
+            [
+                call(
+                    Key=dict(
+                        blockchain_account="ethereum-mainnet::Account",
+                        collection_id_token_id="Collection ID::0x10",
+                    ),
+                    UpdateExpression="SET collection_id = :collection_id"
+                    ",token_id = :token_id"
+                    ",account = :account"
+                    ",data_version = :data_version"
+                    ",quantity = :quantity",
+                    ConditionExpression="data_version < :data_version",
+                    ExpressionAttributeValues={
+                        ":collection_id": "Collection ID",
+                        ":token_id": "0x10",
+                        ":account": "Account",
+                        ":quantity": 3,
+                        ":data_version": 11,
+                    },
+                )
+            ]
+        )
+
+    async def test_update_token_owner_debug_logs_seconds_condition_check_fails(self):
+        self.__table_resource.update_item.side_effect = (
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
+        )
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
+            token_owner = TokenOwner(
+                blockchain=BlockChain.ETHEREUM_MAINNET,
+                collection_id=Address("Collection ID"),
+                token_id=HexInt("0x10"),
+                account=Address("Account"),
+                quantity=HexInt("0x3"),
+                data_version=11,
+            )
+            await self.__data_service.update_token_owner(token_owner)
+            self.assertIn(
+                f"DEBUG:{blockcrawler.LOGGER_NAME}:Owner for "
+                f"ethereum-mainnet:Account:Collection ID:0x10 not updated -- version too old -- "
+                f"11 -- {token_owner}",
+                cm.output,
+            )
+
+    async def test_update_token_owner_hits_stat_for_condition_check_fails(self):
+        self.__table_resource.update_item.side_effect = (
+            self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
+        )
+        await self.__data_service.update_token_owner(
+            TokenOwner(
+                blockchain=BlockChain.ETHEREUM_MAINNET,
+                collection_id=Address("Collection ID"),
+                token_id=HexInt("0x10"),
+                account=Address("Account"),
+                quantity=HexInt("0x3"),
+                data_version=11,
+            )
+        )
+        self.__stats_service.increment.assert_has_calls(
+            [call(data_services.STAT_TOKEN_OWNER_UPDATE_DATA_TOO_OLD)]
+        )
+
+    async def test_update_token_owner_increments_count_stat(self):
+        await self.__data_service.update_token_owner(
+            TokenOwner(
+                blockchain=BlockChain.ETHEREUM_MAINNET,
+                collection_id=Address("Collection ID"),
+                token_id=HexInt("0x10"),
+                account=Address("Account"),
+                quantity=HexInt("0x3"),
+                data_version=11,
+            )
+        )
+        self.__stats_service.increment.assert_has_calls(
+            [call(data_services.STAT_TOKEN_OWNER_UPDATE)]
+        )
+
+    async def test_update_token_owner_hits_timer_stat(self):
+        await self.__data_service.update_token_owner(
+            TokenOwner(
+                blockchain=BlockChain.ETHEREUM_MAINNET,
+                collection_id=Address("Collection ID"),
+                token_id=HexInt("0x10"),
+                account=Address("Account"),
+                quantity=HexInt("0x3"),
+                data_version=11,
+            )
+        )
+        self.__stats_service.ms_counter.assert_called_once_with(
+            data_services.STAT_TOKEN_OWNER_UPDATE_MS
+        )
+
+    async def test_delete_zero_quantity_token_owner_uses_owner_table_with_prefix_prepended(self):
+        await self.__data_service.delete_token_owner_with_zero_tokens(
             blockchain=BlockChain.ETHEREUM_MAINNET,
             collection_id=Address("Collection ID"),
             token_id=HexInt("0x10"),
             account=Address("Account"),
-            quantity=HexInt("0x1"),
-            data_version=11,
+        )
+        self.__dynamodb.Table.assert_awaited_once_with("preowner")
+
+    async def test_delete_zero_quantity_token_owner_stores_correct_data(self):
+        await self.__data_service.delete_token_owner_with_zero_tokens(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("Collection ID"),
+            token_id=HexInt("0x10"),
+            account=Address("Account"),
+        )
+        self.__table_resource.delete_item.assert_awaited_once_with(
+            Key=dict(
+                blockchain_account="ethereum-mainnet::Account",
+                collection_id_token_id="Collection ID::0x10",
+            ),
+            ConditionExpression="quantity = :quantity",
+            ExpressionAttributeValues={
+                ":quantity": 0,
+            },
         )
 
-        self.__table_resource.put_item.side_effect = (
+    async def test_delete_zero_quantity_token_owner_ignores_condition_fail(self):
+        self.__table_resource.delete_item.side_effect = (
             self.__dynamodb.meta.client.exceptions.ConditionalCheckFailedException
         )
-        with self.assertRaises(DataVersionTooOldException):
-            await self.__data_service.write_token_owner(token_owner)
-            self.__table_resource.put_item.assert_awaited_once()
+        await self.__data_service.delete_token_owner_with_zero_tokens(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("Collection ID"),
+            token_id=HexInt("0x10"),
+            account=Address("Account"),
+        )
+
+    async def test_delete_zero_quantity_token_owner_increments_count_stat(self):
+        await self.__data_service.delete_token_owner_with_zero_tokens(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("Collection ID"),
+            token_id=HexInt("0x10"),
+            account=Address("Account"),
+        )
+        self.__stats_service.increment.assert_has_calls(
+            [call(data_services.STAT_TOKEN_OWNER_DELETE_ZERO)]
+        )
+
+    async def test_delete_zero_quantity_token_owner_hits_timer_stat(self):
+        await self.__data_service.delete_token_owner_with_zero_tokens(
+            blockchain=BlockChain.ETHEREUM_MAINNET,
+            collection_id=Address("Collection ID"),
+            token_id=HexInt("0x10"),
+            account=Address("Account"),
+        )
+        self.__stats_service.ms_counter.assert_called_once_with(
+            data_services.STAT_TOKEN_OWNER_DELETE_ZERO_MS
+        )
 
     async def test_write_token_owner_batch_uses_owner_table_with_prefix_prepended(self):
         token_owner = TokenOwner(
