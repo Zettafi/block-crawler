@@ -111,7 +111,8 @@ class ParallelDataBus(DataBus):
     Data Bus implementation which will send the data packages to consumers in parallel.
     """
 
-    def __init__(self, logger: Logger) -> None:
+    def __init__(self, logger: Logger, *, raise_on_exception=False) -> None:
+        self.__raise_on_exception = raise_on_exception
         self.__tasks: List[Task] = []
         self.__logger: Logger = logger
         self.__consumers: List[Consumer] = []
@@ -120,6 +121,7 @@ class ParallelDataBus(DataBus):
     async def __aenter__(self):
         self.__logger.debug("STARTING TASK WATCHER")
         self.__task_watcher_task = asyncio.get_running_loop().create_task(self.__task_watcher())
+        self.__task_watcher_exception: Optional[Exception] = None
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -138,6 +140,8 @@ class ParallelDataBus(DataBus):
         self.__logger.debug("STOPPING TASK WATCHER")
         if self.__task_watcher_task is not None:
             self.__task_watcher_task.cancel()
+        if self.__task_watcher_exception:
+            raise self.__task_watcher_exception
 
     async def send(self, data_package: DataPackage):
         self.__logger.debug("RECEIVED DATA PACKAGE", extra={"data_package": data_package})
@@ -150,6 +154,8 @@ class ParallelDataBus(DataBus):
                 await self.__add_task(consumer.receive(data_package))
                 await asyncio.sleep(0)  # Allow task to start before continuing
             except Exception as e:
+                if self.__raise_on_exception:
+                    raise
                 self.__logger.exception("Error sending data package to consumer", exc_info=e)
 
     async def register(self, consumer: Consumer):
@@ -164,6 +170,8 @@ class ParallelDataBus(DataBus):
             for index, task in enumerate(self.__tasks):
                 if task.done():
                     if exc_info := task.exception():
+                        if self.__raise_on_exception:
+                            self.__task_watcher_exception = exc_info
                         if isinstance(exc_info, ConsumerError):
                             self.__logger.error(exc_info)
                         else:

@@ -69,8 +69,9 @@ async def _evm_block_crawler_data_bus_factory(
     rpc_client: EvmRpcClient,
     blockchain: BlockChain,
     data_version: int,
+    raise_on_exception: bool,
 ):
-    data_bus = ParallelDataBus(logger)
+    data_bus = ParallelDataBus(logger, raise_on_exception=raise_on_exception)
     data_service = DynamoDbDataService(dynamodb, stats_service, table_prefix)
     await data_bus.register(
         BlockIdToEvmBlockTransformer(
