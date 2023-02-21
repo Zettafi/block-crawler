@@ -1,3 +1,10 @@
+# Version 1.1.1
+
+- nft tail fixed to get the block height on start
+- nft tail fixed to properly log exceptions
+- Allow for empty transactions list in EVM RPC Client as it can actually happen
+- Log unrecoverable issues rather than raise
+
 # Version 1.1.0
 
 - Moved all data processing into the data service

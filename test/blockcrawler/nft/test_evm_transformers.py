@@ -1,3 +1,4 @@
+import logging
 import unittest
 from typing import Dict, Union, Any
 from unittest import IsolatedAsyncioTestCase
@@ -8,7 +9,8 @@ from eth_abi import encode
 from eth_abi.exceptions import NonEmptyPaddingBytes
 from hexbytes import HexBytes
 
-from blockcrawler.core.bus import DataBus, DataPackage, ConsumerError
+import blockcrawler
+from blockcrawler.core.bus import DataBus, DataPackage
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
 from blockcrawler.core.types import Address, HexInt
@@ -701,12 +703,19 @@ class EvmTransactionReceiptToNftCollectionTransformerTestCase(IsolatedAsyncioTes
             )
         )
 
-    async def test_raises_consumer_error_for_rpc_client_error(self):
+    async def test_logs_error_for_rpc_client_error(self):
         self.__call_function_results[Erc165Functions.SUPPORTS_INTERFACE.function_signature_hash] = {
             Erc165InterfaceID.ERC721.bytes: Exception("x")
         }
-        with self.assertRaises(ConsumerError):
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.ERROR) as cm:
             await self.__transformer.receive(self.__default_data_package)
+            self.assertIn(
+                f"ERROR:block-crawler:Unable to create collection from contract "
+                f"{self.__default_data_package.transaction_receipt.contract_address} "
+                f"created in block {self.__default_data_package.block.number.hex_value} "
+                f"due to error -- {Exception('x')}",
+                cm.output,
+            )
 
 
 class EvmLogErc721TransferToNftTokenTransferTestCase(IsolatedAsyncioTestCase):
@@ -1216,7 +1225,7 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformerTestCase(Isolate
                 to=str(self.__data_package.token_transfer.collection_id),
                 function=Erc721MetadataFunctions.TOKEN_URI,
                 parameters=[self.__data_package.token_transfer.token_id.int_value],
-                block=self.__data_package.token_transfer.block_id.hex_value,
+                block=self.__data_package.token_transfer.block_id,
             )
         )
 
@@ -1231,21 +1240,16 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformerTestCase(Isolate
     async def test_logs_consumer_error_for_not_32000_error_codes(self, error):
         self.__rpc_client.call.side_effect = error
 
-        with self.assertRaises(ConsumerError) as actual:
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.ERROR) as cm:
             await self.__transformer.receive(self.__data_package)
+            self.assertIn(
+                f"ERROR:block-crawler:Unable to retrieve metadata URI for Token ID "
+                f"{self.__data_package.token_transfer.token_id.int_value} in Collection "
+                f"{self.__data_package.token_transfer.collection_id} created in block "
+                f"{self.__data_package.token_transfer.block_id.hex_value} -- {error}",
+                cm.output,
+            )
 
-        message = str(actual.exception)
-        self.assertIn(
-            self.__data_package.token_transfer.collection_id,
-            message,
-            "Expected collection ID in error",
-        )
-        self.assertIn(
-            str(self.__data_package.token_transfer.token_id.int_value),
-            message,
-            "Expected token ID in error",
-        )
-        self.__rpc_client.call.assert_awaited_once()
         self.__data_bus.send.assert_not_called()
 
 

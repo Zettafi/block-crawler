@@ -1,15 +1,16 @@
 import asyncio
+import logging
 import re
 from abc import ABC
 from typing import Tuple, Optional
 
 from eth_abi import decode
 
+import blockcrawler
 from blockcrawler.core.bus import (
     Transformer,
     DataPackage,
     DataBus,
-    ConsumerError,
 )
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
@@ -52,6 +53,7 @@ class EvmTransactionReceiptToNftCollectionTransformer(Transformer):
         self.__blockchain = blockchain
         self.__rpc_client = rpc_client
         self.__data_version = data_version
+        self.__logger = logging.getLogger(blockcrawler.LOGGER_NAME)
 
     async def receive(self, data_package: DataPackage):
         if not isinstance(data_package, EvmTransactionReceiptDataPackage):
@@ -131,13 +133,12 @@ class EvmTransactionReceiptToNftCollectionTransformer(Transformer):
                 total_supply=HexInt(hex(total_supply)) if total_supply is not None else None,
                 data_version=self.__data_version,
             )
+            await self._get_data_bus().send(CollectionDataPackage(collection))
         except Exception as e:
-            raise ConsumerError(
+            self.__logger.error(
                 f"Unable to create collection from contract {contract_id} created in "
                 f"block {data_package.block.number.hex_value} due to error -- {e}"
             )
-
-        await self._get_data_bus().send(CollectionDataPackage(collection))
 
     async def __get_contract_metadata(
         self, contract_address, is_erc721
@@ -383,6 +384,7 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(Transformer):
     ) -> None:
         super().__init__(data_bus)
         self.__rpc_client = rpc_client
+        self.__logger = logging.getLogger(blockcrawler.LOGGER_NAME)
 
     async def receive(self, data_package: DataPackage):
         if (
@@ -403,29 +405,30 @@ class Erc721TokenTransferToNftTokenMetadataUriUpdatedTransformer(Transformer):
                     block=data_package.token_transfer.block_id,
                 )
             )
+
+            uri_update_data_package = TokenMetadataUriUpdatedDataPackage(
+                blockchain=data_package.token_transfer.blockchain,
+                collection_id=data_package.token_transfer.collection_id,
+                token_id=data_package.token_transfer.token_id,
+                metadata_url=metadata_uri,
+                metadata_url_version=data_package.token_transfer.attribute_version,
+                data_version=data_package.token_transfer.data_version,
+            )
+
+            await self._get_data_bus().send(uri_update_data_package)
+
         except Exception as e:
             if isinstance(e, RpcServerError) and e.error_code == -32000:
                 # -32000 is the error when contract does not have function. It's expected sometimes.
                 return
 
-            raise ConsumerError(
+            self.__logger.error(
                 f"Unable to retrieve metadata URI for Token ID "
                 f"{data_package.token_transfer.token_id.int_value} in "
                 f"Collection {data_package.token_transfer.collection_id} "
                 f"created in block {data_package.token_transfer.block_id.hex_value}"
                 f" -- {e}"
             )
-
-        uri_update_data_package = TokenMetadataUriUpdatedDataPackage(
-            blockchain=data_package.token_transfer.blockchain,
-            collection_id=data_package.token_transfer.collection_id,
-            token_id=data_package.token_transfer.token_id,
-            metadata_url=metadata_uri,
-            metadata_url_version=data_package.token_transfer.attribute_version,
-            data_version=data_package.token_transfer.data_version,
-        )
-
-        await self._get_data_bus().send(uri_update_data_package)
 
 
 class EvmForceLoadContractTransformer(Transformer):
