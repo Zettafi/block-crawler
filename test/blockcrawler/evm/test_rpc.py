@@ -682,16 +682,21 @@ class GetBlockTestCase(BaseRPCClientTestCase):
     async def test_handles_null_transactions_in_full_transactions_mode(self):
         self._rpc_response["result"]["transactions"] = None
         with self.assertRaisesRegex(
-            RpcClientError, "Error retrieving block: no transactions returned"
+            RpcClientError, "Error retrieving block: transactions attribute was null"
         ):
             await self._rpc_client.get_block(HexInt(1), True)
 
     async def test_handles_null_transactions_in_transaction_hashes_mode(self):
         self._rpc_response["result"]["transactions"] = None
         with self.assertRaisesRegex(
-            RpcClientError, "Error retrieving block: no transactions returned"
+            RpcClientError, "Error retrieving block: transactions attribute was null"
         ):
             await self._rpc_client.get_block(HexInt(1), False)
+
+    async def test_handles_null_block(self):
+        self._rpc_response["result"] = None
+        with self.assertRaisesRegex(RpcClientError, "Error retrieving block: no block returned"):
+            await self._rpc_client.get_block(HexInt(1), True)
 
 
 class GetBlockNumberTestCase(BaseRPCClientTestCase):

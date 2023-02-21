@@ -138,9 +138,13 @@ class EvmRpcClient(RpcClient):
         """  # noqa: E501
 
         result = await self.send("eth_getBlockByNumber", block_num.hex_value, full_transactions)
-        if not result["transactions"]:
+
+        if result is None:
+            raise RpcClientError("Error retrieving block: no block returned")
+
+        if result["transactions"] is None:
             # Sometimes, nodes return no transactions. Blocks must have transactions.
-            raise RpcClientError("Error retrieving block: no transactions returned")
+            raise RpcClientError("Error retrieving block: transactions attribute was null")
 
         if full_transactions:
             transactions = [

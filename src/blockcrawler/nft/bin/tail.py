@@ -133,7 +133,7 @@ async def run_tail(
             )
             with SignalManager() as signal_manager:
                 block_processing = last_block_processed + 1  # Start processing the next block
-                block_height = block_processing + 1  # Set equal to trigger get_block_number
+                block_height = last_block_processed  # Set equal to trigger get_block_number
                 total_process_time: float = float(
                     process_interval
                 )  # Set equal to make initial delay 0.0
@@ -174,7 +174,7 @@ async def run_tail(
                             )
                             block_processing += 1
                         except Exception as e:
-                            logger.exception(f"Error processing block {block_height}", e)
+                            logger.exception(f"Error processing block {block_height} -- {e}")
 
                     else:
                         logger.warning(
