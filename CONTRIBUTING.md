@@ -25,7 +25,7 @@ for non-local services.
 
 Example reset of DynamoDB
 ```bash
-block-crawler dev reset http://localhost:8000 db
+block-crawler dev reset-db http://localhost:8000
 ```
 
 ## Running the Crawler
