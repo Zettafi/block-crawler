@@ -39,7 +39,7 @@ Example reset of DynamoDB:
 
 .. code-block:: bash
 
-    block-crawler dev reset http://localhost:8000 db
+    block-crawler dev reset-db http://localhost:8000
 
 Running the Crawler
 -------------------
