@@ -99,8 +99,15 @@ class EvmTransactionHashToEvmTransactionReceiptBatchTransformerTestCase(Isolated
         )
 
     async def test_ignores_non_block_id_data_packages(self):
-        # noinspection PyTypeChecker
-        await self.__transformer.receive([None])
+        await self.__transformer.receive(DataPackage())
+        self.__data_bus.send.assert_not_awaited()
+        self.__rpc_client.get_transaction_receipt.assert_not_awaited()
+
+    async def test_ignores_other_blockchains(self):
+        blockchain = MagicMock(BlockChain)
+        await self.__transformer.receive(
+            EvmTransactionHashDataPackage(blockchain, HexBytes("0x11"), MagicMock(EvmBlock))
+        )
         self.__data_bus.send.assert_not_awaited()
         self.__rpc_client.get_transaction_receipt.assert_not_awaited()
 
@@ -156,11 +163,13 @@ class EvmTransactionReceiptToEvmLogTransformerTestCase(IsolatedAsyncioTestCase):
 class EvmBlockIdToEvmBlockAndEvmTransactionTransformerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__data_bus = AsyncMock(DataBus)
+        self.__blockchain = MagicMock(BlockChain)
         self.__block_time_service = AsyncMock(BlockTimeService)
         self.__rpc_client = AsyncMock(EvmRpcClient)
 
         self.__transformer = EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(
             self.__data_bus,
+            self.__blockchain,
             self.__block_time_service,
             self.__rpc_client,
         )
@@ -174,42 +183,42 @@ class EvmBlockIdToEvmBlockAndEvmTransactionTransformerTestCase(IsolatedAsyncioTe
     async def test_ignores_other_data_packages(self):
         await self.__transformer.receive(DataPackage())
 
-    async def test_calls_rpc_client_get_block_with_proper_block_id_param(self):
+    async def test_ignores_other_blockchains(self):
         block_id = HexInt(433685734)
         blockchain = MagicMock(BlockChain)
         await self.__transformer.receive(EvmBlockIDDataPackage(blockchain, block_id))
+
+    async def test_calls_rpc_client_get_block_with_proper_block_id_param(self):
+        block_id = HexInt(433685734)
+        await self.__transformer.receive(EvmBlockIDDataPackage(self.__blockchain, block_id))
         self.__rpc_client.get_block.assert_awaited_once_with(block_id, ANY)
 
     async def test_calls_rpc_client_get_block_with_proper_full_transactions_param(self):
         block_id = HexInt(433685734)
-        blockchain = MagicMock(BlockChain)
-        await self.__transformer.receive(EvmBlockIDDataPackage(blockchain, block_id))
+        await self.__transformer.receive(EvmBlockIDDataPackage(self.__blockchain, block_id))
         self.__rpc_client.get_block.assert_awaited_once_with(ANY, True)
 
     async def test_stores_block_timestamp_in_block_time_service(self):
         self.__get_block_response.timestamp = HexInt(297602976905874)
         block_id = HexInt(433685734)
-        blockchain = MagicMock(BlockChain)
-        await self.__transformer.receive(EvmBlockIDDataPackage(blockchain, block_id))
+        await self.__transformer.receive(EvmBlockIDDataPackage(self.__blockchain, block_id))
         self.__block_time_service.set_block_timestamp.assert_awaited_once_with(
             block_id, 297602976905874
         )
 
     async def test_places_block_data_package_on_bus(self):
-        blockchain = MagicMock(BlockChain)
-        expected = EvmBlockDataPackage(blockchain, self.__get_block_response)
-        await self.__transformer.receive(EvmBlockIDDataPackage(blockchain, HexInt(0)))
+        expected = EvmBlockDataPackage(self.__blockchain, self.__get_block_response)
+        await self.__transformer.receive(EvmBlockIDDataPackage(self.__blockchain, HexInt(0)))
         self.__data_bus.send.assert_awaited_once_with(expected)
 
     async def test_places_transaction_data_packages_on_bus(self):
-        blockchain = MagicMock(BlockChain)
         transactions = [MagicMock(EvmTransaction), MagicMock(EvmTransaction)]
         self.__get_block_response.transactions = transactions
         expected_calls = [
             call(
                 (
                     EvmTransactionDataPackage(
-                        blockchain=blockchain,
+                        blockchain=self.__blockchain,
                         transaction=transactions[0],
                         block=self.__get_block_response,
                     )
@@ -218,25 +227,24 @@ class EvmBlockIdToEvmBlockAndEvmTransactionTransformerTestCase(IsolatedAsyncioTe
             call(
                 (
                     EvmTransactionDataPackage(
-                        blockchain=blockchain,
+                        blockchain=self.__blockchain,
                         transaction=transactions[1],
                         block=self.__get_block_response,
                     )
                 )
             ),
         ]
-        await self.__transformer.receive(EvmBlockIDDataPackage(blockchain, HexInt(0)))
+        await self.__transformer.receive(EvmBlockIDDataPackage(self.__blockchain, HexInt(0)))
         self.__data_bus.send.assert_has_awaits(expected_calls, any_order=True)
 
     async def test_places_transaction_hash_data_packages_on_bus(self):
-        blockchain = MagicMock(BlockChain)
         transaction_hashes = [HexBytes(b"1"), HexBytes(b"2")]
         self.__get_block_response.transaction_hashes = transaction_hashes
         expected_calls = [
             call(
                 (
                     EvmTransactionHashDataPackage(
-                        blockchain=blockchain,
+                        blockchain=self.__blockchain,
                         hash=transaction_hashes[0],
                         block=self.__get_block_response,
                     )
@@ -245,14 +253,14 @@ class EvmBlockIdToEvmBlockAndEvmTransactionTransformerTestCase(IsolatedAsyncioTe
             call(
                 (
                     EvmTransactionHashDataPackage(
-                        blockchain=blockchain,
+                        blockchain=self.__blockchain,
                         hash=transaction_hashes[1],
                         block=self.__get_block_response,
                     )
                 )
             ),
         ]
-        await self.__transformer.receive(EvmBlockIDDataPackage(blockchain, HexInt(0)))
+        await self.__transformer.receive(EvmBlockIDDataPackage(self.__blockchain, HexInt(0)))
         self.__data_bus.send.assert_has_awaits(expected_calls, any_order=True)
 
     async def test_block_without_full_transactions_raises_consumer_error(self):
@@ -260,20 +268,19 @@ class EvmBlockIdToEvmBlockAndEvmTransactionTransformerTestCase(IsolatedAsyncioTe
         with self.assertRaisesRegex(
             ConsumerError, "Block returned did not have full transactions!"
         ):
-            await self.__transformer.receive(
-                EvmBlockIDDataPackage(MagicMock(BlockChain), HexInt(0))
-            )
+            await self.__transformer.receive(EvmBlockIDDataPackage(self.__blockchain, HexInt(0)))
 
 
 class EvmTransactionToContractEvmTransactionTransformerTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__data_bus = AsyncMock(DataBus)
+        self.__blockchain = AsyncMock(BlockChain)
         self.__rpc_client = AsyncMock(EvmRpcClient)
         self.__get_txr_response = AsyncMock(EvmTransactionReceipt)
         self.__get_txr_response.contract_address = None
         self.__rpc_client.get_transaction_receipt.return_value = self.__get_txr_response
         self.__transformer = EvmTransactionToContractEvmTransactionReceiptTransformer(
-            self.__data_bus, self.__rpc_client
+            self.__data_bus, self.__blockchain, self.__rpc_client
         )
         self.__transaction = MagicMock(EvmTransaction)
         self.__transaction.to_ = None
@@ -289,13 +296,20 @@ class EvmTransactionToContractEvmTransactionTransformerTestCase(IsolatedAsyncioT
 
     async def test_ignores_other_data_packages(self):
         await self.__transformer.receive(DataPackage())
+        self.assertEqual([], self.__rpc_client.mock_calls)
 
-    async def test_does_not_get_transaction_receipt_when_transaction_to_is_not_null(self):
-        self.__transaction.to_ = Address("Me")
+    async def test_ignores_other_blockchains(self):
         await self.__transformer.receive(
             EvmTransactionDataPackage(
                 MagicMock(BlockChain), self.__transaction, MagicMock(EvmBlock)
             )
+        )
+        self.assertEqual([], self.__rpc_client.mock_calls)
+
+    async def test_does_not_get_transaction_receipt_when_transaction_to_is_not_null(self):
+        self.__transaction.to_ = Address("Me")
+        await self.__transformer.receive(
+            EvmTransactionDataPackage(self.__blockchain, self.__transaction, MagicMock(EvmBlock))
         )
         self.__rpc_client.get_transaction_receipt.assert_not_called()
 
@@ -303,31 +317,28 @@ class EvmTransactionToContractEvmTransactionTransformerTestCase(IsolatedAsyncioT
         self.__transaction.to_ = None
         self.__transaction.hash = HexBytes(b"hash")
         await self.__transformer.receive(
-            EvmTransactionDataPackage(
-                MagicMock(BlockChain), self.__transaction, MagicMock(EvmBlock)
-            )
+            EvmTransactionDataPackage(self.__blockchain, self.__transaction, MagicMock(EvmBlock))
         )
         self.__rpc_client.get_transaction_receipt.assert_awaited_once_with(HexBytes(b"hash"))
 
     async def test_does_not_send_transaction_receipt_when_address_is_none(self):
         self.__get_txr_response.contract_address = None
         await self.__transformer.receive(
-            EvmTransactionDataPackage(
-                MagicMock(BlockChain), self.__transaction, MagicMock(EvmBlock)
-            )
+            EvmTransactionDataPackage(self.__blockchain, self.__transaction, MagicMock(EvmBlock))
         )
         self.__rpc_client.get_transaction_receipt.assert_awaited()
         self.__data_bus.send.assert_not_called()
 
     async def test_sends_transaction_receipt_when_address_is_not_none(self):
         self.__get_txr_response.contract_address = Address("ct addr")
-        blockchain = MagicMock(BlockChain)
         block = MagicMock(EvmBlock)
         await self.__transformer.receive(
-            EvmTransactionDataPackage(blockchain, self.__transaction, block)
+            EvmTransactionDataPackage(self.__blockchain, self.__transaction, block)
         )
         self.__data_bus.send.assert_awaited_once_with(
             EvmTransactionReceiptDataPackage(
-                blockchain=blockchain, transaction_receipt=self.__get_txr_response, block=block
+                blockchain=self.__blockchain,
+                transaction_receipt=self.__get_txr_response,
+                block=block,
             )
         )

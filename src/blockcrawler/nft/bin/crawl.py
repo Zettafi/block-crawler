@@ -2,7 +2,6 @@ import asyncio
 import logging
 import time
 from asyncio import CancelledError
-from logging import Logger
 from typing import Dict, Union, Iterable
 
 import aioboto3
@@ -10,6 +9,7 @@ import click
 import math
 from botocore.config import Config as BotoConfig
 
+import blockcrawler
 from blockcrawler import LOGGER_NAME
 from blockcrawler.core.bus import SignalManager
 from blockcrawler.core.click import HexIntParamType
@@ -62,6 +62,7 @@ def crawl(
     ENDING_BLOCK , parse the data we want to collect and put that data in the database
     """
 
+    logger = logging.getLogger(blockcrawler.LOGGER_NAME)
     block_bound_tracker = BlockBoundTracker()
     stats_writer = StatsWriter(config.stats_service, block_bound_tracker)
     loop = asyncio.new_event_loop()
@@ -71,7 +72,6 @@ def crawl(
     try:
         loop.run_until_complete(
             run_crawl(
-                logger=config.logger,
                 stats_service=config.stats_service,
                 rpc_client=config.evm_rpc_client,
                 boto3_session=aioboto3.Session(),
@@ -87,7 +87,7 @@ def crawl(
             )
         )
     except KeyboardInterrupt:
-        config.logger.info("Processing interrupted by user!")
+        logger.info("Processing interrupted by user!")
     finally:
         stats_task.cancel()
         while loop.is_running():
@@ -100,7 +100,7 @@ def crawl(
         mins = all_mins % 60
         hours = math.floor(all_mins / 60)
         stats_writer.write_line()
-        config.logger.info(
+        logger.info(
             f"Total Time: {hours}:{mins:02}:{secs:05.2F}"
             f" -- Blocks {starting_block.int_value:,} to {ending_block.int_value:,}"
         )
@@ -133,7 +133,6 @@ class StatsWriter:
 
 
 async def run_crawl(
-    logger: Logger,
     stats_service: StatsService,
     rpc_client: EvmRpcClient,
     boto3_session: aioboto3.Session,
@@ -165,7 +164,6 @@ async def run_crawl(
                 stats_service=stats_service,
                 dynamodb=dynamodb,
                 table_prefix=table_prefix,
-                logger=logger,
                 rpc_client=rpc_client,
                 blockchain=blockchain,
                 data_version=data_version,

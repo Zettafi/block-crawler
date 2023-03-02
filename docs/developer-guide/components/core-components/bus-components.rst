@@ -81,7 +81,7 @@ Complete Simple Example
 .. literalinclude:: /_examples/core_bus_example.py
    :language: python
 
-Executing the above example will result in following displayed in the console:
+Executing the above example will result in the following displayed in the console:
 
 .. line-block::
     1,000

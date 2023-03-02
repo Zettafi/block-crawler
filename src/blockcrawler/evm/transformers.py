@@ -25,7 +25,10 @@ class BlockIdToEvmBlockTransformer(Transformer):
         self.__rpc_client = rpc_client
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, EvmBlockIDDataPackage):
+        if (
+            not isinstance(data_package, EvmBlockIDDataPackage)
+            or data_package.blockchain != self.__blockchain
+        ):
             return
         block = await self.__rpc_client.get_block(data_package.block_id)
         data_package = EvmBlockDataPackage(self.__blockchain, block)
@@ -44,14 +47,22 @@ class EvmBlockToEvmTransactionHashTransformer(Transformer):
 
 class EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(Transformer):
     def __init__(
-        self, data_bus: DataBus, block_time_service: BlockTimeService, rpc_client: EvmRpcClient
+        self,
+        data_bus: DataBus,
+        blockchain: BlockChain,
+        block_time_service: BlockTimeService,
+        rpc_client: EvmRpcClient,
     ) -> None:
         super().__init__(data_bus)
+        self.__blockchain = blockchain
         self.__block_time_service = block_time_service
         self.__rpc_client = rpc_client
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, EvmBlockIDDataPackage):
+        if (
+            not isinstance(data_package, EvmBlockIDDataPackage)
+            or data_package.blockchain != self.__blockchain
+        ):
             return
 
         try:
@@ -83,7 +94,10 @@ class EvmTransactionHashToEvmTransactionReceiptTransformer(Transformer):
         self.__rpc_client = rpc_client
 
     async def receive(self, data_package: DataPackage):
-        if not isinstance(data_package, EvmTransactionHashDataPackage):
+        if (
+            not isinstance(data_package, EvmTransactionHashDataPackage)
+            or data_package.blockchain != self.__blockchain
+        ):
             return
 
         try:
@@ -116,13 +130,15 @@ class EvmTransactionReceiptToEvmLogTransformer(Transformer):
 
 
 class EvmTransactionToContractEvmTransactionReceiptTransformer(Transformer):
-    def __init__(self, data_bus: DataBus, rpc_client: EvmRpcClient) -> None:
+    def __init__(self, data_bus: DataBus, blockchain: BlockChain, rpc_client: EvmRpcClient) -> None:
         super().__init__(data_bus)
+        self.__blockchain = blockchain
         self.__rpc_client = rpc_client
 
     async def receive(self, data_package: DataPackage):
         if (
             not isinstance(data_package, EvmTransactionDataPackage)
+            or data_package.blockchain != self.__blockchain
             or data_package.transaction.to_ is not None
         ):
             # If not transaction package or has "to" address, it's not contract creation

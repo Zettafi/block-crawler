@@ -37,7 +37,7 @@ Complete Simple Example
 .. literalinclude:: /_examples/core_rpc_example.py
    :language: python
 
-Executing the above example will result in something similar to following being
+Executing the above example will result in something similar to the following being
 displayed in the console:
 
 .. line-block::

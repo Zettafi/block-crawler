@@ -1,8 +1,8 @@
 import asyncio
+import logging
 import os
 import pathlib
 import time
-from logging import Logger
 from typing import Optional, Dict, Union, Iterable
 
 import aioboto3
@@ -10,6 +10,7 @@ import click
 import math
 from botocore.config import Config as BotoConfig
 
+import blockcrawler
 from blockcrawler.core.bus import ParallelDataBus
 from blockcrawler.core.click import HexIntParamType
 from blockcrawler.core.entities import BlockChain
@@ -94,7 +95,8 @@ def load(
     BLOCK_HEIGHT. Multiple runs will require the same data version and BLOCK_HEIGHT to
     ensure accurate data.
     """
-    block_time_cache = _get_block_time_cache(block_time_cache_filename, config)
+    logger = logging.getLogger(blockcrawler.LOGGER_NAME)
+    block_time_cache = _get_block_time_cache(block_time_cache_filename, logger)
     block_bound_tracker = BlockBoundTracker()
     stats_writer = StatsWriter(config.stats_service, LineWriter(block_bound_tracker))
     loop = asyncio.new_event_loop()
@@ -110,7 +112,6 @@ def load(
                 block_height=block_height,
                 increment_data_version=increment_data_version,
                 block_chunk_size=block_chunk_size,
-                logger=config.logger,
                 stats_service=config.stats_service,
                 block_time_cache=block_time_cache,
                 evm_rpc_client=config.evm_rpc_client,
@@ -123,13 +124,13 @@ def load(
             )
         )
     except KeyboardInterrupt:
-        config.logger.info("Processing interrupted by user!")
+        logger.info("Processing interrupted by user!")
     finally:
         stats_task.cancel()
         while loop.is_running():
             time.sleep(0.001)
 
-        _persist_block_time_cache(config, block_time_cache, block_time_cache_filename)
+        _persist_block_time_cache(logger, block_time_cache, block_time_cache_filename)
         end = time.perf_counter()
         runtime = end - start
         secs = runtime % 60
@@ -137,7 +138,7 @@ def load(
         mins = all_mins % 60
         hours = math.floor(all_mins / 60)
         stats_writer.write_line()
-        config.logger.info(
+        logger.info(
             f"Total Time: {hours}:{mins:02}:{secs:05.2F}"
             f" -- Blocks {starting_block.int_value:,} to {ending_block.int_value:,}"
             f" at block height {block_height.int_value:,}"
@@ -162,7 +163,6 @@ async def run_load(
     block_height: HexInt,
     increment_data_version: bool,
     block_chunk_size: int,
-    logger: Logger,
     stats_service: StatsService,
     block_time_cache: BlockTimeCache,
     evm_rpc_client: EvmRpcClient,
@@ -194,12 +194,13 @@ async def run_load(
         )
 
         async with evm_rpc_client:
-            data_bus = ParallelDataBus(logger)
+            data_bus = ParallelDataBus()
             block_time_service = BlockTimeService(block_time_cache, evm_rpc_client)
 
             await data_bus.register(
                 EvmBlockIdToEvmBlockAndEvmTransactionAndEvmTransactionHashTransformer(
                     data_bus=data_bus,
+                    blockchain=blockchain,
                     rpc_client=evm_rpc_client,
                     block_time_service=block_time_service,
                 ),
@@ -207,6 +208,7 @@ async def run_load(
             await data_bus.register(
                 EvmTransactionToContractEvmTransactionReceiptTransformer(
                     data_bus=data_bus,
+                    blockchain=blockchain,
                     rpc_client=evm_rpc_client,
                 )
             )

@@ -1,6 +1,5 @@
 import csv
 import dataclasses
-import logging
 from logging import Logger
 from pathlib import Path
 from typing import Optional
@@ -58,20 +57,18 @@ class Config:
     dynamodb_timeout: float
     dynamodb_endpoint_url: str
     table_prefix: str
-    logger: logging.Logger
 
 
 async def _evm_block_crawler_data_bus_factory(
     stats_service: StatsService,
     dynamodb,
     table_prefix: str,
-    logger: Logger,
     rpc_client: EvmRpcClient,
     blockchain: BlockChain,
     data_version: int,
     raise_on_exception: bool,
 ):
-    data_bus = ParallelDataBus(logger, raise_on_exception=raise_on_exception)
+    data_bus = ParallelDataBus(raise_on_exception=raise_on_exception)
     data_service = DynamoDbDataService(dynamodb, stats_service, table_prefix)
     await data_bus.register(
         BlockIdToEvmBlockTransformer(
@@ -232,28 +229,28 @@ def _get_crawl_stat_line(stats_service: StatsService) -> str:
     return stat_line
 
 
-def _get_block_time_cache(block_time_cache_filename: Path, config: Config):
-    config.logger.info(f"Loading block time cache from file {block_time_cache_filename}")
+def _get_block_time_cache(block_time_cache_filename: Path, logger: Logger):
+    logger.info(f"Loading block time cache from file {block_time_cache_filename}")
     block_time_cache = MemoryBlockTimeCache()
     try:
         with open(block_time_cache_filename, "r") as file:
             for block_id, timestamp in csv.reader(file):
                 block_time_cache.set_sync(int(block_id), int(timestamp))
-        config.logger.info(f"Loaded block time cache from file {block_time_cache_filename}")
+        logger.info(f"Loaded block time cache from file {block_time_cache_filename}")
     except FileNotFoundError:
-        config.logger.warning(f"File {block_time_cache_filename} does not exist.")
+        logger.warning(f"File {block_time_cache_filename} does not exist.")
     return block_time_cache
 
 
 def _persist_block_time_cache(
-    config: Config, block_time_cache: BlockTimeCache, block_time_cache_filename: Path
+    logger: Logger, block_time_cache: BlockTimeCache, block_time_cache_filename: Path
 ):
-    config.logger.info(f"Saving block time cache to file {block_time_cache_filename}")
+    logger.info(f"Saving block time cache to file {block_time_cache_filename}")
     with open(block_time_cache_filename, "w+") as file:
         csv_writer = csv.writer(file)
         for row in block_time_cache:
             csv_writer.writerow(row)
-    config.logger.info(f"Saved block time cache to file {block_time_cache_filename}")
+    logger.info(f"Saved block time cache to file {block_time_cache_filename}")
 
 
 def _get_load_stat_line(stats_service: StatsService) -> str:
