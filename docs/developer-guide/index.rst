@@ -24,8 +24,8 @@ Components
 
 * :doc:`components/core-components/index` are the basic building blocks of the Block
   Crawler
-* EVM Components are extensions of core components for the purpose of crawling Ethereum
-  Virtual Machine(EVM) blockchains
+* :doc:`components/evm-components/index` are extensions of core components for the
+  purpose of crawling Ethereum Virtual Machine(EVM) blockchains
 * NFT Components are extensions of core components for the purpose of deriving NFT data
   from blockchains
 
@@ -37,3 +37,4 @@ Components
 
    getting-started
    components/core-components/index
+   components/evm-components/index

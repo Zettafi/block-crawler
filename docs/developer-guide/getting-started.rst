@@ -126,4 +126,4 @@ Once your config is all setup, you can run DynamoDB commands like this one:
 
 .. code-block:: bash
 
-    aws --endpoint-url http://localhost:8000 dynamodb scan --table-name Collections
+    aws --endpoint-url http://localhost:8000 dynamodb scan --table-name collection

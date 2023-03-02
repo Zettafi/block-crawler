@@ -14,6 +14,7 @@ import math
 from botocore.config import Config as BotoConfig
 from hexbytes import HexBytes
 
+import blockcrawler
 from blockcrawler.core.bus import ParallelDataBus
 from blockcrawler.core.click import (
     AddressParamType,
@@ -53,7 +54,6 @@ async def load_evm_contract_by_force(
     creation_transaction_hash: HexBytes,
     block_height: HexInt,
     collection_type: CollectionType,
-    logger: logging.Logger,
     stats_service: StatsService,
     block_time_cache: BlockTimeCache,
     evm_rpc_client: EvmRpcClient,
@@ -83,7 +83,7 @@ async def load_evm_contract_by_force(
         )
 
         async with evm_rpc_client:
-            data_bus = ParallelDataBus(logger)
+            data_bus = ParallelDataBus()
             block_time_service = BlockTimeService(block_time_cache, evm_rpc_client)
 
             await data_bus.register(
@@ -178,7 +178,8 @@ def force_load(
     to determine the creation data. The collection type will default to COLLECTION_TYPE
     if it cannot be determined.
     """
-    block_time_cache = _get_block_time_cache(block_time_cache_filename, config)
+    logger = logging.getLogger(blockcrawler.LOGGER_NAME)
+    block_time_cache = _get_block_time_cache(block_time_cache_filename, logger)
 
     stats_writer = StatsWriter(config.stats_service, _get_load_stat_line)
     loop = asyncio.new_event_loop()
@@ -193,7 +194,6 @@ def force_load(
                 creation_transaction_hash=creation_tx_hash,
                 block_height=block_height,
                 collection_type=default_collection_type,
-                logger=config.logger,
                 stats_service=config.stats_service,
                 block_time_cache=block_time_cache,
                 evm_rpc_client=config.evm_rpc_client,
@@ -205,13 +205,13 @@ def force_load(
             )
         )
     except KeyboardInterrupt:
-        config.logger.info("Processing interrupted by user!")
+        logger.info("Processing interrupted by user!")
     finally:
         stats_task.cancel()
         while loop.is_running():
             time.sleep(0.001)
 
-        _persist_block_time_cache(config, block_time_cache, block_time_cache_filename)
+        _persist_block_time_cache(logger, block_time_cache, block_time_cache_filename)
         end = time.perf_counter()
         runtime = end - start
         secs = runtime % 60
@@ -219,7 +219,7 @@ def force_load(
         mins = all_mins % 60
         hours = math.floor(all_mins / 60)
         stats_writer.write_line()
-        config.logger.info(
+        logger.info(
             f"Total Time: {hours}:{mins:02}:{secs:05.2F}"
             f" at block height {block_height.int_value:,}"
         )

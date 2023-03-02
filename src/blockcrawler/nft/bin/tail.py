@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from logging import Logger
 from typing import Dict, Union, cast
@@ -9,6 +10,7 @@ import click
 from boto3.dynamodb.table import TableResource
 from botocore.config import Config as BotoConfig
 
+import blockcrawler
 from blockcrawler.core.bus import SignalManager
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.stats import StatsService
@@ -52,12 +54,14 @@ def tail(
     Listen for incoming blocks in the blockchain, parse the data we want to collect
     and store that data in the database
     """
-    config.logger.info("Process initializing")
+
+    logger = logging.getLogger(blockcrawler.LOGGER_NAME)
+    logger.info("Process initializing")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(
         run_tail(
-            logger=config.logger,
+            logger=logger,
             stats_service=config.stats_service,
             evm_rpc_client=config.evm_rpc_client,
             boto3_session=aioboto3.Session(),
@@ -71,7 +75,7 @@ def tail(
     )
     while loop.is_running():
         time.sleep(0.001)
-    config.logger.info("Process complete")
+    logger.info("Process complete")
 
 
 async def run_tail(
@@ -103,7 +107,6 @@ async def run_tail(
                 stats_service=stats_service,
                 dynamodb=dynamodb,
                 table_prefix=table_prefix,
-                logger=logger,
                 rpc_client=evm_rpc_client,
                 blockchain=blockchain,
                 data_version=data_version,

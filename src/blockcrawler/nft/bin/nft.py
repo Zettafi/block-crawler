@@ -122,7 +122,6 @@ def nft(
         dynamodb_timeout=dynamodb_timeout,
         dynamodb_endpoint_url=dynamodb_endpoint_url,
         table_prefix=dynamodb_table_prefix,
-        logger=logger,
     )
 
 

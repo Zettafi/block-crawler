@@ -59,7 +59,7 @@ class DataBus(ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    async def __aenter__(self):
+    async def __aenter__(self) -> "DataBus":
         """
         Asynchronous context manager entrypoint. This should be used to set up any
         asynchronous components in the data bus.
@@ -111,20 +111,20 @@ class ParallelDataBus(DataBus):
     Data Bus implementation which will send the data packages to consumers in parallel.
     """
 
-    def __init__(self, logger: Logger, *, raise_on_exception=False) -> None:
+    def __init__(self, *, raise_on_exception=False) -> None:
         self.__raise_on_exception = raise_on_exception
         self.__tasks: List[Task] = []
-        self.__logger: Logger = logger
+        self.__logger: Logger = logging.getLogger(blockcrawler.LOGGER_NAME)
         self.__consumers: List[Consumer] = []
         self.__task_watcher_task: Optional[Task] = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "ParallelDataBus":
         self.__logger.debug("STARTING TASK WATCHER")
         self.__task_watcher_task = asyncio.get_running_loop().create_task(self.__task_watcher())
         self.__task_watcher_exception: Optional[Exception] = None
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         self.__logger.debug("WAITING FOR CONSUMERS TO COMPLETE")
 
         while True:

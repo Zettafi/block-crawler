@@ -1,3 +1,9 @@
+# Version 1.2.0
+
+- Standardize on providing blockchain to EVM transformers and only process data packages
+  for the same blockchain 
+- Remove loggers from class init methods. Let them get the loggers themselves.
+
 # Version 1.1.1
 
 - nft tail fixed to get the block height on start

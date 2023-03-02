@@ -1,12 +1,13 @@
 import asyncio
+import logging
 import signal
 import unittest
 from dataclasses import dataclass
-from logging import Logger
 from typing import Any
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch, ANY, call
 
+import blockcrawler
 from blockcrawler.core.bus import (
     ParallelDataBus,
     DataPackage,
@@ -22,8 +23,7 @@ class TestDataPackage(DataPackage):
 
 class ParallelDataBusTestCase(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.__logger = Mock(Logger)
-        self.__data_bus = ParallelDataBus(self.__logger)
+        self.__data_bus = ParallelDataBus()
         self.__consumer = AsyncMock(Consumer)
 
     async def test_passes_sent_data_to_registered_consumers(self):
@@ -41,13 +41,13 @@ class ParallelDataBusTestCase(IsolatedAsyncioTestCase):
     async def test_logs_errors_from_consumers_by_default(self):
         self.__consumer.receive.side_effect = Exception
         await self.__data_bus.register(self.__consumer)
-        async with self.__data_bus:
-            await self.__data_bus.send(TestDataPackage("Anything"))
-        self.__logger.exception.assert_called_once()
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.ERROR):
+            async with self.__data_bus:
+                await self.__data_bus.send(TestDataPackage("Anything"))
 
     async def test_raises_exceptions_from_send_when_raise_on_exception_is_true(self):
         self.__consumer.receive.side_effect = Exception
-        data_bus = ParallelDataBus(self.__logger, raise_on_exception=True)
+        data_bus = ParallelDataBus(raise_on_exception=True)
         await data_bus.register(self.__consumer)
         with self.assertRaises(Exception):
             async with data_bus:
@@ -57,7 +57,7 @@ class ParallelDataBusTestCase(IsolatedAsyncioTestCase):
         future = asyncio.get_running_loop().create_future()
         self.__consumer.receive.return_value = future
         future.set_exception(Exception())
-        data_bus = ParallelDataBus(self.__logger, raise_on_exception=True)
+        data_bus = ParallelDataBus(raise_on_exception=True)
         await data_bus.register(self.__consumer)
         with self.assertRaises(Exception):
             async with data_bus:
@@ -74,26 +74,24 @@ class ParallelDataBusTestCase(IsolatedAsyncioTestCase):
         consumer_2.receive.assert_awaited_once()
 
     async def test_debug_logs_registering_consumer(self):
-        await self.__data_bus.register(self.__consumer)
-        self.__logger.debug.assert_any_call(
-            "REGISTERED CONSUMER", extra=dict(consumer=self.__consumer)
-        )
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
+            await self.__data_bus.register(self.__consumer)
+            self.assertIn(f"DEBUG:{blockcrawler.LOGGER_NAME}:REGISTERED CONSUMER", cm.output)
 
     async def test_debug_logs_data_received_by_send_function(self):
-        data_package = TestDataPackage(data="Hello")
-        await self.__data_bus.send(data_package)
-        self.__logger.debug.assert_any_call(
-            "RECEIVED DATA PACKAGE", extra=dict(data_package=data_package)
-        )
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
+            data_package = TestDataPackage(data="Hello")
+            await self.__data_bus.send(data_package)
+            self.assertIn(f"DEBUG:{blockcrawler.LOGGER_NAME}:RECEIVED DATA PACKAGE", cm.output)
 
     async def test_debug_logs_providing_data_to_consumer(self):
-        data_package = TestDataPackage(data="Hello")
-        await self.__data_bus.register(self.__consumer)
-        await self.__data_bus.send(data_package)
-        self.__logger.debug.assert_any_call(
-            "SENDING DATA PACKAGE TO CONSUMER",
-            extra=dict(consumer=self.__consumer, data_package=data_package),
-        )
+        with self.assertLogs(blockcrawler.LOGGER_NAME, logging.DEBUG) as cm:
+            data_package = TestDataPackage(data="Hello")
+            await self.__data_bus.register(self.__consumer)
+            await self.__data_bus.send(data_package)
+            self.assertIn(
+                f"DEBUG:{blockcrawler.LOGGER_NAME}:SENDING DATA PACKAGE TO CONSUMER", cm.output
+            )
 
 
 class SignalManagerTestCase(unittest.TestCase):
