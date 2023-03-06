@@ -3,6 +3,10 @@
 - Standardize on providing blockchain to EVM transformers and only process data packages
   for the same blockchain 
 - Remove loggers from class init methods. Let them get the loggers themselves.
+- Bug fix for nft crawl/tail incorrectly identifying operator as from and from as to when
+    processing transfers.
+- Bug fix for nft verify using static value of 1 for NFT quantity.
+- Bug fix for verify not displaying token errors.
 
 # Version 1.1.1
 

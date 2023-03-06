@@ -10,5 +10,6 @@ Dockerfile
 .env
 .env.*
 **/*.csv
+**/*.log
 **/*.egg-info
 **/*.pyc

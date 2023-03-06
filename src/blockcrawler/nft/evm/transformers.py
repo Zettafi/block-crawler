@@ -296,11 +296,11 @@ class EvmLogErc1155TransferSingleToNftTokenTransferTransformer(
     def _parse_transfer_data(self, data_package):
         from_address = decode(
             ["address"],
-            data_package.log.topics[1],
+            data_package.log.topics[2],
         )[0]
         to_address = decode(
             ["address"],
-            data_package.log.topics[2],
+            data_package.log.topics[3],
         )[0]
         token_id, quantity = decode(
             ["uint256", "uint256"],
@@ -322,11 +322,11 @@ class EvmLogErc1155TransferBatchToNftTokenTransferTransformer(
     def _parse_transfer_data(self, data_package):
         from_address = decode(
             ["address"],
-            data_package.log.topics[1],
+            data_package.log.topics[2],
         )[0]
         to_address = decode(
             ["address"],
-            data_package.log.topics[2],
+            data_package.log.topics[3],
         )[0]
         token_ids, quantities = decode(
             ["uint256[]", "uint256[]"],

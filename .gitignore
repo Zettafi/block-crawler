@@ -9,6 +9,7 @@ __pycache__
 /.mypy_cache/
 /bin/
 *.csv
+*.log
 /.tox/
 /dist/
 /docshtml/

@@ -6,8 +6,8 @@ NFT commands are for the purpose of crawling blockchains to store data in a data
 .. warning::
 
     Running the `crawl` or `tail` commands more than once for the same block will cause
-    inaccuracies in the NFT data. The `load` command is the only NFT command which is
-    idempotent.
+    inaccuracies in the NFT data. The `load` and `force` commands are the only NFT
+    commands which are idempotent.
 
 Data Version
 ------------
@@ -16,6 +16,7 @@ Data version is used by the NFT commands in the Block Crawl to ensure data accur
 during data loads. Data is processed by both the `crawl` and `tail` commands in an
 asynchronous manner and data version is one manner in which data accuracy is ensured.
 
+.. TODO Add something about how to use data version in a load
 
 Common Options
 --------------
@@ -135,11 +136,11 @@ quantity value to be very large. However, token from an ERC-1155 contract with a
 value for "decimals" may exceed maximum size. If this occurs, an error will appear in
 the log for tracking purposes.
 
-Data URIs for Token URI
-+++++++++++++++++++++++
+Token URI
++++++++++
 
 Database restrictions on text and/or record size may prevent the storage of token URIs
-when the token URI is a Data URI when it is very large. This tends to be the case
+when the token URI is very large. This tends to be the case
 when the contract attempts to place another data URI for the token "image" attribute
 which includes the base64 encoded value of the image binary. This is not a common
 practice, but it has been identified as a metadata strategy in use by a limited number
@@ -160,6 +161,15 @@ Collection Description
 Database restrictions on text and/or record size may limit the ability to store the
 entire collection description in the database. When this occurs, the description will
 be truncated to a sane value for the database.
+
+Performance Considerations
+--------------------------
+
+Most commands are built to be massively parallel. They may strain the resources of the
+system running the command, the database, and RPC endpoints. The resources used for the
+commands can be optimized by altering options such as `--dynamodb-parallel-batches`,
+`--block-chunk-size`, `--evm-rpc-nodes`, and `--rpc-requests-per-second`. Adjusting
+the values of these options is suggested to maximize performance. Command output
 
 Load
 ----
@@ -322,5 +332,49 @@ Arguments
 
 :BLOCK_HEIGHT: The block height at which to verify. Blockchain data is constantly being
     updated. As such, it can only be verified at a specific block height.
+
+
+
+Force
+----
+
+The `force` command will load NFT data for a single collection up to a declared block
+height. The specific block height is necessary to ensure the collection's data is
+accurate to the same block height as the rest of the blockchain data.
+
+The force command will load collection regardless of how that collection identifies
+itself. It is useful for repairing data for a single collection that either did not
+load due to the other commands not recognizing the collection, interrupted in the
+loading of collection data, or encountered a bug in the Block Crawler.
+
+
+Arguments
++++++++++
+
+:COLLECTION_ID: The collection you wish to force load.
+
+:CREATION_TX_HASH: The highest block number you wish to process in this run of the
+    command.
+
+:BLOCK_HEIGHT: The block height chosen for this data load process. This value should be
+    consistent with the latest block processed to get an accurate data load up to the
+    block height of the rest of the collections in the blockchain.
+
+:CREATION_TX_HASH: The transaction hash for the transaction in which the collection was
+    created.
+
+:DEFAULT_COLLECTION_TYPE: The collection type to assign to collection if it's type
+    cannot be determined programmatically.
+
+Options
++++++++
+
+:--dynamodb-parallel-batches: THe number of DynamoDB parallel batch writes to perform
+    simultaneously. In order to maximize performance, you want to keep batches as full
+    as possible. Tuning this value can improve data write performance accordingly.
+
+:--block-time-cache-filename: Location and filename for the block time cache. The block
+    time cache is critical for reducing RPC calls to get block times.
+
 
 .. _Boto3 documentation: https://boto3.amazonaws.com/v1/documentation/api/latest/guide/quickstart.html#configuration

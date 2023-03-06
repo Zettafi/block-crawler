@@ -572,7 +572,11 @@ async def verify_tokens(
         f"{blockchain.value}::{collection_id}"
     )
     for token in await get_table_items(table, key_condition_expression):
-        await verify_token(rpc_service, stats_service, collection_id, token)
+        token_errors, token_warnings = await verify_token(
+            rpc_service, stats_service, collection_id, token
+        )
+        errors.extend(token_errors)
+        warnings.extend(token_warnings)
         token_count += 1
 
     # Verify token quantity
@@ -646,16 +650,18 @@ async def verify_token(
 
     if await rpc_service.contract_supports_erc721():
         original_owner = await get_token_original_token_owner(rpc_service, collection_id, token_id)
-        if original_owner != token["original_owner_account"]:
+        db_original_owner = token.get("original_owner_account")
+        if original_owner != db_original_owner:
             errors.append(
-                f"Database original owner value {token['original_owner_account']} does not "
+                f"Database original owner value {db_original_owner} does not "
                 f"log event value of {original_owner} for token {token_id.int_value}"
             )
 
         current_owner = await get_current_owner(rpc_service, token_id)
-        if current_owner != token["current_owner_account"]:
+        db_current_owner = token.get("current_owner_account")
+        if current_owner != db_current_owner:
             errors.append(
-                f"Database current owner value {token['current_owner_account']} does not match "
+                f"Database current owner value {db_current_owner} does not match "
                 f"log event value of {current_owner} for token {token_id.int_value}"
             )
 
@@ -666,12 +672,13 @@ async def verify_token(
         db_metadata_url = token.get("metadata_url")
         if contract_metadata_uri != db_metadata_url:
             errors.append(
-                f"Database metadata URL value {db_metadata_url} does not match"
+                f"Database metadata URL value {db_metadata_url} does not match "
                 f"tokenURI() value of {contract_metadata_uri} for token {token_id.int_value}"
             )
-        if token["quantity"] != 1:
+        token_quantity = token.get("quantity")
+        if token_quantity != 1:
             errors.append(
-                f"Database quantity value value {token['quantity']} does not match"
+                f"Database quantity value value {token_quantity} does not match "
                 f"expected value of 1 for token {token_id.int_value}"
             )
     elif await rpc_service.contract_supports_erc1155():
@@ -725,7 +732,7 @@ async def verify_token(
                 expected_quantity -= quantity
         if token["quantity"] != expected_quantity:
             errors.append(
-                f"Database quantity value value {token['quantity']} does not match"
+                f"Database quantity value value {token['quantity']} does not match "
                 f"expected value of {expected_quantity} for token {token_id.int_value}"
             )
     else:
