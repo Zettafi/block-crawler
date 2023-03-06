@@ -1,4 +1,9 @@
+# Version 1.2.2
+
+- Fix version/release inconsistency
+
 # Version 1.2.1
+
 - Docs fix to build proper docs
 
 # Version 1.2.0
