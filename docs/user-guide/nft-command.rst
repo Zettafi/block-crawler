@@ -336,7 +336,7 @@ Arguments
 
 
 Force
-----
+-----
 
 The `force` command will load NFT data for a single collection up to a declared block
 height. The specific block height is necessary to ensure the collection's data is

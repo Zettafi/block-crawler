@@ -48,6 +48,10 @@ jobs:
             python-version: '3.10'
             os: ubuntu-latest
             tox: static
+          - name: Docs
+            python-version: '3.10'
+            os: ubuntu-latest
+            tox: docs
 
     steps:
       - run: echo "Job was automatically triggered by a ${{ github.event_name }} to ${{ github.ref }}."
