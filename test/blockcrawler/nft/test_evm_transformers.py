@@ -891,6 +891,7 @@ class EvmLogErc1155TransferSingleToNftTokenTransferTestCase(IsolatedAsyncioTestC
         block.timestamp = HexInt(400)
         log.topics = [
             Erc1155Events.TRANSFER_SINGLE.event_signature_hash,
+            encode(["address"], ["0x7777777777777777777777777777777777777777"]),
             encode(["address"], ["0x8888888888888888888888888888888888888888"]),
             encode(["address"], ["0x9999999999999999999999999999999999999999"]),
         ]
@@ -986,6 +987,7 @@ class EvmLogErc1155TransferToNftTokenTransferTestCase(IsolatedAsyncioTestCase):
         block.timestamp = HexInt(400)
         log.topics = [
             Erc1155Events.TRANSFER_BATCH.event_signature_hash,
+            encode(["address"], ["0x7777777777777777777777777777777777777777"]),
             encode(["address"], ["0x8888888888888888888888888888888888888888"]),
             encode(["address"], ["0x9999999999999999999999999999999999999999"]),
         ]

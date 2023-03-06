@@ -5,6 +5,7 @@ Load a small subset of blockchain data and verify that data afterwards. If you w
 load the entire blockchain, you would replace the block height with the current block
 height as available via the `evm block-number` command.
 
+.. TODO: Talk about performance of DynamoDB local vs. Localstack
 
 #. Install block-crawler:
 
@@ -26,6 +27,8 @@ height as available via the `evm block-number` command.
 
 #. Load the blockchain data from block 5,600,00 to 6,000,000. Nothing before 5,600,000
    will have NFT data.
+
+    .. TODO: Talk about block height and its importance
 
     .. code-block:: bash
 
@@ -70,7 +73,7 @@ height as available via the `evm block-number` command.
 
         block-crawler nft --blockchain ethereum-mainnet \
         --evm-rpc-nodes  wss://some-archive-node-uri 1 \
-        verify 0x6ebeaf8e8e946f0716e6533a6f2cefc83f60e8ab 6_100_000
+            verify 0x6ebeaf8e8e946f0716e6533a6f2cefc83f60e8ab 6_100_000
 
 #. Verify the Hyperloot collection up to block 6,100,000. It should have been added in
    the crawl.
