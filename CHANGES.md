@@ -1,3 +1,6 @@
+# Version 1.2.1
+- Docs fix to build proper docs
+
 # Version 1.2.0
 
 - Standardize on providing blockchain to EVM transformers and only process data packages
