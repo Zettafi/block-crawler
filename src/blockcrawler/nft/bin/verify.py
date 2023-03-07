@@ -1,8 +1,8 @@
 import asyncio
 import dataclasses
 import time
-from asyncio import CancelledError, Task
-from typing import Dict, Union, List, Awaitable, Optional, Tuple
+from asyncio import CancelledError
+from typing import Dict, Union, List, Awaitable, Optional, Tuple, Any, cast
 
 import aioboto3
 import boto3
@@ -35,12 +35,10 @@ from blockcrawler.evm.types import (
 )
 from blockcrawler.nft.bin.shared import Config
 
-
 try:
     from dotenv import load_dotenv
 except ImportError:
     pass
-
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
@@ -75,14 +73,17 @@ class RpcService:
 
     async def get_total_supply(self):
         if self.__total_supply is None:
-            (self.__total_supply,) = await self.__rpc_client.call(
-                EthCall(
-                    from_=None,
-                    to=self.__collection_id,
-                    function=Erc721EnumerableFunctions.TOTAL_SUPPLY,
-                    block=self.__block_height,
+            try:
+                (self.__total_supply,) = await self.__rpc_client.call(
+                    EthCall(
+                        from_=None,
+                        to=self.__collection_id,
+                        function=Erc721EnumerableFunctions.TOTAL_SUPPLY,
+                        block=self.__block_height,
+                    )
                 )
-            )
+            except RpcServerError:
+                (self.__total_supply,) = (None,)
         return self.__total_supply
 
     async def get_token_owner(self, token_id: int):
@@ -138,28 +139,36 @@ class RpcService:
         return await self.__contract_supports(Erc165InterfaceID.ERC1155_METADATA_URI)
 
     async def get_contract_name(self):
-        (name,) = await self.__rpc_client.call(
-            EthCall(
-                from_=None,
-                to=self.__collection_id,
-                function=Erc721MetadataFunctions.NAME,
+        try:
+            (name,) = await self.__rpc_client.call(
+                EthCall(
+                    from_=None,
+                    to=self.__collection_id,
+                    function=Erc721MetadataFunctions.NAME,
+                )
             )
-        )
+        except RpcServerError:
+            name = None
+
         return name
 
     async def get_contract_symbol(self):
-        (name,) = await self.__rpc_client.call(
-            EthCall(
-                from_=None,
-                to=self.__collection_id,
-                function=Erc721MetadataFunctions.SYMBOL,
+        try:
+            (symbol,) = await self.__rpc_client.call(
+                EthCall(
+                    from_=None,
+                    to=self.__collection_id,
+                    function=Erc721MetadataFunctions.SYMBOL,
+                )
             )
-        )
-        return name
+        except RpcServerError:
+            symbol = None
+
+        return symbol
 
     async def get_contract_owner(self):
         try:
-            (name,) = await self.__rpc_client.call(
+            (owner,) = await self.__rpc_client.call(
                 EthCall(
                     from_=None,
                     to=self.__collection_id,
@@ -167,9 +176,9 @@ class RpcService:
                 )
             )
         except RpcServerError:
-            name = None
+            owner = None
 
-        return name
+        return owner
 
     async def get_block(self, block_number: HexInt):
         return await self.__rpc_client.get_block(block_number, full_transactions=True)
@@ -178,27 +187,34 @@ class RpcService:
         return await self.__rpc_client.get_transaction_receipt(transaction_hash)
 
     async def get_erc721_token_uri(self, token_id: HexInt):
-        (uri,) = await self.__rpc_client.call(
-            EthCall(
-                from_=None,
-                to=self.__collection_id,
-                function=Erc721MetadataFunctions.TOKEN_URI,
-                parameters=[token_id.int_value],
-                block=self.__block_height,
+        try:
+            (uri,) = await self.__rpc_client.call(
+                EthCall(
+                    from_=None,
+                    to=self.__collection_id,
+                    function=Erc721MetadataFunctions.TOKEN_URI,
+                    parameters=[token_id.int_value],
+                    block=self.__block_height,
+                )
             )
-        )
+        except RpcServerError:
+            uri = None
+
         return uri
 
     async def get_erc1155_metadata_uri(self, token_id: HexInt):
-        (uri,) = await self.__rpc_client.call(
-            EthCall(
-                from_=None,
-                to=self.__collection_id,
-                function=Erc1155MetadataUriFunctions.URI,
-                parameters=[token_id.int_value],
-                block=self.__block_height,
+        try:
+            (uri,) = await self.__rpc_client.call(
+                EthCall(
+                    from_=None,
+                    to=self.__collection_id,
+                    function=Erc1155MetadataUriFunctions.URI,
+                    parameters=[token_id.int_value],
+                    block=self.__block_height,
+                )
             )
-        )
+        except RpcServerError:
+            uri = None
         return uri
 
     async def get_token_transfer_logs(self, token_id: HexInt) -> List[EvmLog]:
@@ -453,14 +469,18 @@ async def verify_collection(
 
     if items:
         record = items[0]
-        if await rpc_service.contract_supports_erc721_metadata():
-            contract_name = await rpc_service.get_contract_name()
-            contract_name_lower = contract_name.lower()[:1024]
-            contract_symbol = await rpc_service.get_contract_symbol()
-        else:
-            contract_name = None
-            contract_name_lower = None
-            contract_symbol = None
+        (
+            contract_name,
+            contract_symbol,
+            contract_total_supply,
+            contract_owner,
+        ) = await asyncio.gather(
+            rpc_service.get_contract_name(),
+            rpc_service.get_contract_symbol(),
+            rpc_service.get_total_supply(),
+            rpc_service.get_contract_owner(),
+        )
+        contract_name_lower = contract_name.lower()[:1024]
 
         if await rpc_service.contract_supports_erc721():
             specification = "ERC-721"
@@ -494,7 +514,6 @@ async def verify_collection(
                 f" {contract_symbol}"
             )
 
-        contract_owner = await rpc_service.get_contract_owner()
         db_owner = record.get("owner_account")
         if db_owner != contract_owner:
             errors.append(
@@ -502,13 +521,10 @@ async def verify_collection(
                 f" {contract_owner}"
             )
 
-        if await rpc_service.contract_supports_erc721_enumerable():
-            contract_total_supply = await rpc_service.get_total_supply()
-        else:
-            contract_total_supply = None
-
         db_total_supply = (
-            HexInt(record.get("total_supply")).int_value if record.get("total_supply") else None
+            HexInt(cast(str, record.get("total_supply"))).int_value
+            if record.get("total_supply") is not None
+            else None
         )
         if db_total_supply != contract_total_supply:
             errors.append(
@@ -563,15 +579,13 @@ async def verify_tokens(
     table_prefix,
     collection_id,
 ) -> VerifyResult:
-    table = await dynamodb.Table(f"{table_prefix}token")
     warnings = []
     errors = []
     token_count = 0
-    tasks: List[Task] = []
-    key_condition_expression = Key("blockchain_collection_id").eq(
-        f"{blockchain.value}::{collection_id}"
-    )
-    for token in await get_table_items(table, key_condition_expression):
+
+    for token in await get_database_tokens_for_blockchain_collection(
+        dynamodb, table_prefix, blockchain, collection_id
+    ):
         token_errors, token_warnings = await verify_token(
             rpc_service, stats_service, collection_id, token
         )
@@ -580,23 +594,23 @@ async def verify_tokens(
         token_count += 1
 
     # Verify token quantity
-    if await rpc_service.contract_supports_erc721_enumerable():
-        expected_tokens = await rpc_service.get_total_supply()
-        if token_count != expected_tokens:
-            errors.append(
-                f"{token_count} token records in database does not match "
-                f"total_supply() result of {expected_tokens}"
-            )
-    else:
+    total_supply = await rpc_service.get_total_supply()
+    if total_supply is None:
         warnings.append(
             "Collection does not support enumerable which is required to verify "
             "the number of token records"
         )
-    await asyncio.gather(*tasks)
+    elif token_count != total_supply:
+        errors.append(
+            f"{token_count} token records in database does not match "
+            f"total_supply() result of {total_supply}"
+        )
     return VerifyResult(name="Tokens", passed=len(errors) == 0, errors=errors, warnings=warnings)
 
 
-async def get_table_items(table: TableResource, key_condition_expression: ConditionBase):
+async def get_table_items(
+    table: TableResource, key_condition_expression: ConditionBase
+) -> List[Dict[str, Any]]:
     key = None
     items = []
     while True:
@@ -649,7 +663,12 @@ async def verify_token(
     token_id = HexInt(token["token_id"])
 
     if await rpc_service.contract_supports_erc721():
-        original_owner = await get_token_original_token_owner(rpc_service, collection_id, token_id)
+        original_owner, contract_metadata_uri, current_owner = await asyncio.gather(
+            get_token_original_token_owner(rpc_service, collection_id, token_id),
+            rpc_service.get_erc721_token_uri(token_id),
+            get_current_owner(rpc_service, token_id),
+        )
+
         db_original_owner = token.get("original_owner_account")
         if original_owner != db_original_owner:
             errors.append(
@@ -657,7 +676,6 @@ async def verify_token(
                 f"log event value of {original_owner} for token {token_id.int_value}"
             )
 
-        current_owner = await get_current_owner(rpc_service, token_id)
         db_current_owner = token.get("current_owner_account")
         if current_owner != db_current_owner:
             errors.append(
@@ -665,10 +683,6 @@ async def verify_token(
                 f"log event value of {current_owner} for token {token_id.int_value}"
             )
 
-        if await rpc_service.contract_supports_erc721_metadata():
-            contract_metadata_uri = await rpc_service.get_erc721_token_uri(token_id)
-        else:
-            contract_metadata_uri = None
         db_metadata_url = token.get("metadata_url")
         if contract_metadata_uri != db_metadata_url:
             errors.append(
@@ -825,10 +839,10 @@ async def verify_erc1155_transfer(
 
     for item in items:
         errors.append(
-            f"tokentransfers item with block_id {item['block_id']} and "
-            f"transaction_index {item['transaction_index']} and log_index "
-            f"{item['log_index']} and token_id {item['token_id']} is not in "
-            f"Transfer Logs from RPC"
+            f"tokentransfers item with block_id {item['block_id']} "
+            f"({int(item['block_id'], 16)}) and transaction_index "
+            f"{item['transaction_index']} and log_index {item['log_index']} and "
+            f"token_id {item['token_id']} is not in Transfer Logs from RPC"
         )
 
     stats_service.increment(STAT_TRANSFER_VERIFIED)
@@ -1019,33 +1033,44 @@ async def verify_owners(
     table_prefix: str,
     collection_id: str,
 ):
-    table = await dynamodb.Table(f"{table_prefix}owner")
     errors: List[str] = []
     warnings: List[str] = []
+    total_supply = await rpc_service.get_total_supply()
 
-    if await rpc_service.contract_supports_erc721_enumerable():
-        total_supply = await rpc_service.get_total_supply()
+    table = await dynamodb.Table(f"{table_prefix}owner")
+    checks: List[Awaitable] = []
 
-        checks: List[Awaitable] = []
-        for index in range(total_supply):
-            checks.append(
-                check_for_erc721_owner_discrepancy(
-                    table=table,
-                    rpc_service=rpc_service,
-                    stats_service=stats_service,
-                    blockchain=blockchain,
-                    collection_id=collection_id,
-                    token_index=index,
-                )
-            )
-        check_results: Tuple = await asyncio.gather(*checks)
-        errors, warnings = zip(*check_results)
+    if total_supply is not None and await rpc_service.contract_supports_erc721_enumerable():
+        get_token_id_coros = [
+            rpc_service.get_token_id_by_index(index) for index in range(total_supply)
+        ]
+        token_ids = await asyncio.gather(*get_token_id_coros)
     else:
         warnings.append(
             "Collection does not support EC721 Enumerable interface which is required "
             "for fully verifying owners"
         )
 
+        token_ids = [
+            HexInt(token["token_id"])
+            for token in await get_database_tokens_for_blockchain_collection(
+                dynamodb, table_prefix, blockchain, collection_id
+            )
+        ]
+
+    for token_id in token_ids:
+        checks.append(
+            check_for_erc721_owner_discrepancy(
+                table=table,
+                rpc_service=rpc_service,
+                stats_service=stats_service,
+                blockchain=blockchain,
+                collection_id=collection_id,
+                token_id=token_id,
+            )
+        )
+    check_results: Tuple = await asyncio.gather(*checks)
+    errors, warnings = zip(*check_results)
     errors = [error for error in errors if error]
     warnings = [warning for warning in warnings if warning]
     return VerifyResult(
@@ -1056,25 +1081,33 @@ async def verify_owners(
     )
 
 
+async def get_database_tokens_for_blockchain_collection(
+    dynamodb, table_prefix: str, blockchain: BlockChain, collection_id: str
+):
+    token_table = await dynamodb.Table(f"{table_prefix}token")
+    key_condition_expression = Key("blockchain_collection_id").eq(
+        f"{blockchain.value}::{collection_id}"
+    )
+    return await get_table_items(token_table, key_condition_expression)
+
+
 async def check_for_erc721_owner_discrepancy(
     table: TableResource,
     rpc_service: RpcService,
     stats_service: StatsService,
     blockchain: BlockChain,
     collection_id: str,
-    token_index: int,
+    token_id: HexInt,
 ):
     discrepancy, warning = None, None
 
     try:
-        token_id = await rpc_service.get_token_id_by_index(token_index)
-
-        contract_owner = await rpc_service.get_token_owner(token_id)
+        contract_owner = await rpc_service.get_token_owner(token_id.int_value)
 
         response = await get_table_items(
             table,
             Key("blockchain_account").eq(f"{blockchain.value}::{contract_owner}")
-            & Key("collection_id_token_id").eq(f"{collection_id}::{HexInt(token_id).hex_value}"),
+            & Key("collection_id_token_id").eq(f"{collection_id}::{token_id.hex_value}"),
         )
         if await rpc_service.contract_supports_erc721():
             response_len = len(response)
@@ -1082,18 +1115,18 @@ async def check_for_erc721_owner_discrepancy(
                 discrepancy = None
             elif response_len > 0:
                 discrepancy = (
-                    f"{response_len} database owner records for token {token_id} "
+                    f"{response_len} database owner records for token {token_id.int_value} "
                     f"and owner address {contract_owner}"
                 )
             else:
                 discrepancy = (
-                    f"No owner record found in database for token {token_id} and "
+                    f"No owner record found in database for token {token_id.int_value} and "
                     f"owner address {contract_owner}"
                 )
         elif await rpc_service.contract_supports_erc1155():
-            warning = f"No check for token {token_id}"
+            warning = f"No check for token {token_id.int_value}"
     except RpcServerError as e:
-        warning = f"Unable to verify owner for token at index {token_index} due to RPC error: {e}"
+        warning = f"Unable to verify owner for token {token_id.int_value} due to RPC error: {e}"
 
     stats_service.increment(STAT_OWNER_VERIFIED)
     return discrepancy, warning
