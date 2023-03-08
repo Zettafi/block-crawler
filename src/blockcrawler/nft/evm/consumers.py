@@ -7,8 +7,9 @@ from eth_abi import decode
 
 from blockcrawler.core.bus import DataPackage, ConsumerError, Consumer
 from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
-from blockcrawler.evm.services import BlockTimeService
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.evm.rpc import EvmRpcClient, EthCall
+from blockcrawler.evm.services import BlockTimeService
 from blockcrawler.evm.types import (
     EvmLog,
     Erc721MetadataFunctions,
@@ -17,7 +18,6 @@ from blockcrawler.evm.types import (
     Erc165Functions,
     Erc165InterfaceID,
 )
-from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
 )
@@ -31,6 +31,8 @@ from blockcrawler.nft.entities import (
     Collection,
 )
 from blockcrawler.nft.evm.oracles import TokenTransactionTypeOracle, LogVersionOracle
+
+TokenOwnerRecord = Tuple[TokenOwner, HexInt]
 
 
 class CollectionToEverythingElseCollectionBasedConsumerBaseClass(Consumer, ABC):
@@ -81,9 +83,15 @@ class CollectionToEverythingElseCollectionBasedConsumerBaseClass(Consumer, ABC):
             )
         )
 
-        current_owner = (
-            to_address if collection.specification is EthereumCollectionType.ERC721 else None
-        )
+        if token_id in tokens and tokens[token_id].attribute_version > attribute_version:
+            current_owner = tokens[token_id].current_owner
+            attribute_version = tokens[token_id].attribute_version
+        else:
+            current_owner = to_address
+
+        if collection.specification is EthereumCollectionType.ERC1155:
+            current_owner = None
+
         if transaction_type == TokenTransactionType.MINT:
             if token_id in tokens:
                 token_quantity = tokens[token_id].quantity + quantity
@@ -117,7 +125,7 @@ class CollectionToEverythingElseCollectionBasedConsumerBaseClass(Consumer, ABC):
                     mint_block=old_token.mint_block,
                     mint_date=old_token.mint_date,
                     quantity=old_token.quantity,
-                    attribute_version=old_token.attribute_version,
+                    attribute_version=attribute_version,
                     metadata_url=old_token.metadata_url,
                 )
 
@@ -189,6 +197,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
         self.__data_service = data_service
         self.__rpc_client = rpc_client
         self.__token_transaction_type_oracle = token_transaction_type_oracle
+        self.__log_version_oracle = log_version_oracle
         self.__max_block_height = max_block_height
 
     async def receive(self, data_package: DataPackage):
@@ -203,7 +212,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
             token_xfr_batch_write_tasks: List[Task] = []
             tokens: Dict[HexInt, Token] = {}
             token_transfers: List[TokenTransfer] = []
-            token_owners: Dict[HexInt, TokenOwner] = {}
+            token_owners: Dict[HexInt, TokenOwnerRecord] = {}
 
             async for log in self.__rpc_client.get_logs(
                 topics=[Erc721Events.TRANSFER.event_signature_hash.hex()],
@@ -244,7 +253,9 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
                     )
                 )
 
-            cleaned_token_owners = [value for value in token_owners.values() if value.quantity != 0]
+            cleaned_token_owners = [
+                value for value, _ in token_owners.values() if value.quantity != 0
+            ]
             write_token_owners_task = asyncio.create_task(
                 self._process_batches(
                     cleaned_token_owners, self.__data_service.write_token_owner_batch
@@ -287,7 +298,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
         self,
         data_package: CollectionDataPackage,
         log: EvmLog,
-        token_owners: Dict[HexInt, TokenOwner],
+        token_owners: Dict[HexInt, TokenOwnerRecord],
         token_transfers: List[TokenTransfer],
         tokens: Dict[HexInt, Token],
     ):
@@ -321,8 +332,14 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
             token_id=token_id,
             quantity=HexInt(1),
         )
+        owner_log_entry_version = self.__log_version_oracle.version_from_log(log)
         await self.__process_token_owners(
-            token_owners, data_package.collection, to_address, token_id, transaction_type
+            token_owners,
+            data_package.collection,
+            to_address,
+            token_id,
+            transaction_type,
+            owner_log_entry_version,
         )
 
     async def __process_tokens_batch(self, tokens: List[Token]):
@@ -375,31 +392,43 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
 
     @staticmethod
     async def __process_token_owners(
-        token_owners: Dict[HexInt, TokenOwner],
+        token_owners: Dict[HexInt, TokenOwnerRecord],
         collection: Collection,
         to_address: Address,
         token_id: HexInt,
         transaction_type: TokenTransactionType,
+        owner_log_entry_version: HexInt,
     ):
+        if token_id in token_owners and token_owners[token_id][1] > owner_log_entry_version:
+            # This log entry occurred before the log entry for the existing record
+            # and should be ignored
+            return
+
         if transaction_type == TokenTransactionType.MINT:
-            token_owners[token_id] = TokenOwner(
-                blockchain=collection.blockchain,
-                collection_id=collection.collection_id,
-                token_id=token_id,
-                account=to_address,
-                quantity=HexInt(1),
-                data_version=collection.data_version,
+            token_owners[token_id] = (
+                TokenOwner(
+                    blockchain=collection.blockchain,
+                    collection_id=collection.collection_id,
+                    token_id=token_id,
+                    account=to_address,
+                    quantity=HexInt(1),
+                    data_version=collection.data_version,
+                ),
+                owner_log_entry_version,
             )
         elif transaction_type == TokenTransactionType.TRANSFER:
             if token_id in token_owners:
-                old_token_owner = token_owners[token_id]
-                token_owners[token_id] = TokenOwner(
-                    blockchain=old_token_owner.blockchain,
-                    collection_id=old_token_owner.collection_id,
-                    token_id=old_token_owner.token_id,
-                    account=to_address,
-                    quantity=old_token_owner.quantity,
-                    data_version=old_token_owner.data_version,
+                (old_token_owner, _) = token_owners[token_id]
+                token_owners[token_id] = (
+                    TokenOwner(
+                        blockchain=old_token_owner.blockchain,
+                        collection_id=old_token_owner.collection_id,
+                        token_id=old_token_owner.token_id,
+                        account=to_address,
+                        quantity=old_token_owner.quantity,
+                        data_version=old_token_owner.data_version,
+                    ),
+                    owner_log_entry_version,
                 )
         elif transaction_type == TokenTransactionType.BURN:
             if token_id in token_owners:
@@ -431,7 +460,6 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumer(
         self.__data_service = data_service
         self.__rpc_client = rpc_client
         self.__token_transaction_type_oracle = token_transaction_type_oracle
-        self.__log_version_oracle = log_version_oracle
         self.__max_block_height = max_block_height
 
     async def receive(self, data_package: DataPackage):

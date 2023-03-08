@@ -47,6 +47,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         self.__block_time_service = AsyncMock(BlockTimeService)
         self.__token_transaction_type_oracle = MagicMock(TokenTransactionTypeOracle)
         self.__log_version_oracle = MagicMock(LogVersionOracle)
+        self.__log_version_oracle.version_from_log.return_value = HexInt(0)
         self.__data_service = AsyncMock(DataService)
         self.__consumer = CollectionToEverythingElseErc721CollectionBasedConsumer(
             self.__data_service,
@@ -386,11 +387,88 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_batch.assert_awaited_once_with([expected])
 
-    async def test_writes_token_owner_records_for_the_last_owner_of_the_token(self):
+    async def test_writes_token_owner_for_the_last_owner_of_the_token_regardless_of_process_order(
+        self,
+    ):
         self.__token_transaction_type_oracle.type_from_log.side_effect = [
             TokenTransactionType.MINT,
             TokenTransactionType.TRANSFER,
+            TokenTransactionType.TRANSFER,
         ]
+        self.__log_version_oracle.version_from_log.side_effect = (
+            lambda log: log.block_number.hex_value
+            + log.transaction_index.hex_value
+            + log.log_index.hex_value
+        )
+
+        # Logs are out of order to simulate the async processing of the data processing
+        # the logs outside the natural order
+        self.__logs.clear()
+        self.__logs.extend(
+            [
+                EvmLog(
+                    removed=False,
+                    log_index=HexInt("0x10"),
+                    transaction_index=HexInt("0x11"),
+                    transaction_hash=HexBytes(b"thash1"),
+                    block_hash=HexBytes(b"bhash1"),
+                    block_number=HexInt("0x12"),
+                    data=HexBytes("0x"),
+                    topics=[
+                        HexBytes(Erc1155Events.TRANSFER_SINGLE.event_signature_hash),
+                        HexBytes(
+                            encode(["address"], ["0x0000000000000000000000000000000000000000"])
+                        ),
+                        HexBytes(
+                            encode(["address"], ["0x0000000000000000000000000000000000000021"])
+                        ),
+                        HexBytes(encode(["uint256"], [0x13])),
+                    ],
+                    address=Address("contract"),
+                ),
+                EvmLog(
+                    removed=False,
+                    log_index=HexInt("0x30"),
+                    transaction_index=HexInt("0x31"),
+                    transaction_hash=HexBytes(b"thash2"),
+                    block_hash=HexBytes(b"bhash2"),
+                    block_number=HexInt("0x32"),
+                    data=HexBytes("0x"),
+                    topics=[
+                        HexBytes(Erc721Events.TRANSFER.event_signature_hash),
+                        HexBytes(
+                            encode(["address"], ["0x0000000000000000000000000000000000000022"])
+                        ),
+                        HexBytes(
+                            encode(["address"], ["0x0000000000000000000000000000000000000023"])
+                        ),
+                        HexBytes(encode(["uint256"], [0x13])),
+                    ],
+                    address=Address("contract"),
+                ),
+                EvmLog(
+                    removed=False,
+                    log_index=HexInt("0x20"),
+                    transaction_index=HexInt("0x21"),
+                    transaction_hash=HexBytes(b"thash2"),
+                    block_hash=HexBytes(b"bhash2"),
+                    block_number=HexInt("0x22"),
+                    data=HexBytes("0x"),
+                    topics=[
+                        HexBytes(Erc721Events.TRANSFER.event_signature_hash),
+                        HexBytes(
+                            encode(["address"], ["0x0000000000000000000000000000000000000021"])
+                        ),
+                        HexBytes(
+                            encode(["address"], ["0x0000000000000000000000000000000000000022"])
+                        ),
+                        HexBytes(encode(["uint256"], [0x13])),
+                    ],
+                    address=Address("contract"),
+                ),
+            ]
+        )
+
         await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_owner_batch.assert_awaited_once_with(
             [
@@ -398,7 +476,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
                     blockchain=self.__data_package.collection.blockchain,
                     collection_id=self.__data_package.collection.collection_id,
                     token_id=HexInt(0x13),
-                    account=Address("0x0000000000000000000000000000000000000022"),
+                    account=Address("0x0000000000000000000000000000000000000023"),
                     quantity=HexInt(1),
                     data_version=self.__data_package.collection.data_version,
                 )
@@ -424,6 +502,7 @@ class CollectionToEverythingElseErc1155CollectionBasedConsumerTestCase(IsolatedA
         self.__token_transaction_type_oracle = MagicMock(TokenTransactionTypeOracle)
         self.__token_transaction_type_oracle.return_value = TokenTransactionType.MINT
         self.__log_version_oracle = MagicMock(LogVersionOracle)
+        self.__log_version_oracle.version_from_log.return_value = HexInt(0)
         self.__consumer = CollectionToEverythingElseErc1155CollectionBasedConsumer(
             self.__data_service,
             self.__rpc_client,
