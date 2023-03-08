@@ -1,3 +1,14 @@
+# version 1.2.3
+
+- Fixes for nft load command
+  -  Always get token URI when loading an ERC-721 contract as the function is supported
+      regularly without supporting the ERC721Metadata interface
+  - Account for the asynchronous nature of nft load when determining the current owner
+      of an ERC-721 token
+- Update the nft verify command to add verification to owners even if enumerable not 
+    supported
+
+
 # Version 1.2.2
 
 - Fix version/release inconsistency
