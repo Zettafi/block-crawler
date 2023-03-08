@@ -8,17 +8,16 @@ from hexbytes import HexBytes
 from blockcrawler.core.bus import DataPackage
 from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcServerError, RpcDecodeError
-from blockcrawler.evm.services import BlockTimeService
+from blockcrawler.core.types import Address, HexInt
 from blockcrawler.evm.rpc import EvmRpcClient, EthCall
+from blockcrawler.evm.services import BlockTimeService
 from blockcrawler.evm.types import (
     EvmLog,
     Erc721MetadataFunctions,
     Erc721Events,
     Erc1155Events,
     Erc165Functions,
-    Erc165InterfaceID,
 )
-from blockcrawler.core.types import Address, HexInt
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
 )
@@ -257,7 +256,7 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
         await self.__consumer.receive(self.__data_package)
         self.__data_service.write_token_batch.assert_called_once_with([expected])
 
-    async def test_tries_to_get_token_uri_from_contract_when_tx_is_mint_and_supported(self):
+    async def test_tries_to_get_token_uri_from_contract_when_tx_is_mint(self):
         self.__token_transaction_type_oracle.type_from_log.side_effect = [
             TokenTransactionType.MINT,
             TokenTransactionType.TRANSFER,
@@ -269,36 +268,12 @@ class CollectionToEverythingElseErc721CollectionBasedConsumerTestCase(IsolatedAs
                     EthCall(
                         from_=None,
                         to="collection",
-                        function=Erc165Functions.SUPPORTS_INTERFACE,
-                        parameters=[Erc165InterfaceID.ERC721_METADATA.bytes],
-                    )
-                ),
-                call(
-                    EthCall(
-                        from_=None,
-                        to="collection",
                         function=Erc721MetadataFunctions.TOKEN_URI,
                         parameters=[0x13],
                         block=HexInt("0x12"),
                     )
                 ),
             ]
-        )
-
-    async def test_does_not_try_to_get_token_uri_from_contract_when_not_supported(self):
-        self.__token_transaction_type_oracle.type_from_log.side_effect = [
-            TokenTransactionType.MINT,
-            TokenTransactionType.TRANSFER,
-        ]
-        self.__rpc_client.call.return_value = (False,)
-        await self.__consumer.receive(self.__data_package)
-        self.__rpc_client.call.assert_awaited_once_with(
-            EthCall(
-                from_=None,
-                to="collection",
-                function=Erc165Functions.SUPPORTS_INTERFACE,
-                parameters=[Erc165InterfaceID.ERC721_METADATA.bytes],
-            )
         )
 
     @ddt.data(

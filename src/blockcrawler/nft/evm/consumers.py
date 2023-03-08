@@ -15,8 +15,6 @@ from blockcrawler.evm.types import (
     Erc721MetadataFunctions,
     Erc721Events,
     Erc1155Events,
-    Erc165Functions,
-    Erc165InterfaceID,
 )
 from blockcrawler.nft.data_packages import (
     CollectionDataPackage,
@@ -263,23 +261,8 @@ class CollectionToEverythingElseErc721CollectionBasedConsumer(
             )
 
             tokens_list = [token for _, token in tokens.items()]
-            (supports_metadata,) = await self.__rpc_client.call(
-                EthCall(
-                    from_=None,
-                    to=data_package.collection.collection_id,
-                    function=Erc165Functions.SUPPORTS_INTERFACE,
-                    parameters=[Erc165InterfaceID.ERC721_METADATA.bytes],
-                )
-            )
-            if supports_metadata:
-                # If the contract supports ERC-721 Metadata, process token URIs
-                tokens_batch_processor = self.__process_tokens_batch
-            else:
-                # If not, just write it
-                tokens_batch_processor = self.__data_service.write_token_batch
-
             write_tokens_task = asyncio.create_task(
-                self._process_batches(tokens_list, tokens_batch_processor)
+                self._process_batches(tokens_list, self.__process_tokens_batch)
             )
 
             await asyncio.gather(
