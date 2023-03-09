@@ -1044,7 +1044,7 @@ async def verify_owners(
         get_token_id_coros = [
             rpc_service.get_token_id_by_index(index) for index in range(total_supply)
         ]
-        token_ids = await asyncio.gather(*get_token_id_coros)
+        token_ids = [HexInt(token_id) for token_id in await asyncio.gather(*get_token_id_coros)]
     else:
         warnings.append(
             "Collection does not support EC721 Enumerable interface which is required "
