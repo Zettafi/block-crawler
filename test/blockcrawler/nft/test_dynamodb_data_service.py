@@ -1,5 +1,6 @@
 import logging
 import unittest
+from random import randint
 from unittest.mock import Mock, AsyncMock, ANY, MagicMock, call
 
 import ddt
@@ -457,14 +458,50 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.__dynamodb.Table.assert_awaited_once_with("pretoken")
 
-    async def test_update_token_quantity_calls_update_item_with_the_correct_values(self):
+    @ddt.data(
+        -100000000000000000000000000000000000000,
+        100000000000000000000000000000000000000,
+        -100000000000000000000000000000000000000 - randint(1, 1000),
+        -100000000000000000000000000000000000000 - randint(1, 1000),
+        100000000000000000000000000000000000000 + randint(1, 1000),
+        100000000000000000000000000000000000000 + randint(1, 1000),
+    )
+    async def test_update_token_quantity_updates_item_with_none_when_out_of_bounds(self, value):
         blockchain = MagicMock(BlockChain)
         blockchain.value = "blockchain"
         await self.__data_service.update_token_quantity(
             blockchain=blockchain,
             collection_id=Address("collection-id"),
             token_id=HexInt(0x1),
-            quantity=21,
+            quantity=value,
+            data_version=999,
+        )
+        self.__table_resource.update_item.assert_called_once_with(
+            Key={
+                "blockchain_collection_id": "blockchain::collection-id",
+                "token_id": "0x1",
+            },
+            UpdateExpression="SET quantity = :q, data_version = :data_version",
+            ExpressionAttributeValues={":q": None, ":data_version": 999},
+            ConditionExpression="attribute_not_exists(data_version) "
+            "OR data_version = :data_version",
+        )
+
+    @ddt.data(
+        -99999999999999999999999999999999999999,
+        99999999999999999999999999999999999999,
+        0,
+        randint(-99999999999999999999999999999999999999, 99999999999999999999999999999999999999),
+        randint(-99999999999999999999999999999999999999, 99999999999999999999999999999999999999),
+    )
+    async def test_update_token_quantity_calls_update_item_with_the_correct_values(self, value):
+        blockchain = MagicMock(BlockChain)
+        blockchain.value = "blockchain"
+        await self.__data_service.update_token_quantity(
+            blockchain=blockchain,
+            collection_id=Address("collection-id"),
+            token_id=HexInt(0x1),
+            quantity=value,
             data_version=999,
         )
         self.__table_resource.update_item.assert_called_once_with(
@@ -473,7 +510,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 "token_id": "0x1",
             },
             UpdateExpression="ADD quantity :q SET data_version = :data_version",
-            ExpressionAttributeValues={":q": 21, ":data_version": 999},
+            ExpressionAttributeValues={":q": value, ":data_version": 999},
             ConditionExpression="attribute_not_exists(data_version) "
             "OR data_version = :data_version",
         )
@@ -501,7 +538,7 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                         "blockchain_collection_id": "blockchain::collection-id",
                         "token_id": "0x1",
                     },
-                    UpdateExpression="SET quantity :q, data_version = :data_version",
+                    UpdateExpression="SET quantity = :q, data_version = :data_version",
                     ExpressionAttributeValues={":q": 21, ":data_version": 999},
                     ConditionExpression="data_version < :data_version",
                 )
@@ -1025,14 +1062,22 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
         await self.__data_service.update_token_owner(token_owner)
         self.__dynamodb.Table.assert_awaited_once_with("preowner")
 
-    async def test_update_token_owner_stores_correct_data(self):
+    @ddt.data(
+        -100000000000000000000000000000000000000,
+        100000000000000000000000000000000000000,
+        -100000000000000000000000000000000000000 - randint(1, 1000),
+        -100000000000000000000000000000000000000 - randint(1, 1000),
+        100000000000000000000000000000000000000 + randint(1, 1000),
+        100000000000000000000000000000000000000 + randint(1, 1000),
+    )
+    async def test_update_token_owner_updates_quantity_with_none_when_out_of_bounds(self, quantity):
         await self.__data_service.update_token_owner(
             TokenOwner(
                 blockchain=BlockChain.ETHEREUM_MAINNET,
                 collection_id=Address("Collection ID"),
                 token_id=HexInt("0x10"),
                 account=Address("Account"),
-                quantity=HexInt("0x3"),
+                quantity=HexInt(quantity),
                 data_version=11,
             )
         )
@@ -1041,11 +1086,11 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 blockchain_account="ethereum-mainnet::Account",
                 collection_id_token_id="Collection ID::0x10",
             ),
-            UpdateExpression="SET collection_id = :collection_id,"
-            "token_id = :token_id,"
-            "account = :account,"
-            "data_version = :data_version "
-            "ADD quantity :quantity",
+            UpdateExpression="SET collection_id = :collection_id"
+            ", token_id = :token_id"
+            ", account = :account"
+            ", data_version = :data_version"
+            ", quantity = :quantity",
             ConditionExpression=(
                 "attribute_not_exists(data_version) OR data_version = :data_version"
             ),
@@ -1053,7 +1098,47 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                 ":collection_id": "Collection ID",
                 ":token_id": "0x10",
                 ":account": "Account",
-                ":quantity": 3,
+                ":quantity": None,
+                ":data_version": 11,
+            },
+        )
+
+    @ddt.data(
+        -99999999999999999999999999999999999999,
+        99999999999999999999999999999999999999,
+        0,
+        randint(-99999999999999999999999999999999999999, 99999999999999999999999999999999999999),
+        randint(-99999999999999999999999999999999999999, 99999999999999999999999999999999999999),
+    )
+    async def test_update_token_owner_stores_correct_data(self, quantity):
+        await self.__data_service.update_token_owner(
+            TokenOwner(
+                blockchain=BlockChain.ETHEREUM_MAINNET,
+                collection_id=Address("Collection ID"),
+                token_id=HexInt("0x10"),
+                account=Address("Account"),
+                quantity=HexInt(quantity),
+                data_version=11,
+            )
+        )
+        self.__table_resource.update_item.assert_awaited_once_with(
+            Key=dict(
+                blockchain_account="ethereum-mainnet::Account",
+                collection_id_token_id="Collection ID::0x10",
+            ),
+            UpdateExpression="SET collection_id = :collection_id"
+            ", token_id = :token_id"
+            ", account = :account"
+            ", data_version = :data_version"
+            " ADD quantity :quantity",
+            ConditionExpression=(
+                "attribute_not_exists(data_version) OR data_version = :data_version"
+            ),
+            ExpressionAttributeValues={
+                ":collection_id": "Collection ID",
+                ":token_id": "0x10",
+                ":account": "Account",
+                ":quantity": quantity,
                 ":data_version": 11,
             },
         )
@@ -1085,10 +1170,10 @@ class DynamoDbDataServiceTestCase(unittest.IsolatedAsyncioTestCase):
                         collection_id_token_id="Collection ID::0x10",
                     ),
                     UpdateExpression="SET collection_id = :collection_id"
-                    ",token_id = :token_id"
-                    ",account = :account"
-                    ",data_version = :data_version"
-                    ",quantity = :quantity",
+                    ", token_id = :token_id"
+                    ", account = :account"
+                    ", data_version = :data_version"
+                    ", quantity = :quantity",
                     ConditionExpression="data_version < :data_version",
                     ExpressionAttributeValues={
                         ":collection_id": "Collection ID",
