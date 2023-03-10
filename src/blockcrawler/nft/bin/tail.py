@@ -5,6 +5,7 @@ from logging import Logger
 from typing import Dict, Union, cast
 
 import aioboto3
+import backoff
 import boto3
 import click
 from boto3.dynamodb.table import TableResource
@@ -156,10 +157,7 @@ async def run_tail(
                     if block_processing <= block_height:
                         try:
                             start: float = time.perf_counter()
-                            async with data_bus:
-                                await data_bus.send(
-                                    EvmBlockIDDataPackage(blockchain, block_processing)
-                                )
+                            await __process_block(block_processing, blockchain, data_bus)
                             end: float = time.perf_counter()
                             process_time: float = end - start
                             total_process_time += process_time
@@ -184,3 +182,15 @@ async def run_tail(
                             f"No blocks to process -- current: {block_height.int_value}"
                             f" -- last processed: {block_processing.int_value - 1}"
                         )
+
+
+@backoff.on_exception(
+    backoff.expo,
+    Exception,
+    logger=blockcrawler.LOGGER_NAME,
+    backoff_log_level=logging.ERROR,
+    max_value=64,
+)
+async def __process_block(block_processing, blockchain, data_bus):
+    async with data_bus:
+        await data_bus.send(EvmBlockIDDataPackage(blockchain, block_processing))
