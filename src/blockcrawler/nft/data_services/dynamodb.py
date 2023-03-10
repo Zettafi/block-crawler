@@ -46,6 +46,10 @@ from ...core.entities import BlockChain
 from ...core.stats import StatsService
 from ...core.types import HexInt, Address
 
+MIN_NUMBER = -99999999999999999999999999999999999999
+
+MAX_NUMBER = 99999999999999999999999999999999999999
+
 
 class DynamoDbDataService(DataService):
     def __init__(
@@ -216,6 +220,14 @@ class DynamoDbDataService(DataService):
             data_version and quantity to the passed values.
         """
         with self.__stats_service.ms_counter(STAT_TOKEN_QUANTITY_UPDATE_MS):
+            set_update_expression = "SET quantity = :q, data_version = :data_version"
+            if MIN_NUMBER <= quantity <= MAX_NUMBER:
+                add_update_expression = "ADD quantity :q SET data_version = :data_version"
+                update_quantity: Optional[int] = quantity
+            else:
+                add_update_expression = set_update_expression
+                update_quantity = None
+
             table = await self.__get_table("token")
             try:
                 await table.update_item(
@@ -223,8 +235,11 @@ class DynamoDbDataService(DataService):
                         "blockchain_collection_id": f"{blockchain.value}::{collection_id}",
                         "token_id": token_id.hex_value,
                     },
-                    UpdateExpression="ADD quantity :q SET data_version = :data_version",
-                    ExpressionAttributeValues={":q": quantity, ":data_version": data_version},
+                    UpdateExpression=add_update_expression,
+                    ExpressionAttributeValues={
+                        ":q": update_quantity,
+                        ":data_version": data_version,
+                    },
                     ConditionExpression="attribute_not_exists(data_version) "
                     "OR data_version = :data_version",
                 )
@@ -236,8 +251,11 @@ class DynamoDbDataService(DataService):
                             "blockchain_collection_id": f"{blockchain.value}::{collection_id}",
                             "token_id": token_id.hex_value,
                         },
-                        UpdateExpression="SET quantity :q, data_version = :data_version",
-                        ExpressionAttributeValues={":q": quantity, ":data_version": data_version},
+                        UpdateExpression=set_update_expression,
+                        ExpressionAttributeValues={
+                            ":q": update_quantity,
+                            ":data_version": data_version,
+                        },
                         ConditionExpression="data_version < :data_version",
                     )
                     self.__stats_service.increment(STAT_TOKEN_QUANTITY_UPDATE)
@@ -346,6 +364,26 @@ class DynamoDbDataService(DataService):
 
     async def update_token_owner(self, token_owner: TokenOwner):
         partition_key_value = f"{token_owner.blockchain.value}::{token_owner.account}"
+        set_update_expression = (
+            "SET collection_id = :collection_id"
+            ", token_id = :token_id"
+            ", account = :account"
+            ", data_version = :data_version"
+            ", quantity = :quantity"
+        )
+        if MIN_NUMBER <= token_owner.quantity <= MAX_NUMBER:
+            quantity = token_owner.quantity.int_value
+            add_update_expression = (
+                "SET collection_id = :collection_id"
+                ", token_id = :token_id"
+                ", account = :account"
+                ", data_version = :data_version"
+                " ADD quantity :quantity"
+            )
+        else:
+            quantity = None
+            add_update_expression = set_update_expression
+
         try:
             await self.__update_item(
                 "owner",
@@ -356,11 +394,7 @@ class DynamoDbDataService(DataService):
                         f"{token_owner.collection_id}::{token_owner.token_id.hex_value}"
                     ),
                 },
-                update_expression="SET collection_id = :collection_id"
-                ",token_id = :token_id"
-                ",account = :account"
-                ",data_version = :data_version"
-                " ADD quantity :quantity",
+                update_expression=add_update_expression,
                 condition_expression=(
                     "attribute_not_exists(data_version) OR data_version = :data_version"
                 ),
@@ -368,7 +402,7 @@ class DynamoDbDataService(DataService):
                     ":collection_id": str(token_owner.collection_id),
                     ":token_id": token_owner.token_id.hex_value,
                     ":account": token_owner.account,
-                    ":quantity": token_owner.quantity.int_value,
+                    ":quantity": quantity,
                     ":data_version": token_owner.data_version,
                 },
                 increment_stat=STAT_TOKEN_OWNER_UPDATE,
@@ -385,11 +419,7 @@ class DynamoDbDataService(DataService):
                             f"{token_owner.collection_id}::{token_owner.token_id.hex_value}"
                         ),
                     },
-                    update_expression="SET collection_id = :collection_id"
-                    ",token_id = :token_id"
-                    ",account = :account"
-                    ",data_version = :data_version"
-                    ",quantity = :quantity",
+                    update_expression=set_update_expression,
                     condition_expression="data_version < :data_version",
                     expression_attribute_values={
                         ":collection_id": str(token_owner.collection_id),
