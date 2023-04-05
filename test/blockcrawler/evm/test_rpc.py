@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from dataclasses import dataclass
 from typing import Dict, Any
 from unittest import IsolatedAsyncioTestCase
 from unittest import TestCase
@@ -728,6 +729,34 @@ class GetBlockNumberTestCase(BaseRPCClientTestCase):
                 await self._rpc_client.get_block_number()
             except Exception as e:
                 raise e
+
+
+class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+
+        @dataclass
+        class ReducedEvmBlock:
+            timestamp: HexInt
+
+        self._rpc_client.get_block_number = AsyncMock()
+        self._rpc_client.get_block_number.return_value = HexInt(100)
+
+        self._rpc_client.get_block = AsyncMock()
+        # pretending timestamp is block multiplied by 5
+        self._rpc_client.get_block.side_effect = lambda x: ReducedEvmBlock(
+            timestamp=HexInt(x.int_value * 5)
+        )
+
+    async def test_get_block_by_timestamp_returns_expected_value(self):
+        expected = 4
+        actual = await self._rpc_client.get_block_by_timestamp(20)
+        self.assertEqual(expected, actual)
+
+    async def test_get_block_by_timestamp_without_exact_block_returns_closest_block(self):
+        expected = 3
+        actual = await self._rpc_client.get_block_by_timestamp(17)
+        self.assertEqual(expected, actual)
 
 
 @ddt.ddt
