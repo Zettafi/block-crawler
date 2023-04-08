@@ -195,64 +195,106 @@ class EvmRpcClient(RpcClient):
         )
         return block
 
-    async def get_block_by_timestamp(self, timestamp: int) -> int:
+    async def get_block_by_timestamp(self, timestamp: HexInt) -> EvmBlock:
         """Get block number by timestamp.
-        `Source <https://ethereum.stackexchange.com/a/127720>`_
 
         :param timestamp: The timestamp of the block you wish to get.
+        :returns: The block which timestamp is equal to given timestamp
+            or the nearest block if timestamp is not exact.
         """
 
         return await self.__get_block_by_timestamp(timestamp)
 
     async def __get_block_by_timestamp(
         self,
-        timestamp: int,
-        left_block=0,
-        left_timestamp=0,
-        right_block=0,
-        right_timestamp=0,
+        timestamp: HexInt,
+        left_block: Optional[EvmBlock] = None,
+        right_block: Optional[EvmBlock] = None,
     ):
-        if not all([left_block, left_timestamp, right_block, right_timestamp]):
-            left_block = 1
-            left_timestamp = (await self.get_block(HexInt(left_block))).timestamp.int_value
-            right_block = (await self.get_block_number()).int_value
-            right_timestamp = (await self.get_block(HexInt(right_block))).timestamp.int_value
+        """Recursively get block number by timestamp until exact match.
+
+        :param timestamp: The timestamp of the block you wish to get.
+        :param left_block: The left bound block limit of binary search.
+        :param right_block: The right bound block limit of binary search.
+        :returns: The block which timestamp is equal to given timestamp
+            or the nearest block if timestamp is not exact.
+        """
+
+        if not left_block or not right_block:
+            # Ethereum's Paris Network Upgrade (a.k.a. the Merge!)
+            #   Block Number: 15537394
+            #   Timestamp: 1663224179
+            the_merge_timestamp = HexInt(1663224179)
+            the_merge_block_number = HexInt(15537394)
+
+            if timestamp == the_merge_timestamp:
+                # Return known value.
+                return await self.get_block(the_merge_block_number)
+
+            right_block = await self.get_block(await self.get_block_number())
+
+            # Check if timestamp is later than the network upgrade event
+            #   where each block's duration is always greater than or equal to 12
+            if timestamp > the_merge_timestamp:
+                min_block_duration = HexInt(12)
+
+                estimated_adjustment = (right_block.timestamp - timestamp) / min_block_duration
+                estimated_block_number = right_block.number - estimated_adjustment
+
+                # Set left bound block to the estimated block number.
+                # Estimated block is always less than or equal to the expected block.
+                left_block = await self.get_block(
+                    max(estimated_block_number, the_merge_block_number)
+                )
+
+            # Use pure binary search for older blocks,
+            #   we don't want wrong bounds from inaccurate estimation.
+            else:
+                left_block = await self.get_block(HexInt(1))
 
         if left_block == right_block:
             return left_block
+
         # Return the closer one, if we're already between blocks
         if (
-            left_block == right_block - 1
-            or timestamp <= left_timestamp
-            or timestamp >= right_timestamp
+            left_block.number == right_block.number - 1
+            or timestamp <= left_block.timestamp
+            or timestamp >= right_block.timestamp
         ):
             return (
                 left_block
-                if abs(timestamp - left_timestamp) < abs(timestamp - right_timestamp)
+                if abs(timestamp - left_block.timestamp) < abs(timestamp - right_block.timestamp)
                 else right_block
             )
 
-        # K is how far inbetween left and right we're expected to be
-        k = (timestamp - left_timestamp) / (right_timestamp - left_timestamp)
+        # k is how far inbetween left and right we're expected to be
+        k = (timestamp.int_value - left_block.timestamp.int_value) / (
+            right_block.timestamp.int_value - left_block.timestamp.int_value
+        )
         # We bound, to ensure logarithmic time even when guesses aren't great
         k = min(max(k, 0.05), 0.95)
         # We get the expected block number from K
-        expected_block = round(left_block + k * (right_block - left_block))
+        estimated_block_number = HexInt(
+            round(
+                left_block.number.int_value
+                + k * (right_block.number.int_value - left_block.number.int_value)
+            )
+        )
         # Make sure to make some progress
-        expected_block = min(max(expected_block, left_block + 1), right_block - 1)
+        estimated_block_number = min(
+            max(estimated_block_number, left_block.number + 1), right_block.number - 1
+        )
 
         # Get the actual timestamp for that block
-        expected_block_timestamp = (
-            await self.get_block(HexInt(expected_block))
-        ).timestamp.int_value
+        expected_block = await self.get_block(estimated_block_number)
+
+        # print(expected_block.number.int_value)
 
         # Adjust bound using our estimated block
-        if expected_block_timestamp < timestamp:
+        if expected_block.timestamp < timestamp:
             left_block = expected_block
-            left_timestamp = expected_block_timestamp
-        elif expected_block_timestamp > timestamp:
+        elif expected_block.timestamp > timestamp:
             right_block = expected_block
-            right_timestamp = expected_block_timestamp
         else:
             # Return the perfect match
             return expected_block
@@ -261,9 +303,7 @@ class EvmRpcClient(RpcClient):
         return await self.__get_block_by_timestamp(
             timestamp,
             left_block,
-            left_timestamp,
             right_block,
-            right_timestamp,
         )
 
     async def get_transaction_receipt(self, tx_hash: HexBytes) -> EvmTransactionReceipt:
