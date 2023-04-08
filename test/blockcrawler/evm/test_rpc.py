@@ -4,7 +4,7 @@ import unittest
 from typing import Dict, Any, Union
 from unittest import IsolatedAsyncioTestCase
 from unittest import TestCase
-from unittest.mock import patch, ANY, MagicMock, AsyncMock, call, Mock
+from unittest.mock import patch, ANY, MagicMock, AsyncMock, call
 
 import aiohttp.client_exceptions
 import ddt
@@ -754,7 +754,7 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
         self._rpc_client.get_block_number.side_effect = lambda: self._max_block_number
 
         self._rpc_client.get_block = AsyncMock()  # type: ignore
-        self._rpc_client.get_block.side_effect = lambda x: Mock(
+        self._rpc_client.get_block.side_effect = lambda x: MagicMock(
             EvmBlock, number=x, timestamp=self._blocks_dataset[x]
         )
 
