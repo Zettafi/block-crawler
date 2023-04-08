@@ -200,7 +200,7 @@ class EvmRpcClient(RpcClient):
 
         :param timestamp: The timestamp of the block you wish to get.
         :returns: The block which timestamp is equal to given timestamp
-            or the nearest block if timestamp is not exact.
+            or the nearest block if there's no block with the exact timestamp.
         """
 
         return await self.__get_block_by_timestamp(timestamp)
@@ -210,7 +210,7 @@ class EvmRpcClient(RpcClient):
         timestamp: HexInt,
         left_block: Optional[EvmBlock] = None,
         right_block: Optional[EvmBlock] = None,
-    ):
+    ) -> EvmBlock:
         """Recursively get block number by timestamp until exact match.
 
         :param timestamp: The timestamp of the block you wish to get.
@@ -219,6 +219,8 @@ class EvmRpcClient(RpcClient):
         :returns: The block which timestamp is equal to given timestamp
             or the nearest block if timestamp is not exact.
         """
+
+        # Get block by timestamp binary search source: https://ethereum.stackexchange.com/a/127720
 
         if not left_block or not right_block:
             # Ethereum's Paris Network Upgrade (a.k.a. the Merge!)
@@ -234,7 +236,8 @@ class EvmRpcClient(RpcClient):
             right_block = await self.get_block(await self.get_block_number())
 
             # Check if timestamp is later than the network upgrade event
-            #   where each block's duration is always greater than or equal to 12
+            #   where each block's duration are only either 12 or 24 seconds.
+            # 24 seconds block duration is only occurring for about 2% of the time
             if timestamp > the_merge_timestamp:
                 min_block_duration = HexInt(12)
 
@@ -287,8 +290,6 @@ class EvmRpcClient(RpcClient):
 
         # Get the actual timestamp for that block
         expected_block = await self.get_block(estimated_block_number)
-
-        # print(expected_block.number.int_value)
 
         # Adjust bound using our estimated block
         if expected_block.timestamp < timestamp:
