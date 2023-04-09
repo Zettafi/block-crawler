@@ -125,22 +125,6 @@ class HexInt:
         else:
             return NotImplemented
 
-    def __mod__(self, other):
-        if isinstance(other, self.__class__):
-            return HexInt(self.int_value % other.int_value)
-        elif isinstance(other, int):
-            return HexInt(self.int_value % other).int_value
-        else:
-            return NotImplemented
-
-    def __rmod__(self, other):
-        if isinstance(other, self.__class__):
-            return HexInt(other.int_value % self.int_value)
-        elif isinstance(other, int):
-            return HexInt(other % self.int_value).int_value
-        else:
-            return NotImplemented
-
     def __abs__(self):
         return HexInt(abs(self.int_value))
 
