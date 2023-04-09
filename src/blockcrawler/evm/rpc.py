@@ -211,13 +211,13 @@ class EvmRpcClient(RpcClient):
         left_block: Optional[EvmBlock] = None,
         right_block: Optional[EvmBlock] = None,
     ) -> EvmBlock:
-        """Recursively get block number by timestamp until exact match.
+        """Recursively get block number by timestamp until exact or nearest match.
 
         :param timestamp: The timestamp of the block you wish to get.
         :param left_block: The left bound block limit of binary search.
         :param right_block: The right bound block limit of binary search.
         :returns: The block which timestamp is equal to given timestamp
-            or the nearest block if timestamp is not exact.
+            or the nearest block if there's no block with the exact timestamp.
         """
 
         # Get block by timestamp binary search source: https://ethereum.stackexchange.com/a/127720
