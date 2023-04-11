@@ -40,7 +40,13 @@ async def run(rpc_uri, quantity):
         ):
             logs.append(log)
 
+        block_from_timestamp = await rpc_client.get_block_by_timestamp(HexInt(1532118564))
+
         print("Block Height:", block_height)
+        print(
+            "Block Number Nearest Timestamp 1532118564: ",
+            f"{block_from_timestamp.number.int_value:,}",
+        )
         print("Block 6,000,000:", block)
         print("Transaction Receipt:", transaction_receipt)
         print("Owner:", owner)
