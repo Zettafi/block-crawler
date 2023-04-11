@@ -814,10 +814,18 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
         self.assertEqual(block_number, actual_block.number)
 
     async def test_get_block_by_timestamp_can_get_latest_block(self):
-        self._patch_with_proof_of_work_dataset()
+        self._patch_with_proof_of_stake_dataset()
 
         block_number = self._max_block_number
         timestamp = self._blocks_dataset[block_number]
+        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_returns_latest_block_if_timestamp_is_in_future(self):
+        self._patch_with_proof_of_stake_dataset()
+
+        block_number = self._max_block_number
+        timestamp = self._blocks_dataset[block_number] + 100
         actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
         self.assertEqual(block_number, actual_block.number)
 

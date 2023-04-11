@@ -247,7 +247,7 @@ class EvmRpcClient(RpcClient):
                 # Set left bound block to the estimated block number.
                 # Estimated block is always less than or equal to the expected block.
                 left_block = await self.get_block(
-                    max(estimated_block_number, the_merge_block_number)
+                    min(max(estimated_block_number, the_merge_block_number), right_block.number)
                 )
 
             # Use pure binary search for older blocks,
