@@ -30,6 +30,17 @@ Get a block by number
    :emphasize-lines: 3-5
 
 
+get_block_by_timestamp
+++++++++++++++++++++++
+
+Get a block by timestamp
+
+.. literalinclude:: /_examples/evm_rpc_example.py
+   :language: python
+   :lines: 11,14,43
+   :emphasize-lines: 3
+
+
 call
 ++++
 
