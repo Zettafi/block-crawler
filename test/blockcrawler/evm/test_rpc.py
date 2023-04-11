@@ -1,6 +1,7 @@
 import asyncio
+import random
 import unittest
-from typing import Dict, Any
+from typing import Dict, Any, Union
 from unittest import IsolatedAsyncioTestCase
 from unittest import TestCase
 from unittest.mock import patch, ANY, MagicMock, AsyncMock, call
@@ -728,6 +729,129 @@ class GetBlockNumberTestCase(BaseRPCClientTestCase):
                 await self._rpc_client.get_block_number()
             except Exception as e:
                 raise e
+
+
+class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+
+        self._blocks_dataset: Dict[HexInt, HexInt] = {}
+        self._blocks_count = 1000
+
+        self._min_timestamp: Union[HexInt, None] = None
+        self._min_block_number: Union[HexInt, None] = None
+        self._max_block_number: Union[HexInt, None] = None
+
+        self._pow_min_timestamp = 1438269988
+        self._pow_min_block_number = 1
+        self._pow_max_block_number = self._blocks_count - 1
+
+        self._pos_min_timestamp = 1663224179
+        self._pos_min_block_number = 15537394
+        self._pos_max_block_number = self._pos_min_block_number + self._blocks_count - 1
+
+        self._rpc_client.get_block_number = AsyncMock()  # type: ignore
+        self._rpc_client.get_block_number.side_effect = lambda: self._max_block_number
+
+        self._rpc_client.get_block = AsyncMock()  # type: ignore
+        self._rpc_client.get_block.side_effect = lambda x: MagicMock(
+            EvmBlock, number=x, timestamp=self._blocks_dataset[x]
+        )
+
+    def _patch_with_proof_of_work_dataset(self):
+        self._min_timestamp = HexInt(self._pow_min_timestamp)
+        self._min_block_number = HexInt(self._pow_min_block_number)
+        self._max_block_number = HexInt(self._pow_max_block_number)
+
+        self._blocks_dataset.clear()
+        timestamp = self._min_timestamp
+        for block_number in range(
+            self._min_block_number.int_value, self._max_block_number.int_value + 1
+        ):
+            self._blocks_dataset[HexInt(block_number)] = timestamp
+            timestamp += random.randint(1, 50)
+
+    def _patch_with_proof_of_stake_dataset(self):
+        self._min_timestamp = HexInt(self._pos_min_timestamp)
+        self._min_block_number = HexInt(self._pos_min_block_number)
+        self._max_block_number = HexInt(self._pos_max_block_number)
+
+        self._blocks_dataset.clear()
+        timestamp = self._min_timestamp
+        for block_number in range(
+            self._min_block_number.int_value, self._max_block_number.int_value + 1
+        ):
+            self._blocks_dataset[HexInt(block_number)] = timestamp
+            # use weighted values to mimic actual timestamp differences
+            timestamp += random.choices([12, 24], weights=[9, 1])[0]
+
+    async def test_get_block_by_timestamp_returns_expected_value(self):
+        self._patch_with_proof_of_work_dataset()
+
+        block_number, timestamp = random.choice(list(self._blocks_dataset.items()))
+        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_without_exact_block_returns_nearest_block(self):
+        self._patch_with_proof_of_work_dataset()
+
+        block_number = HexInt(
+            random.randint(self._min_block_number.int_value, self._max_block_number.int_value - 1)
+        )
+        timestamp = self._blocks_dataset[block_number]
+        next_block_number = block_number + 1
+        next_timestamp = self._blocks_dataset[next_block_number]
+        mean_timestamp = timestamp - ((timestamp - next_timestamp) / 2)
+        actual_block = await self._rpc_client.get_block_by_timestamp(mean_timestamp - 1)
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_can_get_oldest_block(self):
+        self._patch_with_proof_of_work_dataset()
+
+        block_number = self._min_block_number
+        timestamp = self._blocks_dataset[block_number]
+        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_can_get_latest_block(self):
+        self._patch_with_proof_of_work_dataset()
+
+        block_number = self._max_block_number
+        timestamp = self._blocks_dataset[block_number]
+        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_send_eth_request_once_only_on_known_block(self):
+        self._patch_with_proof_of_stake_dataset()
+
+        block_number = self._min_block_number
+        timestamp = self._min_timestamp
+        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        self.assertEqual(block_number, actual_block.number)
+        # noinspection PyUnresolvedReferences
+        self._rpc_client.get_block.assert_called_once()
+        # noinspection PyUnresolvedReferences
+        self._rpc_client.get_block_number.assert_not_called()
+
+    # noinspection PyUnresolvedReferences
+    async def test_get_block_by_timestamp_blocks_after_the_merge_initially_tighten_search_bounds(
+        self,
+    ):
+        self._patch_with_proof_of_stake_dataset()
+
+        timestamp = random.choice(list(self._blocks_dataset.values()))
+        await self._rpc_client.get_block_by_timestamp(timestamp)
+        # assert not called with arguments
+        with self.assertRaises(AssertionError):
+            self._rpc_client.get_block.assert_any_call(HexInt(1))
+
+    # noinspection PyUnresolvedReferences
+    async def test_get_block_by_timestamp_blocks_before_the_merge_uses_full_search_bounds(self):
+        self._patch_with_proof_of_work_dataset()
+
+        timestamp = random.choice(list(self._blocks_dataset.values()))
+        await self._rpc_client.get_block_by_timestamp(timestamp)
+        self._rpc_client.get_block.assert_any_call(HexInt(1))
 
 
 @ddt.ddt
