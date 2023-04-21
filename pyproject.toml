@@ -34,7 +34,6 @@ dependencies = [
     "eth_bloom~=1.0",
     "hexbytes~=0.3",
     "backoff~=2.2",
-    "psutil~=5.9",
 ]
 
 [project.urls]
