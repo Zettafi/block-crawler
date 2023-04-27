@@ -4,12 +4,13 @@ from unittest.mock import AsyncMock
 from botocore.exceptions import ClientError
 
 from blockcrawler.core.entities import BlockChain
-from blockcrawler.nft.bin.shared import _get_data_version
+from blockcrawler.nft.bin.shared import _get_data_version, NoDataVersionError
 
 
 class GetDataVersionTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.__dynamodb = AsyncMock()
+        self.__dynamodb.Table.return_value.get_item.return_value = {"Item": {"data_version": None}}
 
     async def test_not_increment_gets_data_from_correct_dynamodb_table(self):
         await _get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, False, "prefix-")
@@ -32,6 +33,14 @@ class GetDataVersionTestCase(unittest.IsolatedAsyncioTestCase):
             self.__dynamodb, BlockChain.ETHEREUM_MAINNET, False, table_prefix=""
         )
         self.assertEqual(expected, actual)
+
+    async def test_not_increment_data_version_raises_error_when_no_version_exists(self):
+        self.__dynamodb.Table.return_value.get_item.return_value = {}
+        with self.assertRaises(NoDataVersionError):
+            await _get_data_version(
+                self.__dynamodb, BlockChain.ETHEREUM_MAINNET, False, table_prefix=""
+            )
+            self.__dynamodb.Table.return_value.update_item.assert_not_called()
 
     async def test_increment_gets_data_from_correct_dynamodb_table(self):
         await _get_data_version(self.__dynamodb, BlockChain.ETHEREUM_MAINNET, True, table_prefix="")

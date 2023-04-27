@@ -53,8 +53,6 @@ class ParallelDataBusTestCase(IsolatedAsyncioTestCase):
                 await data_bus.send(TestDataPackage("Anything"))
 
     async def test_raises_exceptions_from_consumer_result_when_raise_on_exception_is_true(self):
-        # future = asyncio.get_running_loop().create_future()
-        # future.set_exception(Exception())
         self.__consumer.receive.side_effect = Exception()
         data_bus = ParallelDataBus(raise_on_exception=True)
         await data_bus.register(self.__consumer)

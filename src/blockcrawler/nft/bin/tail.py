@@ -25,6 +25,7 @@ from blockcrawler.nft.bin.shared import (
     _get_crawl_stat_line,
     _update_latest_block,
     _evm_block_crawler_data_bus_factory,
+    NoDataVersionError,
 )
 from blockcrawler.nft.data.models import BlockCrawlerConfig
 
@@ -60,23 +61,30 @@ def tail(
     logger.info("Process initializing")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(
-        run_tail(
-            logger=logger,
-            stats_service=config.stats_service,
-            evm_rpc_client=config.evm_rpc_client,
-            boto3_session=aioboto3.Session(),
-            blockchain=config.blockchain,
-            dynamodb_endpoint_url=config.dynamodb_endpoint_url,
-            dynamodb_timeout=config.dynamodb_timeout,
-            table_prefix=config.table_prefix,
-            trail_blocks=trail_blocks,
-            process_interval=process_interval,
+    try:
+        loop.run_until_complete(
+            run_tail(
+                logger=logger,
+                stats_service=config.stats_service,
+                evm_rpc_client=config.evm_rpc_client,
+                boto3_session=aioboto3.Session(),
+                blockchain=config.blockchain,
+                dynamodb_endpoint_url=config.dynamodb_endpoint_url,
+                dynamodb_timeout=config.dynamodb_timeout,
+                table_prefix=config.table_prefix,
+                trail_blocks=trail_blocks,
+                process_interval=process_interval,
+            )
         )
-    )
-    while loop.is_running():
-        time.sleep(0.001)
-    logger.info("Process complete")
+    except NoDataVersionError:
+        logger.error(
+            "No data version exists! This command expects a data version created from either"
+            "a load or crawl command."
+        )
+    finally:
+        while loop.is_running():
+            time.sleep(0.001)
+        logger.info("Process complete")
 
 
 async def run_tail(
