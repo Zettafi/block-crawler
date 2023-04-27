@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import signal
 import unittest
@@ -54,15 +53,14 @@ class ParallelDataBusTestCase(IsolatedAsyncioTestCase):
                 await data_bus.send(TestDataPackage("Anything"))
 
     async def test_raises_exceptions_from_consumer_result_when_raise_on_exception_is_true(self):
-        future = asyncio.get_running_loop().create_future()
-        self.__consumer.receive.return_value = future
-        future.set_exception(Exception())
+        # future = asyncio.get_running_loop().create_future()
+        # future.set_exception(Exception())
+        self.__consumer.receive.side_effect = Exception()
         data_bus = ParallelDataBus(raise_on_exception=True)
         await data_bus.register(self.__consumer)
         with self.assertRaises(Exception):
             async with data_bus:
                 await data_bus.send(TestDataPackage("Anything"))
-                future.set_exception(Exception())
 
     async def test_consumption_errors_do_not_prevent_consumption_by_other_consumers(self):
         self.__consumer.receive.side_effect = Exception
