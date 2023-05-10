@@ -10,6 +10,7 @@ import aiohttp.client_exceptions
 import ddt
 from hexbytes import HexBytes
 
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcError, RpcServerError, RpcClientError
 from blockcrawler.core.stats import StatsService
 from blockcrawler.evm.rpc import (
@@ -789,7 +790,9 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
         self._patch_with_proof_of_work_dataset()
 
         block_number, timestamp = random.choice(list(self._blocks_dataset.items()))
-        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
         self.assertEqual(block_number, actual_block.number)
 
     async def test_get_block_by_timestamp_without_exact_block_returns_nearest_block(self):
@@ -802,7 +805,9 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
         next_block_number = block_number + 1
         next_timestamp = self._blocks_dataset[next_block_number]
         mean_timestamp = timestamp - ((timestamp - next_timestamp) / 2)
-        actual_block = await self._rpc_client.get_block_by_timestamp(mean_timestamp - 1)
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, mean_timestamp - 1
+        )
         self.assertEqual(block_number, actual_block.number)
 
     async def test_get_block_by_timestamp_can_get_oldest_block(self):
@@ -810,7 +815,9 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
 
         block_number = self._min_block_number
         timestamp = self._blocks_dataset[block_number]
-        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
         self.assertEqual(block_number, actual_block.number)
 
     async def test_get_block_by_timestamp_can_get_latest_block(self):
@@ -818,7 +825,9 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
 
         block_number = self._max_block_number
         timestamp = self._blocks_dataset[block_number]
-        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
         self.assertEqual(block_number, actual_block.number)
 
     async def test_get_block_by_timestamp_returns_latest_block_if_timestamp_is_in_future(self):
@@ -826,7 +835,9 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
 
         block_number = self._max_block_number
         timestamp = self._blocks_dataset[block_number] + 100
-        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
         self.assertEqual(block_number, actual_block.number)
 
     async def test_get_block_by_timestamp_send_eth_request_once_only_on_known_block(self):
@@ -834,7 +845,9 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
 
         block_number = self._min_block_number
         timestamp = self._min_timestamp
-        actual_block = await self._rpc_client.get_block_by_timestamp(timestamp)
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
         self.assertEqual(block_number, actual_block.number)
         # noinspection PyUnresolvedReferences
         self._rpc_client.get_block.assert_called_once()
@@ -848,7 +861,7 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
         self._patch_with_proof_of_stake_dataset()
 
         timestamp = random.choice(list(self._blocks_dataset.values()))
-        await self._rpc_client.get_block_by_timestamp(timestamp)
+        await self._rpc_client.get_block_by_timestamp(BlockChain.ETHEREUM_MAINNET, timestamp)
         # assert not called with arguments
         with self.assertRaises(AssertionError):
             self._rpc_client.get_block.assert_any_call(HexInt(1))
@@ -858,7 +871,7 @@ class GetBlockByTimestampTestCase(BaseRPCClientTestCase):
         self._patch_with_proof_of_work_dataset()
 
         timestamp = random.choice(list(self._blocks_dataset.values()))
-        await self._rpc_client.get_block_by_timestamp(timestamp)
+        await self._rpc_client.get_block_by_timestamp(BlockChain.ETHEREUM_MAINNET, timestamp)
         self._rpc_client.get_block.assert_any_call(HexInt(1))
 
 
