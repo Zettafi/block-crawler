@@ -94,7 +94,7 @@ class HexInt:
         if isinstance(other, self.__class__):
             return HexInt(other.int_value - self.int_value)
         elif isinstance(other, int):
-            return HexInt(other - self.int_value).int_value
+            return other - self.int_value
         else:
             return NotImplemented
 
@@ -121,7 +121,7 @@ class HexInt:
         if isinstance(other, self.__class__):
             return HexInt(other.int_value // self.int_value)
         elif isinstance(other, int):
-            return HexInt(other // self.int_value).int_value
+            return other // self.int_value
         else:
             return NotImplemented
 
