@@ -102,3 +102,45 @@ class HexIntTestCase(TestCase):
 
     def test_rsub_int_is_int(self):
         self.assertIsInstance(2 - HexInt(1), int)
+
+    def test_mul_hex_int(self):
+        self.assertEqual(HexInt(6), HexInt(2) * HexInt(3))
+
+    def test_mul_hex_int_is_hex_int(self):
+        self.assertIsInstance(HexInt(2) * HexInt(3), HexInt)
+
+    def test_mul_int(self):
+        self.assertEqual(HexInt(6), HexInt(2) * 3)
+
+    def test_mul_int_is_hex_int(self):
+        self.assertIsInstance(HexInt(2) * 3, HexInt)
+
+    def test_rmul_int(self):
+        self.assertEqual(6, 2 * HexInt(3))
+
+    def test_rmul_int_is_int(self):
+        self.assertIsInstance(2 * HexInt(3), int)
+
+    def test_truediv_hex_int(self):
+        self.assertEqual(HexInt(2), HexInt(6) / HexInt(3))
+
+    def test_truediv_hex_int_is_hex_int(self):
+        self.assertIsInstance(HexInt(6) / HexInt(3), HexInt)
+
+    def test_truediv_int(self):
+        self.assertEqual(HexInt(2), HexInt(6) / 3)
+
+    def test_truediv_int_is_hex_int(self):
+        self.assertIsInstance(HexInt(6) / 3, HexInt)
+
+    def test_rtruediv_int(self):
+        self.assertEqual(2, 6 / HexInt(3))
+
+    def test_rtruediv_int_is_int(self):
+        self.assertIsInstance(6 / HexInt(3), int)
+
+    def test_abs(self):
+        self.assertEqual(HexInt(1), abs(HexInt(-1)))
+
+    def test_abs_is_hex_int(self):
+        self.assertIsInstance(abs(HexInt(-1)), HexInt)
