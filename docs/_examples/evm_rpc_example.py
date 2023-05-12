@@ -2,6 +2,7 @@ import asyncio
 
 import click
 
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.stats import StatsService
 from blockcrawler.core.types import HexInt, Address
 from blockcrawler.evm.rpc import EvmRpcClient, ConnectionPoolingEvmRpcClient, EthCall
@@ -31,19 +32,23 @@ async def run(rpc_uri, quantity):
             )
         )
 
+        (from_block, to_block) = await asyncio.gather(
+            rpc_client.get_block_by_timestamp(BlockChain.ETHEREUM_MAINNET, HexInt(1532118564)),
+            rpc_client.get_block_by_timestamp(BlockChain.ETHEREUM_MAINNET, HexInt(1532120364)),
+        )
+
         logs = []
         async for log in rpc_client.get_logs(
             address=Address("0x6ebeaf8e8e946f0716e6533a6f2cefc83f60e8ab"),
             topics=[Erc721Events.TRANSFER.event_signature_hash.hex()],
-            from_block=HexInt(6_000_000),
-            to_block=HexInt(6_000_100),
+            from_block=from_block.number,
+            to_block=to_block.number,
         ):
             logs.append(log)
 
-        block_from_timestamp = await rpc_client.get_block_by_timestamp(HexInt(1532118564))
-
         print("Block Height:", block_height)
-        print("Block Number Nearest Timestamp 1532118564: ", block_from_timestamp.number)
+        print("Block Nearest Timestamp 1532118564: ", from_block)
+        print("Block Nearest Timestamp 1532120364: ", to_block)
         print("Block 6,000,000:", block)
         print("Transaction Receipt:", transaction_receipt)
         print("Owner:", owner)
