@@ -24,6 +24,7 @@ from blockcrawler.nft.bin.shared import (
     BlockBoundTracker,
     _get_crawl_stat_line,
     _evm_block_crawler_data_bus_factory,
+    NoDataVersionError,
 )
 
 
@@ -85,6 +86,11 @@ def crawl(
                 increment_data_version=increment_data_version,
                 block_bound_tracker=block_bound_tracker,
             )
+        )
+    except NoDataVersionError:
+        logger.error(
+            "No data version exists! If the data version needs to be initialized, "
+            "enable increment data version in the command."
         )
     except KeyboardInterrupt:
         logger.info("Processing interrupted by user!")

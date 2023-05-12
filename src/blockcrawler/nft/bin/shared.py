@@ -43,6 +43,10 @@ from blockcrawler.nft.evm.transformers import (
 )
 
 
+class NoDataVersionError(BaseException):
+    pass
+
+
 @dataclasses.dataclass
 class BlockBoundTracker:
     low: Optional[HexInt] = HexInt(0)
@@ -174,6 +178,8 @@ async def _get_data_version(
         result = await config_table.get_item(
             Key={"blockchain": blockchain.value},
         )
+        if "Item" not in result:
+            raise NoDataVersionError
         version = result["Item"]["data_version"]
     return version
 

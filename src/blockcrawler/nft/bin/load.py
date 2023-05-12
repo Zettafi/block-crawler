@@ -30,6 +30,7 @@ from blockcrawler.nft.bin.shared import (
     _get_block_time_cache,
     _persist_block_time_cache,
     _get_load_stat_line,
+    NoDataVersionError,
 )
 from blockcrawler.nft.consumers import NftCollectionPersistenceConsumer
 from blockcrawler.nft.data_services.dynamodb import DynamoDbDataService
@@ -122,6 +123,11 @@ def load(
                 dynamodb_parallel_batches=dynamodb_parallel_batches,
                 block_bound_tracker=block_bound_tracker,
             )
+        )
+    except NoDataVersionError:
+        logger.error(
+            "No data version exists! If the data version needs to be initialized, "
+            "enable increment data version in the command."
         )
     except KeyboardInterrupt:
         logger.info("Processing interrupted by user!")

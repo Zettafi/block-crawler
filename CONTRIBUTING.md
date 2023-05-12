@@ -37,7 +37,7 @@ Give the Crawler a spin to make sure everything is working. It requires a beginn
 ending block to continue.
 
 ```bash
-block-crawler nft crawl 1 10
+block-crawler nft crawl --increment-data-version=true 1 10
 ```
 
 The command above will crawl the 1st hundred blocks. It should do that quickly.
@@ -110,5 +110,5 @@ aws help config-vars
 Once your config is all setup, you can run DynamoDB commands like this one:
 
 ```bash
-aws --endpoint-url http://localhost:8000 dynamodb scan --table-name Collections
+aws --endpoint-url http://localhost:8000 dynamodb scan --table-name collection
 ```

@@ -26,6 +26,17 @@ Get a block by number
 
 .. literalinclude:: /_examples/evm_rpc_example.py
    :language: python
+   :lines: 11,14,17
+   :emphasize-lines: 3
+
+
+get_transaction_receipt
++++++++++++++++++++++++
+
+Get a transaction receipt by hash
+
+.. literalinclude:: /_examples/evm_rpc_example.py
+   :language: python
    :lines: 11,14,20-22
    :emphasize-lines: 3-5
 
