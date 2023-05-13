@@ -1,7 +1,7 @@
 *.egg-info
 .env
 __pycache__
-/.coverage
+.coverage
 /unittest-report-xunit.xml
 /build/
 /coverage.xml

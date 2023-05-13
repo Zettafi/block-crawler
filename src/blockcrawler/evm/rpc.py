@@ -15,6 +15,7 @@ from .types import (
     EvmTransaction,
     Function,
 )
+from ..core.entities import BlockChain
 from ..core.types import Address, HexInt
 from .. import LOGGER_NAME
 from ..core.rpc import RpcClient, RpcServerError, RpcDecodeError, RpcClientError
@@ -116,6 +117,20 @@ class EvmRpcClient(RpcClient):
     STAT_GET_LOGS = "rpc.eth.get_logs"
     """Stat name for counts of `eth_getLogs` RPC calls"""
 
+    __POS_START_TIMESTAMP_BLOCK_MAP = {
+        BlockChain.ETHEREUM_MAINNET: {
+            "timestamp": HexInt(1663224179),
+            "block_number": HexInt(15537394),
+            "block_duration": HexInt(12),
+        },
+        BlockChain.POLYGON_MAINNET: {
+            "timestamp": HexInt(1590856200),
+            "block_number": HexInt(1),
+            "block_duration": HexInt(2),
+        },
+    }
+    """Mapped info on when did blockchains start doing Point-of-Stake"""
+
     async def get_block_number(self) -> HexInt:
         """Get the current block height via
         `eth_blockNumber <https://ethereum.org/en/developers/docs/apis/json-rpc/#eth_blocknumber>`_
@@ -194,6 +209,119 @@ class EvmRpcClient(RpcClient):
             uncles=[HexBytes(uncle) for uncle in result["uncles"]],
         )
         return block
+
+    async def get_block_by_timestamp(self, blockchain: BlockChain, timestamp: HexInt) -> EvmBlock:
+        """Get block number by timestamp.
+
+        :param blockchain: Blockchain name as a reference on when did the
+            blockchain starts doing Point-of-Stake.
+        :param timestamp: The timestamp of the block you wish to get.
+        :returns: The block which timestamp is equal to given timestamp
+            or the nearest block if there's no block with the exact timestamp.
+        """
+
+        return await self.__get_block_by_timestamp(blockchain, timestamp)
+
+    async def __get_block_by_timestamp(
+        self,
+        blockchain: BlockChain,
+        timestamp: HexInt,
+        left_block: Optional[EvmBlock] = None,
+        right_block: Optional[EvmBlock] = None,
+    ) -> EvmBlock:
+        """Recursively get block number by timestamp until exact or nearest match.
+
+        :param blockchain: Blockchain name as a reference on when did the
+            blockchain starts doing Point-of-Stake.
+        :param timestamp: The timestamp of the block you wish to get.
+        :param left_block: The left bound block limit of binary search.
+        :param right_block: The right bound block limit of binary search.
+        :returns: The block which timestamp is equal to given timestamp
+            or the nearest block if there's no block with the exact timestamp.
+        """
+
+        # Get block by timestamp binary search source: https://ethereum.stackexchange.com/a/127720
+
+        if not left_block or not right_block:  # no recursions made yet
+            pos_info: dict = self.__POS_START_TIMESTAMP_BLOCK_MAP.get(blockchain, {})
+            pos_timestamp: Optional[HexInt] = pos_info.get("timestamp")
+            pos_block_number: Optional[HexInt] = pos_info.get("block_number")
+
+            # Check whether timestamp is a known value
+            if pos_info and timestamp == pos_timestamp:
+                return await self.get_block(pos_block_number)  # type: ignore
+
+            right_block = await self.get_block(await self.get_block_number())
+
+            # Check whether timestamp is known to be on a Point-of-Stake
+            if pos_info and timestamp > pos_timestamp:
+                pos_block_duration: HexInt = pos_info["block_duration"]
+                estimated_adjustment = (right_block.timestamp - timestamp) / pos_block_duration
+                estimated_block_number = right_block.number - estimated_adjustment
+
+                # Set left bound block to the estimated block number.
+                # Estimated block is always less than or equal to the expected block.
+                left_block = await self.get_block(
+                    min(max(estimated_block_number, pos_block_number), right_block.number)
+                )
+
+            # Use pure binary search for non-PoS blocks,
+            #   we don't want wrong bounds from bad estimation.
+            else:
+                left_block = await self.get_block(HexInt(1))
+
+        if left_block == right_block:
+            return left_block
+
+        # Return the closer one, if we're already between blocks
+        if (
+            left_block.number == right_block.number - 1
+            or timestamp <= left_block.timestamp
+            or timestamp >= right_block.timestamp
+        ):
+            return (
+                left_block
+                if abs(timestamp - left_block.timestamp) < abs(timestamp - right_block.timestamp)
+                else right_block
+            )
+
+        # k is how far inbetween left and right we're expected to be
+        k = (timestamp.int_value - left_block.timestamp.int_value) / (
+            right_block.timestamp.int_value - left_block.timestamp.int_value
+        )
+        # We bound, to ensure logarithmic time even when guesses aren't great
+        k = min(max(k, 0.05), 0.95)
+        # We get the expected block number from K
+        estimated_block_number = HexInt(
+            round(
+                left_block.number.int_value
+                + k * (right_block.number.int_value - left_block.number.int_value)
+            )
+        )
+        # Make sure to make some progress
+        estimated_block_number = min(
+            max(estimated_block_number, left_block.number + 1), right_block.number - 1
+        )
+
+        # Get the actual timestamp for that block
+        expected_block = await self.get_block(estimated_block_number)
+
+        # Adjust bound using our estimated block
+        if expected_block.timestamp < timestamp:
+            left_block = expected_block
+        elif expected_block.timestamp > timestamp:
+            right_block = expected_block
+        else:
+            # Return the perfect match
+            return expected_block
+
+        # Recurse using tightened bounds
+        return await self.__get_block_by_timestamp(
+            blockchain,
+            timestamp,
+            left_block,
+            right_block,
+        )
 
     async def get_transaction_receipt(self, tx_hash: HexBytes) -> EvmTransactionReceipt:
         """Get a transaction receipt by hash via

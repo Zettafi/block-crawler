@@ -94,9 +94,39 @@ class HexInt:
         if isinstance(other, self.__class__):
             return HexInt(other.int_value - self.int_value)
         elif isinstance(other, int):
-            return HexInt(other - self.int_value).int_value
+            return other - self.int_value
         else:
             return NotImplemented
+
+    def __mul__(self, other):
+        if isinstance(other, self.__class__):
+            return HexInt(self.int_value * other.int_value)
+        elif isinstance(other, int):
+            return HexInt(self.int_value * other)
+        else:
+            return NotImplemented
+
+    def __rmul__(self, other):
+        return self.__mul__(other).int_value
+
+    def __truediv__(self, other):
+        if isinstance(other, self.__class__):
+            return HexInt(self.int_value // other.int_value)
+        elif isinstance(other, int):
+            return HexInt(self.int_value // other)
+        else:
+            return NotImplemented
+
+    def __rtruediv__(self, other):
+        if isinstance(other, self.__class__):
+            return HexInt(other.int_value // self.int_value)
+        elif isinstance(other, int):
+            return other // self.int_value
+        else:
+            return NotImplemented
+
+    def __abs__(self):
+        return HexInt(abs(self.int_value))
 
     @property
     def hex_value(self) -> str:

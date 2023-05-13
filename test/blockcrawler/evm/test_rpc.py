@@ -1,6 +1,8 @@
 import asyncio
+import random
 import unittest
-from typing import Dict, Any
+from abc import ABC
+from typing import Dict, Any, Union, Tuple
 from unittest import IsolatedAsyncioTestCase
 from unittest import TestCase
 from unittest.mock import patch, ANY, MagicMock, AsyncMock, call
@@ -9,6 +11,7 @@ import aiohttp.client_exceptions
 import ddt
 from hexbytes import HexBytes
 
+from blockcrawler.core.entities import BlockChain
 from blockcrawler.core.rpc import RpcError, RpcServerError, RpcClientError
 from blockcrawler.core.stats import StatsService
 from blockcrawler.evm.rpc import (
@@ -728,6 +731,189 @@ class GetBlockNumberTestCase(BaseRPCClientTestCase):
                 await self._rpc_client.get_block_number()
             except Exception as e:
                 raise e
+
+
+class BaseGetBlockByTimestampTestCase(ABC, BaseRPCClientTestCase):
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+
+        self._blocks_dataset: Dict[HexInt, HexInt] = {}
+        self._blocks_count = 1000
+
+        self._min_timestamp: Union[int, None] = None
+        self._min_block_number: Union[int, None] = None
+        self._max_block_number: Union[int, None] = None
+        self._pos_block_duration_range: Union[Tuple[int, int], None] = None
+
+        self._rpc_client.get_block_number = AsyncMock()  # type: ignore
+        self._rpc_client.get_block_number.side_effect = lambda: HexInt(
+            self._max_block_number
+        )  # type: ignore
+
+        self._rpc_client.get_block = AsyncMock()  # type: ignore
+        self._rpc_client.get_block.side_effect = lambda x: MagicMock(
+            EvmBlock, number=x, timestamp=self._blocks_dataset[x]
+        )
+
+    def _patch_with_proof_of_work_dataset(self):
+        self._blocks_dataset.clear()
+        self._max_block_number = self._min_block_number + self._blocks_count - 1
+        timestamp = HexInt(self._min_timestamp)
+        for block_number in range(self._min_block_number, self._max_block_number + 1):
+            self._blocks_dataset[HexInt(block_number)] = timestamp
+            timestamp += random.randint(1, 50)
+
+    def _patch_with_proof_of_stake_dataset(self):
+        self._blocks_dataset.clear()
+        self._max_block_number = self._min_block_number + self._blocks_count - 1
+        timestamp = HexInt(self._min_timestamp)
+        for block_number in range(self._min_block_number, self._max_block_number + 1):
+            self._blocks_dataset[HexInt(block_number)] = timestamp
+            # use weighted values to mimic actual timestamp differences
+            timestamp += random.choices(self._pos_block_duration_range, weights=[9, 1])[0]
+
+
+class GetBlockByTimestampEthereumProofOfWorkTestCase(BaseGetBlockByTimestampTestCase):
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+
+        self._min_timestamp = 1438269988
+        self._min_block_number = 1
+
+        self._patch_with_proof_of_work_dataset()
+
+    async def test_get_block_by_timestamp_returns_expected_value(self):
+        block_number, timestamp = random.choice(list(self._blocks_dataset.items()))
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_without_exact_block_returns_nearest_block(self):
+        block_number = HexInt(random.randint(self._min_block_number, self._max_block_number - 1))
+        timestamp = self._blocks_dataset[block_number]
+        next_block_number = block_number + 1
+        next_timestamp = self._blocks_dataset[next_block_number]
+        mean_timestamp = timestamp - ((timestamp - next_timestamp) / 2)
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, mean_timestamp - 1
+        )
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_can_get_oldest_block(self):
+        block_number = HexInt(self._min_block_number)
+        timestamp = self._blocks_dataset[block_number]
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
+        self.assertEqual(block_number, actual_block.number)
+
+    # noinspection PyUnresolvedReferences
+    async def test_get_block_by_timestamp_blocks_before_the_merge_uses_full_search_bounds(self):
+        timestamp = random.choice(list(self._blocks_dataset.values()))
+        await self._rpc_client.get_block_by_timestamp(BlockChain.ETHEREUM_MAINNET, timestamp)
+        self._rpc_client.get_block.assert_any_call(HexInt(1))
+
+
+class GetBlockByTimestampEthereumProofOfStakeTestCase(BaseGetBlockByTimestampTestCase):
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+
+        self._min_timestamp = 1663224179
+        self._min_block_number = 15537394
+        self._pos_block_duration_range = (12, 24)
+
+        self._patch_with_proof_of_stake_dataset()
+
+    async def test_get_block_by_timestamp_can_get_latest_block(self):
+        block_number = HexInt(self._max_block_number)
+        timestamp = self._blocks_dataset[block_number]
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_returns_latest_block_if_timestamp_is_in_future(self):
+        block_number = HexInt(self._max_block_number)
+        timestamp = self._blocks_dataset[block_number] + 100
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_send_eth_request_once_only_on_known_block(self):
+        block_number = self._min_block_number
+        timestamp = HexInt(self._min_timestamp)
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, timestamp
+        )
+        self.assertEqual(block_number, actual_block.number)
+        # noinspection PyUnresolvedReferences
+        self._rpc_client.get_block.assert_called_once()
+        # noinspection PyUnresolvedReferences
+        self._rpc_client.get_block_number.assert_not_called()
+
+    # noinspection PyUnresolvedReferences
+    async def test_get_block_by_timestamp_blocks_after_the_merge_initially_tighten_search_bounds(
+        self,
+    ):
+        timestamp = random.choice(list(self._blocks_dataset.values()))
+        await self._rpc_client.get_block_by_timestamp(BlockChain.ETHEREUM_MAINNET, timestamp)
+        # assert not called with arguments
+        with self.assertRaises(AssertionError):
+            self._rpc_client.get_block.assert_any_call(HexInt(1))
+
+
+class GetBlockByTimestampPolygonProofOfStakeTestCase(BaseGetBlockByTimestampTestCase):
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+
+        self._min_timestamp = 1590856200
+        self._min_block_number = 1
+        self._pos_block_duration_range = (2, 3)
+
+        self._patch_with_proof_of_stake_dataset()
+
+    async def test_get_block_by_timestamp_can_get_latest_block(self):
+        block_number = HexInt(self._max_block_number)
+        timestamp = self._blocks_dataset[block_number]
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.POLYGON_MAINNET, timestamp
+        )
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_returns_latest_block_if_timestamp_is_in_future(self):
+        block_number = HexInt(self._max_block_number)
+        timestamp = self._blocks_dataset[block_number] + 100
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.POLYGON_MAINNET, timestamp
+        )
+        self.assertEqual(block_number, actual_block.number)
+
+    async def test_get_block_by_timestamp_send_eth_request_once_only_on_known_block(self):
+        block_number = HexInt(self._min_block_number)
+        timestamp = HexInt(self._min_timestamp)
+        actual_block = await self._rpc_client.get_block_by_timestamp(
+            BlockChain.POLYGON_MAINNET, timestamp
+        )
+        self.assertEqual(block_number, actual_block.number)
+        # noinspection PyUnresolvedReferences
+        self._rpc_client.get_block.assert_called_once()
+        # noinspection PyUnresolvedReferences
+        self._rpc_client.get_block_number.assert_not_called()
+
+
+class GetBlockByTimestampOtherTestCase(BaseGetBlockByTimestampTestCase):
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+
+    # noinspection PyUnresolvedReferences
+    async def test_get_block_by_timestamp_returns_left_block_if_right_block_is_the_same(self):
+        block = MagicMock(EvmBlock, number=1, timestamp=1)
+        actual_block = await self._rpc_client._EvmRpcClient__get_block_by_timestamp(
+            BlockChain.ETHEREUM_MAINNET, HexInt(1), block, block
+        )
+        self.assertEqual(block, actual_block)
 
 
 @ddt.ddt
