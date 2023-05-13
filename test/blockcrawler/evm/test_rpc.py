@@ -746,7 +746,9 @@ class BaseGetBlockByTimestampTestCase(ABC, BaseRPCClientTestCase):
         self._pos_block_duration_range: Union[Tuple[int, int], None] = None
 
         self._rpc_client.get_block_number = AsyncMock()  # type: ignore
-        self._rpc_client.get_block_number.side_effect = lambda: HexInt(self._max_block_number)
+        self._rpc_client.get_block_number.side_effect = lambda: HexInt(
+            self._max_block_number
+        )  # type: ignore
 
         self._rpc_client.get_block = AsyncMock()  # type: ignore
         self._rpc_client.get_block.side_effect = lambda x: MagicMock(
